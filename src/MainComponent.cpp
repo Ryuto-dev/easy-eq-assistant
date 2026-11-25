@@ -76,6 +76,9 @@ void MainComponent::timerCallback()
         applyMeasurementSettings();
     }
 
+    if (engine.consumeNoiseReachedIdle())
+        eeq::log::write ("noise: reached idle (fade-out completed on audio thread)");
+
     juce::String deviceError;
 
     if (engine.consumeDeviceError (deviceError))

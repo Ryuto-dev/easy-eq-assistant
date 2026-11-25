@@ -1,5 +1,6 @@
 #include "BottomBar.h"
 
+#include "../Core/Log.h"
 #include "Strings.h"
 
 namespace eeq::ui
@@ -11,6 +12,8 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     measurementButton.setButtonText (strings::measurementStartButton);
     measurementButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
     measurementButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
+    measurementButton.setWantsKeyboardFocus (false);
+    measurementButton.setMouseClickGrabsKeyboardFocus (false);
     measurementButton.onClick = [this]
     {
         auto& measurement = engine.getMeasurement();
@@ -25,6 +28,8 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     resetButton.setButtonText (strings::resetAveragesButton);
     resetButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff33363d));
     resetButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
+    resetButton.setWantsKeyboardFocus (false);
+    resetButton.setMouseClickGrabsKeyboardFocus (false);
     resetButton.onClick = [this]
     {
         engine.getMeasurement().resetAverages();
@@ -35,12 +40,21 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     noiseButton.setButtonText (strings::startNoiseButton);
     noiseButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
     noiseButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
+    // マウス専用にする（クリックでフォーカスを取らず、Space/Enterの誤発火を防ぐ）
+    noiseButton.setWantsKeyboardFocus (false);
+    noiseButton.setMouseClickGrabsKeyboardFocus (false);
     noiseButton.onClick = [this]
     {
         if (engine.isNoiseAudible())
+        {
+            eeq::log::write ("noise button: stop clicked");
             engine.stopNoise();
+        }
         else
+        {
+            eeq::log::write ("noise button: start clicked");
             engine.startNoise();
+        }
     };
     addAndMakeVisible (noiseButton);
 

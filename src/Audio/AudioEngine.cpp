@@ -222,11 +222,13 @@ void AudioEngine::clearClipLatches() noexcept
 
 void AudioEngine::startNoise() noexcept
 {
+    eeq::log::write ("noise: start requested");
     noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
 void AudioEngine::stopNoise() noexcept
 {
+    eeq::log::write ("noise: stop requested");
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
 }
 
@@ -339,6 +341,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             {
                 position = 0;
                 state = isFadeIn ? NoiseState::running : NoiseState::idle;
+
+                if (! isFadeIn)
+                    noiseReachedIdle.store (true, std::memory_order_relaxed);
             }
         }
 

@@ -93,6 +93,10 @@ public:
     /** エラーが滞留していれば true を返して内容を out に入れ、滞留を消す */
     bool consumeDeviceError (juce::String& messageOut);
 
+    /** フェードアウトが完了して停止したことをUIが消費する（診断ログ用） */
+    bool consumeNoiseReachedIdle() noexcept
+    { return noiseReachedIdle.exchange (false, std::memory_order_relaxed); }
+
     // ---- 設定の保存（仕様 6.2 相当の軽量保存）----
 
     void saveSettings();
@@ -140,6 +144,7 @@ private:
     juce::CriticalSection errorMutex;
     juce::String pendingErrorMessage;
     std::atomic<bool> hasPendingError { false };
+    std::atomic<bool> noiseReachedIdle { false };
 
     PinkNoiseGenerator noise;
 
