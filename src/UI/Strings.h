@@ -38,6 +38,9 @@ inline const juce::String overLimitCancel { u8"−20 dBFS に戻す" };
 inline const juce::String deviceErrorTitle { u8"オーディオデバイスのエラー" };
 inline const juce::String deviceErrorMessage
     { u8"デバイスでエラーが発生したため、出力を停止しました。デバイスを選び直してください。" };
+inline const juce::String micDeniedTitle { u8"マイクへのアクセスが許可されていません" };
+inline const juce::String micDeniedMessage
+    { u8"システム設定 ＞ プライバシーとセキュリティ ＞ マイク で Easy EQ assistant をオンにすると、入力（Meas）が動作します。" };
 inline const juce::String noDeviceInfo { u8"デバイス未接続" };
 inline const juce::String okButton { u8"OK" };
 inline const juce::String degreeSymbol { u8"°" };

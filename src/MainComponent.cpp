@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "Core/Log.h"
+#include "Core/MicPermission.h"
 #include "UI/Strings.h"
 
 MainComponent::MainComponent()
@@ -21,6 +22,38 @@ MainComponent::MainComponent()
 
     setSize (1200, 780);
     applyMeasurementSettings();
+
+    // マイク許可（TCC）。CoreAudio 経由ではダイアログが出ないことがあるため、
+    // AVFoundation で明示的に確認・要求する。許可されたら入力を開き直す
+    const auto micStatus = eeq::mic::getStatus();
+    eeq::log::write (juce::String ("mic permission: ")
+                     + (micStatus == eeq::mic::Status::granted ? "granted"
+                        : micStatus == eeq::mic::Status::denied ? "DENIED"
+                        : "undetermined"));
+
+    if (micStatus == eeq::mic::Status::undetermined)
+    {
+        juce::Component::SafePointer<MainComponent> safeThis { this };
+
+        eeq::mic::request ([safeThis] (bool granted)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            eeq::log::write (granted ? "mic permission: granted" : "mic permission: DENIED by user");
+
+            if (granted)
+                safeThis->engine.reopenDevices();
+        });
+    }
+    else if (micStatus == eeq::mic::Status::denied)
+    {
+        eeq::log::write ("mic permission denied: input stays silent until enabled in System Settings");
+
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+            eeq::strings::micDeniedTitle, eeq::strings::micDeniedMessage, eeq::strings::okButton, this, nullptr);
+    }
+
     startTimerHz (30);
 }
 

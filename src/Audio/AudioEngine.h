@@ -36,6 +36,8 @@ public:
     juce::String selectInputDevice (const juce::String& deviceName);
     /** 出力デバイスだけを選び直す。成功時は空文字、失敗時はエラーメッセージを返す */
     juce::String selectOutputDevice (const juce::String& deviceName);
+    /** 現在の設定のまま入出力を開き直す（マイク許可を得た後などに使う） */
+    void reopenDevices();
     /** サンプルレート / バッファサイズを変更する（負/0の項目は変更しない） */
     juce::String applyRateAndBuffer (double sampleRate, int bufferSize);
 

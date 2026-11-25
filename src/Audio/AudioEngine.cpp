@@ -119,6 +119,17 @@ juce::String AudioEngine::selectOutputDevice (const juce::String& deviceName)
     return error;
 }
 
+void AudioEngine::reopenDevices()
+{
+    auto setup = deviceManager.getAudioDeviceSetup();
+    deviceManager.closeAudioDevice();
+
+    // 閉じた直後は currentAudioDevice が無いので、同一セットアップでも再オープンされる
+    const auto error = deviceManager.setAudioDeviceSetup (setup, false);
+
+    eeq::log::write (error.isEmpty() ? "devices reopened" : "device reopen FAILED: " + error);
+}
+
 juce::String AudioEngine::applyRateAndBuffer (double sampleRate, int bufferSize)
 {
     auto setup = deviceManager.getAudioDeviceSetup();

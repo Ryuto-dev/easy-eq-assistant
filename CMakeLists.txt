@@ -12,6 +12,10 @@ endif()
 
 project(EasyEQAssistant VERSION 0.1.0 LANGUAGES C CXX)
 
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -57,6 +61,8 @@ target_sources(EasyEQAssistant PRIVATE
     src/Core/Acoustics.h
     src/Core/Log.cpp
     src/Core/Log.h
+    src/Core/MicPermission.mm
+    src/Core/MicPermission.h
 )
 
 target_compile_definitions(EasyEQAssistant PRIVATE
@@ -71,6 +77,10 @@ target_link_libraries(EasyEQAssistant PRIVATE
     juce::juce_recommended_warning_flags
     juce::juce_recommended_lto_flags
 )
+
+if(APPLE)
+    target_link_libraries(EasyEQAssistant PRIVATE "-framework AVFoundation")
+endif()
 
 # ---- テスト ----
 
