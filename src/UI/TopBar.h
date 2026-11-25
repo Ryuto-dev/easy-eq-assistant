@@ -30,7 +30,8 @@ private:
     void rebuildAll();
     void rebuildRateCombo();
     void rebuildBufferCombo();
-    void rebuildChannelCombo (juce::ComboBox& combo, const juce::Array<int>& indices, const juce::StringArray& names, int selected);
+    void rebuildChannelCombo (juce::ComboBox& combo, bool allowInternal, const juce::Array<int>& indices,
+                              const juce::StringArray& names, int selected);
 
     eeq::audio::AudioEngine& engine;
 
@@ -42,8 +43,26 @@ private:
     uint32_t lastGeneration = 0;
     bool updating = false; // コンボ再構築中のイベントを無視するためのフラグ
 
-    static int comboIdForChannel (int channelIndex) noexcept { return channelIndex < 0 ? 1 : channelIndex + 2; }
-    static int channelForComboId (int comboId) noexcept { return comboId <= 1 ? -1 : comboId - 2; }
+    // Ref コンボには「内部参照」を先頭に置く: id 1 = 内部参照(-2), id 2 = なし(-1), id 3+ = チャンネル 0..
+    // それ以外のコンボ: id 1 = なし(-1), id 2+ = チャンネル 0..
+    static int comboIdForChannel (int channelIndex, bool withInternalOption) noexcept
+    {
+        if (withInternalOption)
+            return channelIndex == eeq::audio::AudioEngine::internalRefChannel ? 1
+                 : channelIndex < 0 ? 2 : channelIndex + 3;
+
+        return channelIndex < 0 ? 1 : channelIndex + 2;
+    }
+
+    static int channelForComboId (int comboId, bool withInternalOption) noexcept
+    {
+        if (withInternalOption)
+            return comboId <= 1 ? (comboId == 1 ? eeq::audio::AudioEngine::internalRefChannel
+                                                : eeq::audio::AudioEngine::noChannel)
+                                : comboId - 3;
+
+        return comboId <= 1 ? eeq::audio::AudioEngine::noChannel : comboId - 2;
+    }
 };
 
 } // namespace eeq::ui

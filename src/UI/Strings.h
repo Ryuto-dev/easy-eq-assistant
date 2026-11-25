@@ -21,6 +21,7 @@ inline const juce::String refLabel { u8"Ref" };
 inline const juce::String measLabel { u8"Meas" };
 inline const juce::String outLabel { u8"出力" };
 inline const juce::String channelNone { u8"なし" };
+inline const juce::String internalReference { u8"内部参照" };
 inline const juce::String notSelected { u8"-" };
 
 // 下部バー

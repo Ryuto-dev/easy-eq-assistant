@@ -48,8 +48,14 @@ public:
     int getCurrentBufferSize() const noexcept { return currentBufferSize.load (std::memory_order_relaxed); }
     juce::String getStatusText() const;
 
-    // ---- チャンネル割当（デバイスのチャンネル番号・0開始。負は未割当）----
+    // ---- チャンネル割当（デバイスのチャンネル番号・0開始。負は特別値）----
+    // Ref は internalRefChannel を選べる（仕様 3.1 (b) 内部参照: アプリの出力信号を
+    // そのまま基準信号として使う。配線が不要で、Ref入力chを消費しない）
 
+    static constexpr int internalRefChannel = -2; // Ref = アプリの出力信号（内部参照）
+    static constexpr int noChannel = -1;          // 未割当
+
+    bool isRefInternal() const noexcept { return getRefChannel() == internalRefChannel; }
     int getRefChannel() const noexcept { return refChannel.load (std::memory_order_relaxed); }
     int getMeasChannel() const noexcept { return measChannel.load (std::memory_order_relaxed); }
     int getOutputChannel() const noexcept { return outputChannel.load (std::memory_order_relaxed); }

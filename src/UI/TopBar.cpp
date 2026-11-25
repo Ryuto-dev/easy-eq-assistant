@@ -178,17 +178,17 @@ void TopBar::comboBoxChanged (juce::ComboBox* combo)
 
     if (combo == &refCombo)
     {
-        engine.setRefChannel (channelForComboId (refCombo.getSelectedId()));
+        engine.setRefChannel (channelForComboId (refCombo.getSelectedId(), true));
         engine.saveSettings();
     }
     else if (combo == &measCombo)
     {
-        engine.setMeasChannel (channelForComboId (measCombo.getSelectedId()));
+        engine.setMeasChannel (channelForComboId (measCombo.getSelectedId(), false));
         engine.saveSettings();
     }
     else if (combo == &outCombo)
     {
-        engine.setOutputChannel (channelForComboId (outCombo.getSelectedId()));
+        engine.setOutputChannel (channelForComboId (outCombo.getSelectedId(), false));
         engine.saveSettings();
     }
 }
@@ -223,11 +223,11 @@ void TopBar::rebuildAll()
     juce::StringArray channelNames;
 
     engine.getOpenedInputChannels (indices, channelNames);
-    rebuildChannelCombo (refCombo, indices, channelNames, engine.getRefChannel());
-    rebuildChannelCombo (measCombo, indices, channelNames, engine.getMeasChannel());
+    rebuildChannelCombo (refCombo, true, indices, channelNames, engine.getRefChannel());
+    rebuildChannelCombo (measCombo, false, indices, channelNames, engine.getMeasChannel());
 
     engine.getOpenedOutputChannels (indices, channelNames);
-    rebuildChannelCombo (outCombo, indices, channelNames, engine.getOutputChannel());
+    rebuildChannelCombo (outCombo, false, indices, channelNames, engine.getOutputChannel());
 }
 
 void TopBar::rebuildRateCombo()
@@ -272,16 +272,20 @@ void TopBar::rebuildBufferCombo()
     bufferCombo.setTextWhenNothingSelected (strings::notSelected);
 }
 
-void TopBar::rebuildChannelCombo (juce::ComboBox& combo, const juce::Array<int>& indices,
+void TopBar::rebuildChannelCombo (juce::ComboBox& combo, bool allowInternal, const juce::Array<int>& indices,
                                   const juce::StringArray& names, int selected)
 {
     combo.clear (juce::dontSendNotification);
-    combo.addItem (strings::channelNone, 1);
+
+    if (allowInternal)
+        combo.addItem (strings::internalReference, 1);
+
+    combo.addItem (strings::channelNone, allowInternal ? 2 : 1);
 
     for (auto i = 0; i < indices.size(); ++i)
-        combo.addItem (names[i], comboIdForChannel (indices[i]));
+        combo.addItem (names[i], comboIdForChannel (indices[i], allowInternal));
 
-    combo.setSelectedId (comboIdForChannel (selected), juce::dontSendNotification);
+    combo.setSelectedId (comboIdForChannel (selected, allowInternal), juce::dontSendNotification);
 }
 
 } // namespace eeq::ui

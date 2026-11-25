@@ -264,6 +264,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const auto refIndex = refChannel.load (std::memory_order_relaxed);
     const auto measIndex = measChannel.load (std::memory_order_relaxed);
     const auto outIndex = outputChannel.load (std::memory_order_relaxed);
+    const auto refIsInternal = refIndex == internalRefChannel;
 
     measureChannel (inputChannelData, numInputChannels, numSamples, refIndex, refMeter, clipThresholdLinear);
     measureChannel (inputChannelData, numInputChannels, numSamples, measIndex, measMeter, clipThresholdLinear);
@@ -311,6 +312,17 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     outMeter.peakLinear.store (outPeak, std::memory_order_relaxed);
     outMeter.rmsLinear.store ((float) std::sqrt (outSumSquares / (double) juce::jmax (1, numSamples)),
                               std::memory_order_relaxed);
+
+    // 内部参照（仕様 3.1 (b)）: アプリが出力した信号そのものを基準信号として計上する
+    if (refIsInternal)
+    {
+        refMeter.peakLinear.store (outPeak, std::memory_order_relaxed);
+        refMeter.rmsLinear.store ((float) std::sqrt (outSumSquares / (double) juce::jmax (1, numSamples)),
+                                  std::memory_order_relaxed);
+
+        if (outPeak >= clipThresholdLinear)
+            refMeter.clip.store (true, std::memory_order_relaxed);
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
@@ -423,7 +435,16 @@ void AudioEngine::restoreSavedAssignment (int numInputs, int numOutputs)
     const auto savedMeas = settings != nullptr ? settings->getIntValue ("measChannel", 0) : 0;
     const auto savedOut = settings != nullptr ? settings->getIntValue ("outputChannel", 0) : 0;
 
-    refChannel.store (clamp (savedRef, numInputs, numInputs > 1 ? 1 : -1), std::memory_order_relaxed);
+    if (savedRef == internalRefChannel)
+    {
+        refChannel.store (internalRefChannel, std::memory_order_relaxed);
+    }
+    else
+    {
+        // 入力が1chしかないときは Ref を内部参照にする（マイクを Meas に残すため）
+        refChannel.store (clamp (savedRef, numInputs, numInputs > 1 ? 1 : internalRefChannel),
+                          std::memory_order_relaxed);
+    }
     measChannel.store (clamp (savedMeas, numInputs, numInputs > 0 ? 0 : -1), std::memory_order_relaxed);
     outputChannel.store (clamp (savedOut, numOutputs, 0), std::memory_order_relaxed);
 
