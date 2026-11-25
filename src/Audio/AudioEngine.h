@@ -29,6 +29,11 @@ public:
     explicit AudioEngine (juce::PropertiesFile* settingsToUse);
     ~AudioEngine() override;
 
+    /** デバイスを開く。マイク許可の確定後に呼ぶこと。
+        （デバイスオープンに伴うCoreAudioの要求と許可要求が重なると、この環境では
+        TCCがダイアログを出さずに自動拒否するため） */
+    void openInitialDevice();
+
     // ---- デバイス（入力と出力は別々に選べる）----
 
     juce::StringArray getAvailableDeviceNames (bool wantInputNames) const;
@@ -178,7 +183,6 @@ private:
     void audioDeviceStopped() override;
     void audioDeviceError (const juce::String& errorMessage) override;
 
-    void openInitialDevice();
     void restoreSavedAssignment (int numInputs, int numOutputs);
 
     juce::AudioDeviceManager deviceManager;

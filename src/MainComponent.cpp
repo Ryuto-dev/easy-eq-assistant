@@ -91,8 +91,9 @@ MainComponent::MainComponent()
         }
     }
 
-    // マイク許可（TCC）。CoreAudio 経由ではダイアログが出ないことがあるため、
-    // AVFoundation で明示的に確認・要求する。許可されたら入力を開き直す
+    // マイク許可（TCC）。**デバイスを開く前に**許可を確定させる:
+    // CoreAudioの入力オープンと許可要求が重なると、この環境ではTCCが
+    // ダイアログを出さずに自動拒否する（probe.app では正常にダイアログが出ることを確認済み）
     const auto micStatus = eeq::mic::getStatus();
     eeq::log::write (juce::String ("mic permission: ")
                      + (micStatus == eeq::mic::Status::granted ? "granted"
@@ -109,17 +110,20 @@ MainComponent::MainComponent()
                 return;
 
             eeq::log::write (granted ? "mic permission: granted" : "mic permission: DENIED by user");
-
-            if (granted)
-                safeThis->engine.reopenDevices();
+            safeThis->engine.openInitialDevice();
         });
     }
-    else if (micStatus == eeq::mic::Status::denied)
+    else
     {
-        eeq::log::write ("mic permission denied: input stays silent until enabled in System Settings");
+        if (micStatus == eeq::mic::Status::denied)
+        {
+            eeq::log::write ("mic permission denied: input stays silent until enabled in System Settings");
 
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-            eeq::strings::micDeniedTitle, eeq::strings::micDeniedMessage, eeq::strings::okButton, this, nullptr);
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                eeq::strings::micDeniedTitle, eeq::strings::micDeniedMessage, eeq::strings::okButton, this, nullptr);
+        }
+
+        engine.openInitialDevice();
     }
 
     // 初回起動ウィザード（仕様 5.5）: 機材選択→ループバック校正→ゲイン調整→測定の順に案内

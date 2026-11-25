@@ -28,9 +28,12 @@ endif()
 add_subdirectory(libs/JUCE)
 
 juce_add_gui_app(EasyEQAssistant
-    PRODUCT_NAME "Easy EQ assistant"
+    # 実行ファイル名に空白を含めない（CFBundleExecutable "Easy EQ assistant" のままだと
+    # TCC の帰属処理が壊れ、マイク許可ダイアログが出ず自動拒否される）
+    PRODUCT_NAME "EasyEQAssistant"
     COMPANY_NAME "Ryuto"
     BUNDLE_ID "com.ryuto.easyeqassistant"
+    PLIST_TO_MERGE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/display_name.plist"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/icon_1024.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "このアプリは、スピーカー系の周波数特性を測定するためにマイク入力を使用します。"
@@ -132,6 +135,12 @@ target_link_libraries(EasyEQAssistant PRIVATE
 
 if(APPLE)
     target_link_libraries(EasyEQAssistant PRIVATE "-framework AVFoundation" "-framework AVFAudio" "-framework IOKit")
+
+    # バンドル全体を ad-hoc 署名する（リンカの署名は実行ファイルのみのため）。
+    # 未署名バンドルでは TCC がダイアログを出さない場合がある
+    add_custom_command(TARGET EasyEQAssistant POST_BUILD
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:EasyEQAssistant>"
+        VERBATIM)
 endif()
 
 # ---- ASIO（Windows・任意）----

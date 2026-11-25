@@ -11,7 +11,7 @@ PA・音響調整用の伝達関数測定ソフト（個人用）。詳細は `E
 ```sh
 cmake -B build -G Ninja
 cmake --build build
-open "build/EasyEQAssistant_artefacts/Easy EQ assistant.app"
+open "build/EasyEQAssistant_artefacts/EasyEQAssistant.app"
 ```
 
 Xcode 本体をインストール済みなら、`-G Xcode` で Xcode プロジェクトを生成してデバッグもできる。
@@ -51,4 +51,7 @@ ctest --test-dir build --output-on-failure
 - アプリのアイコンは `tools/make_icon.swift`（CoreGraphics 描画）で生成する: `swift tools/make_icon.swift assets/icons/icon_1024.png`
 - 初回起動時にマイクへのアクセス許可を求められる（macOS の標準ダイアログ）。許可しないと入力メーターは動かない。Windows にはアプリごとの承認ダイアログがないため、OS 側の設定に従う（`src/Core/MicPermissionStub.cpp`）
 - ASIO 対応（Windows・任意）: Steinberg の ASIO SDK を `libs/asio_sdk/` に展開すると自動で有効になる（規約によりリポジトリへはコミット不可）。ない場合は WASAPI で動く
+- Apple のフレームワーク（IOKit / AVFoundation 等）を include するときは **JUCE モジュールより必ず先に**読む（MacTypes の `Point` と `juce::Point` の衝突を避ける）。`JuceHeader.h` は使わず `src/Core/JuceModules.h` を使う
+- 実行ファイル名（CFBundleExecutable / PRODUCT_NAME）に**空白を含めない**。空白入りだと TCC の帰属処理が壊れ、マイク許可ダイアログが出ずに自動拒否される（表示名は `cmake/display_name.plist` で「Easy EQ assistant」を維持）
+- マイク許可は **デバイスオープン前に** `AVAudioApplication`（macOS 14+）で要求する（`src/Core/MicPermission.mm`）。**ロック画面中は TCC ダイアログを出せず、要求は約1秒で自動拒否される**点に注意（ログの "DENIED by user" は実際にはユーザー操作とは限らない）
 - ライセンス: JUCE 8 Personal（個人利用・非商用・非配布）

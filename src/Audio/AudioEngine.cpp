@@ -55,7 +55,7 @@ AudioEngine::AudioEngine (juce::PropertiesFile* settingsToUse)
     formatManager.registerBasicFormats();
     measurement.setSplAnalyzer (&splAnalyzer);
     deviceManager.addAudioCallback (this);
-    openInitialDevice();
+    // デバイスは開かない。マイク許可の確定後に MainComponent が openInitialDevice() を呼ぶ
 }
 
 AudioEngine::~AudioEngine()
