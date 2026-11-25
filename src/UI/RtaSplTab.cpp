@@ -1,0 +1,719 @@
+#include "RtaSplTab.h"
+
+#include "../Core/Log.h"
+#include "../Core/Utilities.h"
+#include "Buttons.h"
+#include "Strings.h"
+#include "Theme.h"
+
+namespace eeq::ui
+{
+
+namespace
+{
+constexpr const char* settingsWeightingKey = "splWeightingId";
+constexpr const char* settingsTimeConstantKey = "splTimeConstantId";
+constexpr const char* settingsBandsKey = "rtaBandsId";
+constexpr const char* settingsAvgTimeKey = "rtaAvgTimeId";
+constexpr const char* settingsOffsetKey = "splCalibrationOffsetDb";
+constexpr const char* settingsTargetSplKey = "gainAssistTargetSpl";
+constexpr const char* settingsFloorKey = "splNoiseFloorDb";
+constexpr const char* settingsFloorCentersKey = "splNoiseFloorCenters";
+
+juce::StringArray makeAvgTimeItems()
+{
+    return { "0.2 s", "0.5 s", "1 s", "2 s", "5 s", "10 s", "30 s" };
+}
+
+double avgTimeSecondsForId (int id)
+{
+    static const double values[] = { 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0 };
+    return (id >= 1 && id <= 7) ? values[id - 1] : 1.0;
+}
+} // namespace
+
+RtaSplTab::RtaSplTab (UiContext& context)
+    : ctx (context)
+{
+    // ---- RTA設定 ----
+    bandsTitle.setText (strings::rtaBandsLabel, juce::dontSendNotification);
+    styleLabel (bandsTitle);
+    addAndMakeVisible (bandsTitle);
+
+    bandsCombo.addItem ("1/3 oct", 1);
+    bandsCombo.addItem ("1/6 oct", 2);
+    bandsCombo.addItem ("1/12 oct", 3);
+    styleCombo (bandsCombo);
+    addAndMakeVisible (bandsCombo);
+
+    avgTimeTitle.setText (strings::rtaAvgTimeLabel, juce::dontSendNotification);
+    styleLabel (avgTimeTitle);
+    addAndMakeVisible (avgTimeTitle);
+
+    for (const auto& item : makeAvgTimeItems())
+        avgTimeCombo.addItem (item, avgTimeCombo.getNumItems() + 1);
+
+    styleCombo (avgTimeCombo);
+    addAndMakeVisible (avgTimeCombo);
+
+    styleButton (peakHoldResetButton);
+    peakHoldResetButton.setButtonText (strings::rtaPeakHoldButton);
+    peakHoldResetButton.onClick = [this] { ctx.engine.getSplAnalyzer().resetPeakHold(); };
+    addAndMakeVisible (peakHoldResetButton);
+
+    // ---- SPL ----
+    splTitle.setText (strings::splSection, juce::dontSendNotification);
+    styleLabel (splTitle, 13.0f, false);
+    addAndMakeVisible (splTitle);
+
+    splValueLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    splValueLabel.setFont (juce::Font (juce::FontOptions (34.0f, juce::Font::bold)));
+    addAndMakeVisible (splValueLabel);
+
+    leqLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    addAndMakeVisible (leqLabel);
+    peakLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    addAndMakeVisible (peakLabel);
+
+    weightingCombo.addItem ("Z", 1);
+    weightingCombo.addItem ("C", 2);
+    weightingCombo.addItem ("A", 3);
+    weightingCombo.setSelectedId (3, juce::dontSendNotification); // 既定 A（仕様 3.4）
+    styleCombo (weightingCombo);
+    addAndMakeVisible (weightingCombo);
+
+    timeConstantCombo.addItem (strings::splFast, 1);
+    timeConstantCombo.addItem (strings::splSlow, 2);
+    timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
+    styleCombo (timeConstantCombo);
+    addAndMakeVisible (timeConstantCombo);
+
+    uncalibratedLabel.setText (strings::splUncalibrated, juce::dontSendNotification);
+    uncalibratedLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+    uncalibratedLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    addAndMakeVisible (uncalibratedLabel);
+
+    // ---- S/N（仕様 3.5.1）----
+    snTitle.setText (strings::snrSection, juce::dontSendNotification);
+    styleLabel (snTitle, 13.0f, false);
+    addAndMakeVisible (snTitle);
+
+    styleButton (noiseFloorButton);
+    noiseFloorButton.setButtonText (strings::snrNoiseFloorButton);
+    noiseFloorButton.onClick = [this]
+    {
+        if (noiseFloorMeasuring)
+            stopNoiseFloorMeasurement();
+        else
+            startNoiseFloorMeasurement();
+    };
+    addAndMakeVisible (noiseFloorButton);
+
+    snOverallLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    addAndMakeVisible (snOverallLabel);
+
+    snHintLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    addAndMakeVisible (snHintLabel);
+
+    // ---- 校正 ----
+    calibrationTitle.setText (strings::calibrationSection, juce::dontSendNotification);
+    styleLabel (calibrationTitle, 13.0f, false);
+    addAndMakeVisible (calibrationTitle);
+
+    calibrationGuideLabel.setText (juce::String (strings::calibrationComparatorGuide) + "\n"
+                                       + strings::calibrationCalibratorGuide + "\n"
+                                       + strings::calibrationAccuracyNote,
+                                   juce::dontSendNotification);
+    calibrationGuideLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    calibrationGuideLabel.setFont (juce::Font (juce::FontOptions (10.5f)));
+    addAndMakeVisible (calibrationGuideLabel);
+
+    styleCombo (calibrationSignalCombo);
+    calibrationSignalCombo.addItem (strings::calibrationSignalBandNoise, 1);
+    calibrationSignalCombo.addItem (strings::calibrationSignalTone, 2);
+    calibrationSignalCombo.addItem (strings::calibrationSignalPink, 3);
+    calibrationSignalCombo.setSelectedId (1, juce::dontSendNotification);
+    addAndMakeVisible (calibrationSignalCombo);
+
+    styleAccentButton (calibrationStartButton);
+    calibrationStartButton.setButtonText (strings::startNoiseButton);
+    calibrationStartButton.onClick = [this]
+    {
+        if (ctx.engine.isNoiseAudible())
+        {
+            ctx.engine.stopExcitation();
+            calibrationStartButton.setButtonText (strings::startNoiseButton);
+        }
+        else
+        {
+            const auto id = calibrationSignalCombo.getSelectedId();
+            ctx.engine.startCalibrationSignal (id == 2 ? eeq::audio::AudioEngine::CalibrationSignal::tone1k
+                                             : id == 3 ? eeq::audio::AudioEngine::CalibrationSignal::pinkBroadband
+                                                       : eeq::audio::AudioEngine::CalibrationSignal::bandNoise1k);
+            calibrationStartButton.setButtonText (strings::stopNoiseButton);
+        }
+    };
+    addAndMakeVisible (calibrationStartButton);
+
+    calibrationMeterLabel.setText (strings::calibrationNoiseMeterLabel, juce::dontSendNotification);
+    styleLabel (calibrationMeterLabel);
+    addAndMakeVisible (calibrationMeterLabel);
+
+    styleTextEditor (calibrationMeterEditor);
+    calibrationMeterEditor.setInputRestrictions (8, "0123456789.");
+    addAndMakeVisible (calibrationMeterEditor);
+
+    styleButton (calibrationApplyButton);
+    calibrationApplyButton.setButtonText (strings::calibrationApplyButton);
+    calibrationApplyButton.onClick = [this] { applyCalibrationOffset(); };
+    addAndMakeVisible (calibrationApplyButton);
+
+    styleButton (calibrationResetButton);
+    calibrationResetButton.setButtonText (strings::calibrationClearButton);
+    calibrationResetButton.onClick = [this]
+    {
+        ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (0.0);
+        ctx.settings.setValue (settingsOffsetKey, 0.0);
+        ctx.settings.saveIfNeeded();
+        refreshFromSettings();
+    };
+    addAndMakeVisible (calibrationResetButton);
+
+    calibrationOffsetLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    addAndMakeVisible (calibrationOffsetLabel);
+
+    // ---- ゲインアシスト（仕様 3.6）----
+    gainTitle.setText (strings::gainAssistSection, juce::dontSendNotification);
+    styleLabel (gainTitle, 13.0f, false);
+    addAndMakeVisible (gainTitle);
+
+    gainTargetLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    gainTargetLabel.setFont (juce::Font (juce::FontOptions (26.0f, juce::Font::bold)));
+    addAndMakeVisible (gainTargetLabel);
+
+    styleTextEditor (gainTargetEditor);
+    gainTargetEditor.setInputRestrictions (6, "0123456789.");
+    gainTargetEditor.onTextChange = [this]
+    {
+        const auto target = gainTargetEditor.getText().getDoubleValue();
+
+        if (target > 30.0 && target < 140.0)
+        {
+            ctx.settings.setValue (settingsTargetSplKey, target);
+            ctx.settings.saveIfNeeded();
+        }
+
+        updateGainAssist();
+    };
+    addAndMakeVisible (gainTargetEditor);
+
+    styleButton (gainStartButton);
+    gainStartButton.setButtonText (strings::startNoiseButton);
+    gainStartButton.onClick = [this]
+    {
+        if (ctx.engine.isNoiseAudible())
+        {
+            ctx.engine.stopExcitation();
+            gainStartButton.setButtonText (strings::startNoiseButton);
+        }
+        else
+        {
+            ctx.engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::pinkNoise);
+            ctx.engine.startExcitation();
+            gainStartButton.setButtonText (strings::stopNoiseButton);
+        }
+    };
+    addAndMakeVisible (gainStartButton);
+
+    gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
+    gainMessageLabel.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+    addAndMakeVisible (gainMessageLabel);
+
+    gainMetersLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    addAndMakeVisible (gainMetersLabel);
+
+    gainProceedLabel.setText (strings::gainAssistToCalibration, juce::dontSendNotification);
+    gainProceedLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    addAndMakeVisible (gainProceedLabel);
+
+    bandsCombo.onChange = [this] { applyAnalyzerConfig(); };
+    avgTimeCombo.onChange = [this] { applyAnalyzerConfig(); };
+    weightingCombo.onChange = [this]
+    {
+        const auto id = weightingCombo.getSelectedId();
+        ctx.engine.getSplAnalyzer().setWeighting (id == 1 ? eeq::dsp::RtaSplAnalyzer::Weighting::zWeighted
+                                                : id == 2 ? eeq::dsp::RtaSplAnalyzer::Weighting::cWeighted
+                                                          : eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
+        ctx.settings.setValue (settingsWeightingKey, id);
+        ctx.settings.saveIfNeeded();
+    };
+    timeConstantCombo.onChange = [this]
+    {
+        ctx.engine.getSplAnalyzer().setTimeConstant (
+            timeConstantCombo.getSelectedId() == 2 ? eeq::dsp::RtaSplAnalyzer::TimeConstant::slow
+                                                   : eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+        ctx.settings.setValue (settingsTimeConstantKey, timeConstantCombo.getSelectedId());
+        ctx.settings.saveIfNeeded();
+    };
+
+    refreshFromSettings();
+    applyAnalyzerConfig();
+}
+
+void RtaSplTab::refreshFromSettings()
+{
+    weightingCombo.setSelectedId (juce::jlimit (1, 3, ctx.settings.getIntValue (settingsWeightingKey, 3)),
+                                  juce::dontSendNotification);
+    timeConstantCombo.setSelectedId (juce::jlimit (1, 2, ctx.settings.getIntValue (settingsTimeConstantKey, 1)),
+                                     juce::dontSendNotification);
+    bandsCombo.setSelectedId (juce::jlimit (1, 3, ctx.settings.getIntValue (settingsBandsKey, 1)),
+                              juce::dontSendNotification);
+    avgTimeCombo.setSelectedId (juce::jlimit (1, 7, ctx.settings.getIntValue (settingsAvgTimeKey, 3)),
+                                juce::dontSendNotification);
+    gainTargetEditor.setText (juce::String (ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0), 0),
+                              juce::dontSendNotification);
+
+    // 校正オフセットを解析器へ復元する（仕様 3.4）
+    ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (ctx.settings.getDoubleValue (settingsOffsetKey, 0.0));
+
+    // ノイズフロアの復元（仕様 3.5.1: 測って保存する）
+    const auto centersVar = ctx.settings.getValue (settingsFloorCentersKey);
+    const auto levelsVar = ctx.settings.getValue (settingsFloorKey);
+
+    if (centersVar.isNotEmpty() && levelsVar.isNotEmpty())
+    {
+        auto readArray = [] (const juce::String& text)
+        {
+            std::vector<double> values;
+            juce::StringArray tokens;
+            tokens.addTokens (text, ",", "");
+
+            for (const auto& token : tokens)
+                values.push_back (token.getDoubleValue());
+
+            return values;
+        };
+
+        floorCenters = readArray (centersVar);
+
+        floorLevels.clear();
+
+        for (const auto value : readArray (levelsVar))
+            floorLevels.push_back ((float) value);
+    }
+
+    weightingCombo.onChange();
+    timeConstantCombo.onChange();
+    calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": "
+                                       + juce::String (ctx.engine.getSplAnalyzer().getCalibrationOffsetDb(), 1)
+                                       + " dB",
+                                    juce::dontSendNotification);
+}
+
+void RtaSplTab::applyAnalyzerConfig()
+{
+    const auto bands = bandsCombo.getSelectedId() == 2 ? 6 : bandsCombo.getSelectedId() == 3 ? 12 : 3;
+    ctx.engine.getSplAnalyzer().configure (ctx.engine.getCurrentSampleRate(), bands,
+                                           avgTimeSecondsForId (avgTimeCombo.getSelectedId()));
+    ctx.settings.setValue (settingsBandsKey, bandsCombo.getSelectedId());
+    ctx.settings.setValue (settingsAvgTimeKey, avgTimeCombo.getSelectedId());
+    ctx.settings.saveIfNeeded();
+}
+
+void RtaSplTab::timerTick()
+{
+    auto& analyzer = ctx.engine.getSplAnalyzer();
+
+    // RTA表示の上端は校正オフセットに追従させる
+    splTopDb = (float) (-10.0 + analyzer.getCalibrationOffsetDb());
+
+    eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
+    analyzer.copyRta (frame);
+    rtaCenters = frame.centerFreq;
+    rtaLevels = frame.levelDb;
+    rtaPeakLevels = frame.peakHoldDb;
+
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copySpl (spl);
+    lastSplDb = spl.currentDb;
+
+    splValueLabel.setText (spl.hasSignal ? juce::String (spl.currentDb, 1) : "--",
+                           juce::dontSendNotification);
+
+    leqLabel.setText (juce::String (u8"Leq  ") + strings::splLeq1min + ": " + juce::String (spl.leq1minDb, 1)
+                          + "   " + strings::splLeq15min + ": " + juce::String (spl.leq15minDb, 1)
+                          + "   " + strings::splLeqSession + ": " + juce::String (spl.leqSessionDb, 1),
+                      juce::dontSendNotification);
+
+    peakLabel.setText (strings::splPeakLabel + ": " + juce::String (spl.peakDb, 1) + " dB",
+                       juce::dontSendNotification);
+
+    // ノイズフロア測定（5秒間の平均をフロアとして保存。仕様 3.5.1）
+    if (noiseFloorMeasuring && juce::Time::getCurrentTime() > noiseFloorDeadline)
+    {
+        noiseFloorMeasuring = false;
+        floorCenters = rtaCenters;
+        floorLevels = rtaLevels;
+        noiseFloorButton.setButtonText (strings::snrNoiseFloorButton);
+
+        // 設定に保存する
+        juce::StringArray centerTokens, levelTokens;
+
+        for (const auto center : floorCenters)
+            centerTokens.add (juce::String (center, 2));
+
+        for (const auto level : floorLevels)
+            levelTokens.add (juce::String (level, 2));
+
+        ctx.settings.setValue (settingsFloorCentersKey, centerTokens.joinIntoString (","));
+        ctx.settings.setValue (settingsFloorKey, levelTokens.joinIntoString (","));
+        ctx.settings.saveIfNeeded();
+        eeq::log::write ("noise floor captured (" + juce::String (floorCenters.size()) + " bands)");
+    }
+
+    // S/N
+    {
+        juce::String snrText;
+        double sumSignal = 0.0, sumFloor = 0.0;
+        int validBands = 0;
+
+        if (! floorCenters.empty())
+        {
+            for (size_t i = 0; i < rtaCenters.size(); ++i)
+            {
+                // 帯域数が同じときだけ帯域対応で計算する
+                if (i < floorLevels.size() && floorLevels[i] > -200.0f && rtaLevels[i] > -200.0f)
+                {
+                    sumSignal += std::pow (10.0, rtaLevels[i] / 10.0);
+                    sumFloor += std::pow (10.0, floorLevels[i] / 10.0);
+                    ++validBands;
+                }
+            }
+        }
+
+        if (validBands > 0 && sumFloor > 0.0)
+        {
+            const auto overall = 10.0 * std::log10 (sumSignal / sumFloor);
+            snrText = strings::snrOverall + ": " + juce::String (overall, 1) + " dB";
+
+            // 色による判定の目安（仕様 3.5.1）: 20dB以上=緑 10〜20=黄 10未満=赤
+            snOverallLabel.setColour (juce::Label::textColourId,
+                                      overall >= 20.0 ? theme::get (theme::ColourId::ok)
+                                       : overall >= 10.0 ? theme::get (theme::ColourId::warn)
+                                                         : theme::get (theme::ColourId::danger));
+        }
+        else
+        {
+            snrText = strings::snrNoiseFloorHint;
+        }
+
+        snOverallLabel.setText (snrText, juce::dontSendNotification);
+    }
+
+    updateSnHint();
+    updateGainAssist();
+    repaint();
+}
+
+void RtaSplTab::startNoiseFloorMeasurement()
+{
+    noiseFloorMeasuring = true;
+    noiseFloorDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (5.0);
+    noiseFloorButton.setButtonText (strings::snrNoiseFloorStop);
+    eeq::log::write ("noise floor: measuring ambient noise for 5 seconds");
+}
+
+void RtaSplTab::stopNoiseFloorMeasurement()
+{
+    noiseFloorMeasuring = false;
+    noiseFloorButton.setButtonText (strings::snrNoiseFloorButton);
+}
+
+void RtaSplTab::applyCalibrationOffset()
+{
+    // 比較校正: アプリの表示（dB(A) Fast）と騒音計の読みの差を1つのオフセットとして保存（仕様 3.4）
+    const auto meterValue = calibrationMeterEditor.getText().getDoubleValue();
+
+    if (meterValue < 30.0 || meterValue > 140.0)
+        return;
+
+    auto& analyzer = ctx.engine.getSplAnalyzer();
+
+    // 比較校正中はアプリ側の表示も dB(A) Fast に合わせる（仕様 3.4）
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
+    analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+    weightingCombo.setSelectedId (3, juce::dontSendNotification);
+    timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
+
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copySpl (spl);
+
+    if (! spl.hasSignal)
+        return;
+
+    const auto offset = meterValue - spl.currentDb;
+    analyzer.setCalibrationOffsetDb (offset);
+    ctx.settings.setValue (settingsOffsetKey, offset);
+    ctx.settings.saveIfNeeded();
+
+    calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
+                                    juce::dontSendNotification);
+    eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (meterValue, 1)
+                     + " app=" + juce::String (spl.currentDb, 1) + " offset=" + juce::String (offset, 2));
+}
+
+void RtaSplTab::updateGainAssist()
+{
+    // 目標SPLを大きく表示（仕様 3.6 (1)）
+    const auto target = ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0);
+    gainTargetLabel.setText (juce::String (target, 0) + " dB(A) " + strings::splFast,
+                             juce::dontSendNotification);
+
+    const auto& meter = ctx.engine.getMeasMeter();
+    const auto peak = meter.peakLinear.load (std::memory_order_relaxed);
+    const auto rms = meter.rmsLinear.load (std::memory_order_relaxed);
+    const auto peakDb = juce::Decibels::gainToDecibels (peak, -100.0f);
+    const auto rmsDb = juce::Decibels::gainToDecibels (rms, -100.0f);
+
+    gainMetersLabel.setText (juce::String (strings::gainAssistPeak) + ": " + juce::String (peakDb, 1)
+                                 + " dBFS   " + strings::gainAssistRms + ": " + juce::String (rmsDb, 1)
+                                 + " dBFS   " + strings::gainAssistHeadroom + ": " + juce::String (-(peakDb), 1)
+                                 + " dB   (Meas)",
+                             juce::dontSendNotification);
+
+    // 状態に応じたメッセージ（仕様 3.6 (4)）: ピーク −6 dBFS 以下、RMS −24〜−18 dBFS
+    if (rms < -60.0f)
+    {
+        gainMessageLabel.setText ({}, juce::dontSendNotification);
+        return;
+    }
+
+    if (peak > -6.0f)
+    {
+        gainMessageLabel.setText (strings::gainAssistLower + " / " + strings::gainAssistTooHot,
+                                  juce::dontSendNotification);
+        gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::danger));
+    }
+    else if (rmsDb < -24.0f)
+    {
+        const auto delta = -21.0 - rmsDb;
+        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + " dB）",
+                                  juce::dontSendNotification);
+        gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+    }
+    else if (rmsDb > -18.0f)
+    {
+        gainMessageLabel.setText (strings::gainAssistLower, juce::dontSendNotification);
+        gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+    }
+    else
+    {
+        gainMessageLabel.setText (strings::gainAssistOk, juce::dontSendNotification);
+        gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::ok));
+    }
+}
+
+void RtaSplTab::updateSnHint()
+{
+    // S/N とコヒーレンスを合わせて読むためのヒント（仕様 3.5.1）
+    if (floorCenters.empty() || rtaCenters.empty())
+    {
+        snHintLabel.setText ({}, juce::dontSendNotification);
+        return;
+    }
+
+    bool lowSnr = false;
+    bool lowCoherence = false;
+
+    eeq::dsp::SpectrumFrame frame;
+    ctx.engine.getMeasurement().copyLatestResult (frame);
+
+    for (size_t i = 0; i < rtaCenters.size() && i < floorLevels.size(); ++i)
+    {
+        if (rtaLevels[i] < -200.0f || floorLevels[i] < -200.0f)
+            continue;
+
+        if (rtaCenters[i] < 100.0 || rtaCenters[i] > 10000.0)
+            continue;
+
+        const auto snr = rtaLevels[i] - floorLevels[i];
+
+        if (snr < 10.0)
+            lowSnr = true;
+
+        // コヒーレンスはTF測定から近傍binを拾う
+        if (frame.averages > 0 && ! frame.coherence.empty())
+        {
+            const auto binWidth = frame.sampleRate / (double) frame.fftSize;
+            const auto k = juce::jlimit (1, (int) frame.coherence.size() - 1,
+                                         (int) (rtaCenters[i] / binWidth));
+
+            if (frame.coherence[(size_t) k] < 0.6f && snr >= 20.0)
+                lowCoherence = true;
+        }
+    }
+
+    if (lowSnr)
+        snHintLabel.setText (strings::snrHintNoise, juce::dontSendNotification);
+    else if (lowCoherence)
+        snHintLabel.setText (strings::snrHintReflection, juce::dontSendNotification);
+    else
+        snHintLabel.setText ({}, juce::dontSendNotification);
+}
+
+void RtaSplTab::paint (juce::Graphics& g)
+{
+    g.fillAll (theme::get (theme::ColourId::windowBackground));
+
+    // ---- RTAバー ----
+    const auto rtaArea = getLocalBounds().toFloat().reduced (8.0f).removeFromTop (rtaGraphHeight);
+
+    g.setColour (theme::get (theme::ColourId::graphBackground));
+    g.fillRoundedRectangle (rtaArea, 6.0f);
+
+    if (rtaCenters.empty())
+    {
+        g.setColour (theme::get (theme::ColourId::textDim));
+        g.drawText (strings::graphPlaceholder, rtaArea.toNearestInt(), juce::Justification::centred);
+        return;
+    }
+
+    const auto count = (int) rtaCenters.size();
+    const auto plotArea = rtaArea.withTrimmedBottom (16.0f);
+    const auto barWidth = plotArea.getWidth() / (float) count;
+    const auto rangeDb = 90.0f; // 90 dB幅で表示
+
+    // S/N が保存されている帯域は背景に色を付ける（仕様 3.5.1）
+    if (! floorLevels.empty())
+    {
+        for (int i = 0; i < count && i < (int) floorLevels.size(); ++i)
+        {
+            if (rtaLevels[(size_t) i] < -200.0f || floorLevels[(size_t) i] < -200.0f)
+                continue;
+
+            const auto snr = rtaLevels[(size_t) i] - floorLevels[(size_t) i];
+            const auto colour = snr >= 20.0f ? theme::get (theme::ColourId::ok).withAlpha (0.10f)
+                              : snr >= 10.0f ? theme::get (theme::ColourId::warn).withAlpha (0.10f)
+                                             : theme::get (theme::ColourId::danger).withAlpha (0.12f);
+
+            g.setColour (colour);
+            g.fillRect (plotArea.getX() + (float) i * barWidth, plotArea.getY(), barWidth, plotArea.getHeight());
+        }
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const auto level = rtaLevels[(size_t) i];
+
+        if (level < -200.0f)
+            continue;
+
+        const auto normalized = juce::jlimit (0.0f, 1.0f, (level - (splTopDb - rangeDb)) / rangeDb);
+        const auto h = normalized * plotArea.getHeight();
+        const auto x = plotArea.getX() + (float) i * barWidth;
+
+        g.setColour (theme::get (theme::ColourId::accent).withAlpha (0.75f));
+        g.fillRect (x + 1.0f, plotArea.getBottom() - h, std::max (1.0f, barWidth - 2.0f), h);
+
+        // ピークホールド（仕様 3.4）
+        const auto peak = rtaPeakLevels[(size_t) i];
+
+        if (peak > -200.0f)
+        {
+            const auto peakNorm = juce::jlimit (0.0f, 1.0f, (peak - (splTopDb - rangeDb)) / rangeDb);
+            const auto py = plotArea.getBottom() - peakNorm * plotArea.getHeight();
+            g.setColour (theme::get (theme::ColourId::warn));
+            g.fillRect (x + 1.0f, py - 1.5f, std::max (1.0f, barWidth - 2.0f), 1.5f);
+        }
+    }
+
+    // バンドのラベル（主要な1/3オクターブ中心だけ）
+    g.setColour (theme::get (theme::ColourId::gridText));
+    g.setFont (juce::Font (juce::FontOptions (10.0f)));
+
+    for (int i = 0; i < count; ++i)
+    {
+        const auto f = rtaCenters[(size_t) i];
+        const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
+
+        if (std::abs (stepsFrom20 - std::round (stepsFrom20)) >= 0.05)
+            continue;
+
+        const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
+        const auto x = plotArea.getX() + ((float) i + 0.5f) * barWidth;
+        g.drawText (text, (int) x - 22, (int) plotArea.getBottom() + 2, 44, 12, juce::Justification::centred);
+    }
+}
+
+void RtaSplTab::resized()
+{
+    auto bounds = getLocalBounds().reduced (8);
+
+    rtaGraphHeight = juce::jlimit (160, 320, bounds.getHeight() * 3 / 5);
+    auto graphColumn = bounds.removeFromLeft (bounds.getWidth() * 3 / 5);
+    auto rightColumn = bounds;
+
+    // 左: RTA設定行 + グラフ + S/N
+    auto configRow = graphColumn.removeFromTop (26);
+    bandsTitle.setBounds (configRow.removeFromLeft (50));
+    bandsCombo.setBounds (configRow.removeFromLeft (90));
+    configRow.removeFromLeft (8);
+    avgTimeTitle.setBounds (configRow.removeFromLeft (70));
+    avgTimeCombo.setBounds (configRow.removeFromLeft (70));
+    configRow.removeFromLeft (8);
+    peakHoldResetButton.setBounds (configRow.removeFromLeft (150));
+
+    graphColumn.removeFromTop (4);
+    juce::ignoreUnused (graphColumn); // グラフは paint で rtaGraphHeight を使って描く
+
+    // S/Nはグラフの下に描く（paint）ため、ラベルはここで置く
+    auto snArea = graphColumn;
+    snTitle.setBounds (snArea.removeFromTop (18));
+    snOverallLabel.setBounds (snArea.removeFromTop (20));
+    snHintLabel.setBounds (snArea.removeFromTop (18));
+    noiseFloorButton.setBounds (snArea.removeFromTop (26).removeFromLeft (150));
+
+    // 右: SPL / 校正 / ゲインアシスト
+    auto splPanel = rightColumn.removeFromTop (140);
+    splTitle.setBounds (splPanel.removeFromTop (18));
+    splValueLabel.setBounds (splPanel.removeFromTop (40));
+    splValueLabel.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));
+
+    auto splControls = splPanel.removeFromTop (26);
+    weightingCombo.setBounds (splControls.removeFromLeft (64));
+    timeConstantCombo.setBounds (splControls.removeFromLeft (76));
+    uncalibratedLabel.setBounds (splPanel.removeFromTop (16));
+    leqLabel.setBounds (splPanel.removeFromTop (18));
+    peakLabel.setBounds (splPanel);
+
+    auto calibrationPanel = rightColumn.removeFromTop (150);
+    calibrationTitle.setBounds (calibrationPanel.removeFromTop (18));
+    auto calRow1 = calibrationPanel.removeFromTop (26);
+    calibrationSignalCombo.setBounds (calRow1.removeFromLeft (170));
+    calRow1.removeFromLeft (6);
+    calibrationStartButton.setBounds (calRow1.removeFromLeft (100));
+    auto calRow2 = calibrationPanel.removeFromTop (26);
+    calibrationMeterLabel.setBounds (calRow2.removeFromLeft (140));
+    calibrationMeterEditor.setBounds (calRow2.removeFromLeft (70));
+    calRow2.removeFromLeft (6);
+    calibrationApplyButton.setBounds (calRow2.removeFromLeft (120));
+    calibrationOffsetLabel.setBounds (calRow2);
+    auto calRow3 = calibrationPanel.removeFromTop (26);
+    calibrationResetButton.setBounds (calRow3.removeFromLeft (120));
+    calibrationPanel.removeFromTop (2);
+    calibrationGuideLabel.setBounds (calibrationPanel);
+
+    auto gainPanel = rightColumn;
+    gainTitle.setBounds (gainPanel.removeFromTop (18));
+    auto gainRow1 = gainPanel.removeFromTop (30);
+    gainTargetLabel.setBounds (gainRow1.removeFromLeft (170));
+    gainRow1.removeFromLeft (6);
+    gainTargetEditor.setBounds (gainRow1.removeFromLeft (60));
+    gainRow1.removeFromLeft (6);
+    gainStartButton.setBounds (gainRow1.removeFromLeft (110));
+    gainMessageLabel.setBounds (gainPanel.removeFromTop (22));
+    gainMetersLabel.setBounds (gainPanel.removeFromTop (18));
+    gainProceedLabel.setBounds (gainPanel);
+}
+
+} // namespace eeq::ui

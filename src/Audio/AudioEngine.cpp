@@ -334,6 +334,29 @@ double AudioEngine::getExcitationProgress() const noexcept
     return 0.0;
 }
 
+void AudioEngine::startCalibrationSignal (CalibrationSignal signal)
+{
+    switch (signal)
+    {
+        case CalibrationSignal::tone1k:
+            excitationSource.store (ExcitationSource::tone1k, std::memory_order_relaxed);
+            break;
+
+        case CalibrationSignal::bandNoise1k:
+            excitationSource.store (ExcitationSource::bandNoise1k, std::memory_order_relaxed);
+            break;
+
+        case CalibrationSignal::pinkBroadband:
+        default:
+            excitationSource.store (ExcitationSource::pinkNoise, std::memory_order_relaxed);
+            break;
+    }
+
+    // 校正信号は現在の出力レベル設定（既定 −20 dBFS）で出す
+    noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
+    eeq::log::write ("calibration signal: started");
+}
+
 //==============================================================================
 // デバイスエラー
 
@@ -396,6 +419,27 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const auto activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
                                  ? activeBuffer.load (std::memory_order_relaxed)
                                  : nullptr;
+
+    // 校正信号（1kHz帯域制限ノイズ）のフィルタ係数。サンプルレートが変わったら作り直す
+    //（オーディオスレッドだけが触る状態なのでロックは不要）
+    if (source == ExcitationSource::bandNoise1k && bandNoiseCoeffsRate != currentSampleRate.load())
+    {
+        const auto sr = currentSampleRate.load (std::memory_order_relaxed);
+        const auto w0 = 2.0 * juce::MathConstants<double>::pi * 1000.0 / sr;
+        const auto alpha = std::sin (w0) / (2.0 * 1.414); // Q = 1.414（2次バンドパス）
+        const auto b0 = alpha;
+        const auto b2 = -alpha;
+        const auto a0 = 1.0 + alpha;
+        const auto a1 = -2.0 * std::cos (w0);
+        const auto a2 = 1.0 - alpha;
+
+        bandNoiseCoeffs[0] = b0 / a0;
+        bandNoiseCoeffs[1] = 0.0;
+        bandNoiseCoeffs[2] = b2 / a0;
+        bandNoiseCoeffs[3] = a1 / a0;
+        bandNoiseCoeffs[4] = a2 / a0;
+        bandNoiseCoeffsRate = sr;
+    }
 
     // UIからの開始/停止コマンドをブロックの先頭で反映する（状態はオーディオスレッドが所有する）
     switch (noiseCommand.exchange (NoiseCommand::none, std::memory_order_relaxed))
@@ -497,6 +541,38 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             case ExcitationSource::external:
                 sourceSample = 0.0f; // アプリは出力せず取り込みだけ（仕様 3.2）
                 break;
+
+            case ExcitationSource::tone1k:
+            {
+                // SPL校正用の1kHzトーン（安定した読み取り用。仕様 3.4）
+                tonePhase += 2.0 * juce::MathConstants<double>::pi * 1000.0 / std::max (8000.0, currentSampleRate.load());
+
+                if (tonePhase > 2.0 * juce::MathConstants<double>::pi)
+                    tonePhase -= 2.0 * juce::MathConstants<double>::pi;
+
+                sourceSample = (float) std::sin (tonePhase);
+                break;
+            }
+
+            case ExcitationSource::bandNoise1k:
+            {
+                // 比較校正の既定信号: 1kHz中心の帯域制限ピンクノイズ（仕様 3.4）
+                const auto pink = noise.nextSample();
+                const auto b0 = bandNoiseCoeffs[0], b2 = bandNoiseCoeffs[2];
+                const auto a1 = bandNoiseCoeffs[3], a2 = bandNoiseCoeffs[4];
+
+                const auto out = b0 * pink + b2 * bandNoiseX2 - a1 * bandNoiseY1 - a2 * bandNoiseY2;
+
+                bandNoiseX2 = bandNoiseX1;
+                bandNoiseX1 = pink;
+                bandNoiseY2 = bandNoiseY1;
+                bandNoiseY1 = out;
+
+                // バンドパスで振幅が落ちるので持ち上げる（校正オフセットは表示側で決めるため
+                // 絶対値は問題にならない。レベルの見た目をそろえるための補正）
+                sourceSample = (float) juce::jlimit (-1.0, 1.0, out * 1.414);
+                break;
+            }
         }
 
         // 出力のハード上限（仕様 3.7 の安全設計）。フェードとレベルを掛けた最終値に適用する

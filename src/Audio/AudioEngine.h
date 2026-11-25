@@ -95,7 +95,9 @@ public:
         pinkNoise, // アプリ内蔵のピンクノイズ（既定）
         sweep,     // 対数スイープ（セットアップ時の測定用）
         wavFile,   // WAVファイルの再生
-        external   // アプリは出力せず取り込みだけ（本番素材での測定）
+        external,  // アプリは出力せず取り込みだけ（本番素材での測定）
+        tone1k,    // SPL校正用: 1 kHz トーン（安定させたいとき。仕様 3.4）
+        bandNoise1k // SPL校正用: 1 kHz 中心の帯域制限ピンクノイズ（比較校正の既定。仕様 3.4）
     };
 
     /** 励起信号の種類を選ぶ（音が出ている間は切り替えないこと） */
@@ -135,6 +137,13 @@ public:
 
     /** 緊急停止（Esc。仕様 6.3）: 出力をフェードアウトし、測定も止める */
     void emergencyStop() noexcept;
+
+    // ---- SPL校正信号（仕様 3.4）----
+
+    enum class CalibrationSignal : int { bandNoise1k, tone1k, pinkBroadband };
+
+    /** 比較校正の信号を開始する（既定は1kHz中心の帯域制限ピンクノイズ） */
+    void startCalibrationSignal (CalibrationSignal signal);
 
     // これを超える出力レベルは確認ダイアログを出す（仕様 3.2: 既定 −20 dBFS）
     static constexpr float outputLevelLimitDb = -20.0f;
@@ -214,6 +223,12 @@ private:
     PinkNoiseGenerator noise;
     juce::AudioFormatManager formatManager;
     eeq::dsp::RtaSplAnalyzer splAnalyzer;
+
+    // 校正信号（1kHzトーン/帯域制限ピンクノイズ）の状態。オーディオスレッドだけが触る
+    double tonePhase = 0.0;
+    double bandNoiseCoeffs[5] = {}; // RBJ bandpass b0,b1,b2,a1,a2（サンプルレートが変わったら作り直す）
+    double bandNoiseCoeffsRate = 0.0;
+    double bandNoiseX1 = 0.0, bandNoiseX2 = 0.0, bandNoiseY1 = 0.0, bandNoiseY2 = 0.0;
 
     // 測定ストリーム（フェーズ2）: オーディオスレッド → リングバッファ → 解析スレッド
     dsp::SampleRingBuffer measurementRing;

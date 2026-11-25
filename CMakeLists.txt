@@ -78,6 +78,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/TransferFunctionTab.h
     src/UI/DelayIrTab.cpp
     src/UI/DelayIrTab.h
+    src/UI/RtaSplTab.cpp
     src/UI/RtaSplTab.h
     src/UI/EQTab.h
     src/UI/LimitTestTab.h
