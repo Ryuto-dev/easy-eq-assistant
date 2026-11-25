@@ -38,7 +38,8 @@ public:
     int getAverages() const;
 
     /** RTA/SPL解析器を登録する（解析スレッドへ常時入力を流す。nullで停止） */
-    void setSplAnalyzer (RtaSplAnalyzer* analyzer) noexcept { splAnalyzer = analyzer; }
+    void setSplAnalyzer (RtaSplAnalyzer* analyzer) noexcept
+    { splAnalyzer.store (analyzer, std::memory_order_release); }
 
     /** 直近 numSamples サンプル（2の冪）の Ref/Meas をコピーする（遅延測定用: 仕様 3.3）。
         まだ溜まっていなければ false */
@@ -59,7 +60,7 @@ private:
 
     std::vector<float> readRef, readMeas;
 
-    RtaSplAnalyzer* splAnalyzer = nullptr; // 解析スレッドからだけ触る
+    std::atomic<RtaSplAnalyzer*> splAnalyzer { nullptr }; // 解析スレッドから読む（構築後に一度だけ書く）
 
     // 直近サンプルの循環バッファ（遅延測定用）。解析スレッドが書き、メッセージスレッドが読む
     mutable juce::CriticalSection captureLock;

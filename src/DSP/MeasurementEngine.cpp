@@ -25,6 +25,9 @@ MeasurementEngine::~MeasurementEngine()
 
 void MeasurementEngine::startMeasurement()
 {
+    // 前回の測定が残したアセンブリバッファ（直近fftSizeサンプル）を捨てる。
+    // 残っていると再開後の最初のフレームが古い音と混ざる
+    accumulator.resetAverages();
     measuring.store (true, std::memory_order_relaxed);
 }
 
@@ -129,8 +132,8 @@ void MeasurementEngine::run()
             appendCapture (readRef.data(), readMeas.data(), got);
 
             // RTA/SPLは測定の開始/停止にかかわらず常に入力を流す（仕様 3.4 / 5.4）
-            if (splAnalyzer != nullptr)
-                splAnalyzer->process (readMeas.data(), got);
+            if (auto* analyzer = splAnalyzer.load (std::memory_order_acquire); analyzer != nullptr)
+                analyzer->process (readMeas.data(), got);
 
             if (measuring.load (std::memory_order_relaxed))
                 accumulator.feedSamples (readRef.data(), readMeas.data(), got);

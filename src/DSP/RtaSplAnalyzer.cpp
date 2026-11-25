@@ -174,7 +174,7 @@ void RtaSplAnalyzer::process (const float* samples, int numSamples)
 
 void RtaSplAnalyzer::processFrame()
 {
-    std::vector<float> buffer ((size_t) fftSize * 2, 0.0f);
+    frameBuffer.assign ((size_t) fftSize * 2, 0.0f);
 
     for (int i = 0; i < fftSize; ++i)
     {
@@ -183,23 +183,23 @@ void RtaSplAnalyzer::processFrame()
         while (idx < 0)
             idx += fftSize;
 
-        buffer[(size_t) i] = assembly[(size_t) idx] * window[(size_t) i];
+        frameBuffer[(size_t) i] = assembly[(size_t) idx] * window[(size_t) i];
     }
 
-    fft->performRealOnlyForwardTransform (buffer.data(), true);
+    fft->performRealOnlyForwardTransform (frameBuffer.data(), true);
 
     const auto halfBins = fftSize / 2 + 1;
     const auto binWidth = sampleRate / (double) fftSize;
 
     // bin パワー（窓は各bin共通なのでエネルギー比としては相対値で十分）
-    std::vector<double> power ((size_t) halfBins, 0.0);
-    std::vector<double> binWeightDb ((size_t) halfBins, 0.0);
+    binPower.assign ((size_t) halfBins, 0.0);
+    binWeightDb.assign ((size_t) halfBins, 0.0);
 
     for (int k = 1; k < halfBins; ++k)
     {
-        const auto re = buffer[(size_t) k * 2];
-        const auto im = buffer[(size_t) k * 2 + 1];
-        power[(size_t) k] = (double) re * re + (double) im * im;
+        const auto re = frameBuffer[(size_t) k * 2];
+        const auto im = frameBuffer[(size_t) k * 2 + 1];
+        binPower[(size_t) k] = (double) re * re + (double) im * im;
         binWeightDb[(size_t) k] = weightingFor (weighting, (double) k * binWidth);
     }
 
@@ -213,15 +213,23 @@ void RtaSplAnalyzer::processFrame()
     // ---- RTAバンド ----
     for (size_t b = 0; b < bandCenters.size(); ++b)
     {
-        auto kLo = (int) std::ceil (bandEdgesLo[b] / binWidth);
-        auto kHi = (int) std::floor (bandEdgesHi[b] / binWidth);
+        // bin「中心」が帯域内に入るかで割り当てる（帯域が bin 幅より狭い低域でも
+        // 少なくとも1つの bin が担当するようにする）
+        auto kLo = (int) std::floor (bandEdgesLo[b] / binWidth + 0.5);
+        auto kHi = (int) std::floor (bandEdgesHi[b] / binWidth + 0.5);
         kLo = std::max (kLo, 1);
         kHi = std::min (kHi, halfBins - 1);
+
+        if (kHi < kLo)
+        {
+            // 帯域が bin 幅より狭い: 中心に最も近い bin 1本だけで代表させる
+            kLo = kHi = juce::jlimit (1, halfBins - 1, (int) std::floor (bandCenters[b] / binWidth + 0.5));
+        }
 
         double energy = 0.0;
 
         for (int k = kLo; k <= kHi; ++k)
-            energy += power[(size_t) k];
+            energy += binPower[(size_t) k];
 
         bandEnergy[b] += (energy - bandEnergy[b]) * rtaAlpha;
         bandPeak[b] = std::max (bandPeak[b], energy);
@@ -229,7 +237,7 @@ void RtaSplAnalyzer::processFrame()
 
     // ---- SPL（現在の重み付けで全binを合算）----
     for (int k = 1; k < halfBins; ++k)
-        frameEnergyWeighted += power[(size_t) k] * std::pow (10.0, binWeightDb[(size_t) k] / 10.0);
+        frameEnergyWeighted += binPower[(size_t) k] * std::pow (10.0, binWeightDb[(size_t) k] / 10.0);
 
     fastEnergy += (frameEnergyWeighted - fastEnergy) * splAlpha;
     slowEnergy += (frameEnergyWeighted - slowEnergy) * splAlpha;

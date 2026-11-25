@@ -66,6 +66,7 @@ private:
     int cachedIrAverages = -1;
     int cachedIrWidth = -1;
     int cachedIrFftSize = 0;
+    double cachedIrSampleRate = 0.0;
     bool peakAligned = true;
     bool showEtc = true;
     juce::Range<float> irTimeRangeMs { -20.0f, 100.0f };

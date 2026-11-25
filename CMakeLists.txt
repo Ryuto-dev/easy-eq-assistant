@@ -167,6 +167,8 @@ if(EASYEQ_BUILD_TESTS)
         tests/EQProposerTests.cpp
         tests/RtaSplTests.cpp
         tests/UtilitiesTests.cpp
+        tests/EndToEndTests.cpp
+        tests/DebugIsolate.cpp
         src/DSP/TransferFunctionAccumulator.cpp
         src/DSP/DelayEstimator.cpp
         src/DSP/ImpulseResponseBuilder.cpp

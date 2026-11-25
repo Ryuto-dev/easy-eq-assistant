@@ -67,6 +67,10 @@ EQTab::EQTab (UiContext& context)
     maxFreqEditor.setText ("16000", juce::dontSendNotification);
     minFreqEditor.setInputRestrictions (7, "0123456789.");
     maxFreqEditor.setInputRestrictions (7, "0123456789.");
+
+    // 補正範囲を変えたらターゲットカーブも作り直す（グラフの重ね描きと提案の両方が変わる）
+    minFreqEditor.onTextChange = [this] { buildTargetPoints(); };
+    maxFreqEditor.onTextChange = [this] { buildTargetPoints(); };
     addAndMakeVisible (minFreqEditor);
     addAndMakeVisible (maxFreqEditor);
 
@@ -284,6 +288,9 @@ void EQTab::buildTargetPoints()
 
 void EQTab::runProposal()
 {
+    // 補正範囲を変えたあとでもターゲットが必ず現在の範囲で作られるようにする
+    buildTargetPoints();
+
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
@@ -322,11 +329,45 @@ void EQTab::runProposal()
         weight.push_back (point.coherence >= (float) coherenceThreshold ? 1.0 : 0.0);
     }
 
-    // ターゲットを同じグリッドへ
+    // ターゲットを同じグリッドへ（グリッドは buildTargetPoints と同じ式なので
+    // 点数がそろっていればインデックス対応で一致する。ずれる場合は対数補間で受ける）
     std::vector<double> targetDb (gridFrequencies.size(), 0.0);
 
-    for (size_t i = 0; i < gridFrequencies.size() && i < ctx.state.targetPoints.size(); ++i)
-        targetDb[i] = 20.0 * std::log10 (std::max (std::abs (ctx.state.targetPoints[i].h), 1.0e-9));
+    if ((int) ctx.state.targetPoints.size() == (int) gridFrequencies.size())
+    {
+        for (size_t i = 0; i < gridFrequencies.size(); ++i)
+            targetDb[i] = 20.0 * std::log10 (std::max (std::abs (ctx.state.targetPoints[i].h), 1.0e-9));
+    }
+    else
+    {
+        // 対数周波数で線形補間
+        for (size_t i = 0; i < gridFrequencies.size(); ++i)
+        {
+            const auto freq = gridFrequencies[i];
+            double db = 0.0;
+            bool found = false;
+
+            for (size_t t = 1; t < ctx.state.targetPoints.size(); ++t)
+            {
+                if (freq <= ctx.state.targetPoints[t].freq)
+                {
+                    const auto& a = ctx.state.targetPoints[(size_t) (t - 1)];
+                    const auto& b = ctx.state.targetPoints[t];
+                    const auto ratio = (freq - a.freq) / std::max (1.0e-9, b.freq - a.freq);
+                    db = 20.0 * std::log10 (std::max (std::abs (a.h), 1e-9))
+                       + ratio * (20.0 * std::log10 (std::max (std::abs (b.h), 1e-9))
+                                - 20.0 * std::log10 (std::max (std::abs (a.h), 1e-9)));
+                    found = true;
+                    break;
+                }
+            }
+
+            if (! found && ! ctx.state.targetPoints.empty())
+                db = 20.0 * std::log10 (std::max (std::abs (ctx.state.targetPoints.back().h), 1e-9));
+
+            targetDb[i] = db;
+        }
+    }
 
     eeq::dsp::EQProposalInput input;
     input.frequency = gridFrequencies;
@@ -348,7 +389,16 @@ void EQTab::runProposal()
 
     convergenceLabel.setText (lastResult.converged ? strings::eqConverged : strings::eqNotConverged,
                               juce::dontSendNotification);
+
+    // 一覧を作り直すので選択と編集欄を同期させる（古い提案の値が別の帯域に
+    // 書き込まれる事故を防ぐ）
+    bandList.deselectAllRows();
     refreshBandTable();
+
+    if (! ctx.state.proposedBands.empty())
+        selectBandForEditing (0);
+    else
+        selectedLabel.setText ({}, juce::dontSendNotification);
 }
 
 void EQTab::updatePrediction()
@@ -424,6 +474,11 @@ void EQTab::paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int h
 
 void EQTab::listBoxItemClicked (int rowNumber, const juce::MouseEvent&)
 {
+    selectBandForEditing (rowNumber);
+}
+
+void EQTab::selectBandForEditing (int rowNumber)
+{
     const auto& bands = ctx.state.proposedBands;
 
     if (rowNumber < 0 || rowNumber >= (int) bands.size())
@@ -446,13 +501,14 @@ void EQTab::loadTargetCsv()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.csv;*.txt");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<EQTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
+            auto& csvTargetPoints = safeThis->csvTargetPoints;
             csvTargetPoints.clear();
             juce::StringArray lines;
             lines.addLines (file.loadFileAsString());
@@ -477,8 +533,8 @@ void EQTab::loadTargetCsv()
 
             if (! csvTargetPoints.empty())
             {
-                targetCombo.setSelectedId (3, juce::dontSendNotification);
-                buildTargetPoints();
+                safeThis->targetCombo.setSelectedId (3, juce::dontSendNotification);
+                safeThis->buildTargetPoints();
             }
         });
 }
@@ -489,14 +545,14 @@ void EQTab::exportCsv()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.csv");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<EQTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
-            const auto error = eeq::core::exporters::writeEQProposalCsv (ctx.state.proposedBands, file);
+            const auto error = eeq::core::exporters::writeEQProposalCsv (safeThis->ctx.state.proposedBands, file);
 
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
@@ -510,14 +566,14 @@ void EQTab::exportText()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.txt");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<EQTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
-            const auto error = eeq::core::exporters::writeEQProposalText (ctx.state.proposedBands, file);
+            const auto error = eeq::core::exporters::writeEQProposalText (safeThis->ctx.state.proposedBands, file);
 
             if (error.isNotEmpty())
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,

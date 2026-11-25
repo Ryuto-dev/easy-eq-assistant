@@ -94,6 +94,7 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
 
     auto maxResidualInRange = [&] ()
     {
+        // コヒーレンスしきい値未満（weight=0）の帯域は誤差を0として扱う（仕様 4.1）
         double maxAbs = 0.0;
 
         for (int i = 0; i < n; ++i)
@@ -110,6 +111,7 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
     };
 
     std::vector<WeightedPoint> points ((size_t) n);
+    std::vector<bool> excluded ((size_t) n, false); // 谷ルールでスキップした点を二度と選ばないようにする
 
     for (int iteration = 0; iteration < input.maxBands; ++iteration)
     {
@@ -125,6 +127,9 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
 
         for (int i = 0; i < n; ++i)
         {
+            if (excluded[(size_t) i])
+                continue;
+
             const auto freq = input.frequency[(size_t) i];
 
             if (! inRange (freq))
@@ -164,10 +169,25 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
         {
             gain *= input.boostScale;
 
-            // 狭い谷（1/6 oct より狭い半値幅）はキャンセレーションの可能性が高いため
-            // ブーストしない（仕様 4.3。設定で有効化できる）
-            if (! input.allowValleyBoost && shape.bandwidthOctaves < 1.0 / 6.0)
+            // 狭い谷（半値幅が 1/4 oct より狭い。グリッドが 1/12 oct なので半値幅の
+            // 分解能は限られる点に注意）はキャンセレーションの可能性が高いため
+            // ブーストしない（仕様 4.3。設定で有効化できる）。
+            // この点とその周辺（±1/4 oct）も候補から外す（ノッチの裾を追いかけない）
+            if (! input.allowValleyBoost && shape.bandwidthOctaves < 0.25)
+            {
+                const auto valleyFreq = points[(size_t) best].freq;
+
+                for (int i = 0; i < n; ++i)
+                {
+                    const auto ratio = std::max (input.frequency[(size_t) i], valleyFreq)
+                                     / std::max (1.0, std::min (input.frequency[(size_t) i], valleyFreq));
+
+                    if (std::log2 (ratio) < 0.25)
+                        excluded[(size_t) i] = true;
+                }
+
                 continue;
+            }
         }
 
         peq::Band band;

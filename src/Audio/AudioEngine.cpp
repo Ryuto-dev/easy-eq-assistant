@@ -390,7 +390,7 @@ void AudioEngine::saveSettings()
     settings->setValue ("refChannel", refChannel.load (std::memory_order_relaxed));
     settings->setValue ("measChannel", measChannel.load (std::memory_order_relaxed));
     settings->setValue ("outputChannel", outputChannel.load (std::memory_order_relaxed));
-    settings->setValue ("outputMask", (juce::int64) outputMask.load (std::memory_order_relaxed));
+    settings->setValue ("outputMask", juce::String ((juce::int64) outputMask.load (std::memory_order_relaxed)));
     settings->setValue ("noiseLevelDb", (double) noiseLevelDb.load (std::memory_order_relaxed));
     settings->setValue ("outputCeilingDb", (double) outputCeilingDb.load (std::memory_order_relaxed));
     settings->saveIfNeeded();
@@ -416,9 +416,6 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     auto state = noiseState.load (std::memory_order_relaxed);
     auto position = fadePosition.load (std::memory_order_relaxed);
     auto playPos = playbackPosition.load (std::memory_order_relaxed);
-    const auto activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
-                                 ? activeBuffer.load (std::memory_order_relaxed)
-                                 : nullptr;
 
     // 校正信号（1kHz帯域制限ノイズ）のフィルタ係数。サンプルレートが変わったら作り直す
     //（オーディオスレッドだけが触る状態なのでロックは不要）
@@ -470,6 +467,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         case NoiseCommand::none:
             break;
     }
+
+    // オーディオスレッドで使う値はブロックの先頭で一度だけ読む（リアルタイム性。
+    // shared_ptr のアトミック読み込みはスピンロックを伴うので per-sample では行わない）
+    const auto activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
+                                 ? activeBuffer.load (std::memory_order_relaxed)
+                                 : nullptr;
+    const auto ceilingGain = juce::Decibels::decibelsToGain (outputCeilingDb.load (std::memory_order_relaxed));
 
     const float* refIn = (refIndex >= 0 && refIndex < numInputChannels) ? inputChannelData[refIndex] : nullptr;
     const float* measIn = (measIndex >= 0 && measIndex < numInputChannels) ? inputChannelData[measIndex] : nullptr;
@@ -523,10 +527,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             case ExcitationSource::sweep:
             case ExcitationSource::wavFile:
             {
-                if (const auto* buffer = activeBuffer.load (std::memory_order_relaxed).get();
-                    buffer != nullptr && playPos < (int) buffer->size())
+                if (activeSweep != nullptr && playPos < (int) activeSweep->size())
                 {
-                    sourceSample = (*buffer)[(size_t) playPos];
+                    sourceSample = (*activeSweep)[(size_t) playPos];
                     ++playPos;
                 }
                 else if (state == NoiseState::running)
@@ -577,7 +580,6 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         }
 
         // 出力のハード上限（仕様 3.7 の安全設計）。フェードとレベルを掛けた最終値に適用する
-        const auto ceilingGain = juce::Decibels::decibelsToGain (outputCeilingDb.load (std::memory_order_relaxed));
         const auto sample = juce::jlimit (-ceilingGain, ceilingGain, sourceSample * gain);
 
         outPeak = juce::jmax (outPeak, std::abs (sample));
@@ -678,6 +680,20 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     measChannel.store (fixChannel (measChannel.load (std::memory_order_relaxed), numIn), std::memory_order_relaxed);
     outputChannel.store (fixChannel (outputChannel.load (std::memory_order_relaxed), numOut), std::memory_order_relaxed);
+
+    // 系統ルーティングマスクが新しいデバイスの出力chに1つも乗っていないときは、
+    // 出力がどこにも届かなくなるので固定したchへ張り直す
+    {
+        const auto mask = outputMask.load (std::memory_order_relaxed);
+
+        if (mask == 0 || numOut <= 0 || (mask & ((1ull << numOut) - 1)) == 0)
+        {
+            const auto fixed = outputChannel.load (std::memory_order_relaxed);
+
+            if (fixed >= 0)
+                outputMask.store (1ull << fixed, std::memory_order_relaxed);
+        }
+    }
 
     // 鳴っている最中にデバイスが開き直ったら、フェードインからやり直す（急な大音量を避ける）
     if (isNoiseAudible())
@@ -890,7 +906,9 @@ void AudioEngine::restoreSavedAssignment (int numInputs, int numOutputs)
     // 系統ルーティング。保存があれば復元し、なければ出力1chだけ
     if (settings != nullptr)
     {
-        const auto savedMask = (uint64_t) settings->getIntValue ("outputMask", (int) (1ull << outputChannel.load (std::memory_order_relaxed)));
+        const auto savedMask = (uint64_t) settings->getValue ("outputMask",
+                                                              juce::String (1ull << outputChannel.load (std::memory_order_relaxed)))
+                                       .getLargeIntValue();
 
         if (savedMask != 0)
             outputMask.store (savedMask, std::memory_order_relaxed);

@@ -59,6 +59,9 @@ void LiveModeOverlay::beginLiveMode()
                          .getChildFile ("EasyEQAssistant")
                          .getChildFile ("spl");
 
+    if (! dir.exists())
+        dir.createDirectory();
+
     currentLogFile = dir.getChildFile (juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S") + ".csv");
     loggingActive = eeq::core::exporters::createSplLogCsv (currentLogFile);
     eeq::log::write (loggingActive ? "live mode: SPL log started: " + currentLogFile.getFullPathName()
@@ -116,9 +119,14 @@ void LiveModeOverlay::timerTick()
             while ((int) historySpl.size() > historySeconds)
                 historySpl.pop_front();
 
-            eeq::core::exporters::appendSplLogLine (currentLogFile, now.formatted ("%H:%M:%S"),
-                                                    spl.currentDb, spl.leq1minDb, spl.leq15minDb,
-                                                    spl.leqSessionDb, spl.peakDb);
+            // 書き込みが続けられない（移動/ディスク満杯など）場合は通知して止める
+            if (! eeq::core::exporters::appendSplLogLine (currentLogFile, now.formatted ("%H:%M:%S"),
+                                                          spl.currentDb, spl.leq1minDb, spl.leq15minDb,
+                                                          spl.leqSessionDb, spl.peakDb))
+            {
+                loggingActive = false;
+                eeq::log::write ("live mode: SPL log write FAILED, logging stopped");
+            }
         }
     }
 

@@ -17,7 +17,7 @@ class VenueTab : public juce::Component,
 public:
     explicit VenueTab (UiContext& context);
 
-    void timerTick() {}
+    void timerTick();
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -63,6 +63,7 @@ private:
     juce::Label statusLabel;
 
     int selectedVenueIndex = 0;
+    int seenSnapshotVersion = -1;
     std::vector<int> venueIndices;
 };
 

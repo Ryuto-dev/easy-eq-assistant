@@ -322,13 +322,16 @@ void DelayIrTab::timerTick()
         }
     }
 
-    // スナップショット一覧の変化を比較コンボへ反映
+    // スナップショット一覧の変化を比較コンボへ反映（選択中のA/Bはできるだけ保持する）
     const auto version = (int) ctx.state.snapshotVersion.load();
 
     if (version != compareVersionSeen)
     {
         compareVersionSeen = version;
         auto& snapshots = ctx.project.snapshots();
+
+        const auto previousA = compareComboA.getSelectedId();
+        const auto previousB = compareComboB.getSelectedId();
 
         auto fill = [&snapshots] (juce::ComboBox& combo)
         {
@@ -341,11 +344,17 @@ void DelayIrTab::timerTick()
         fill (compareComboA);
         fill (compareComboB);
 
-        if (! snapshots.empty())
-            compareComboA.setSelectedId (1, juce::dontSendNotification);
+        // 前の選択がまだ有効なら維持、無効なら既定（A=最初, B=2番目）へ
+        if (previousA < 1 || previousA > (int) snapshots.size())
+            compareComboA.setSelectedId (snapshots.empty() ? 0 : 1, juce::dontSendNotification);
+        else
+            compareComboA.setSelectedId (previousA, juce::dontSendNotification);
 
-        if (snapshots.size() >= 2)
-            compareComboB.setSelectedId (2, juce::dontSendNotification);
+        if (previousB < 1 || previousB > (int) snapshots.size())
+            compareComboB.setSelectedId (snapshots.size() >= 2 ? 2 : (snapshots.empty() ? 0 : 1),
+                                         juce::dontSendNotification);
+        else
+            compareComboB.setSelectedId (previousB, juce::dontSendNotification);
 
         updateCompare();
     }
@@ -488,13 +497,16 @@ void DelayIrTab::rebuildIrIfDirty()
 
     const auto width = juce::jmax (100, getWidth() - 100);
 
+    // サンプルレートも含めてキャッシュの鍵にする（レートが変わると時間軸がずれる）
     if (frame.averages > 0 && (frame.averages != cachedIrAverages || width != cachedIrWidth
-                               || frame.fftSize != cachedIrFftSize))
+                               || frame.fftSize != cachedIrFftSize
+                               || std::abs (frame.sampleRate - cachedIrSampleRate) > 0.5))
     {
         cachedIr = std::make_unique<eeq::dsp::ImpulseResponse> (eeq::dsp::buildImpulseResponse (frame));
         cachedIrAverages = frame.averages;
         cachedIrWidth = width;
         cachedIrFftSize = frame.fftSize;
+        cachedIrSampleRate = frame.sampleRate;
         repaint();
     }
 }
@@ -776,7 +788,18 @@ void DelayIrTab::updateCompare()
 
     if (crossoverHz > 0.0)
     {
-        const auto binWidth = sampleRate / (double) snapshotA.frame.fftSize;
+        // スナップショットごとに自分の binWidth を使う（FFTサイズ/レートが違っても安全に）
+        const auto binWidthA = snapshotA.frame.sampleRate / (double) snapshotA.frame.fftSize;
+        const auto binWidthB = snapshotB.frame.sampleRate / (double) snapshotB.frame.fftSize;
+
+        // 片方でも実データがなければ極性の推定はできない
+        if (snapshotA.frame.transfer.size() < 2 || snapshotB.frame.transfer.size() < 2)
+        {
+            comparePolarityLabel.setText (strings::comparePolarity + ": " + juce::String (u8"データ不足で推定できません"),
+                                          juce::dontSendNotification);
+            return;
+        }
+
         auto sumAt = [&] (bool inverted)
         {
             double sum = 0.0;
@@ -785,11 +808,13 @@ void DelayIrTab::updateCompare()
             // クロスオーバー ±1/2 オクターブで合成振幅を予測
             for (double f = crossoverHz / std::sqrt (2.0); f <= crossoverHz * std::sqrt (2.0); f *= std::pow (2.0, 1.0 / 12.0))
             {
-                const auto k = juce::jlimit (1, (int) snapshotA.frame.transfer.size() - 1, (int) std::round (f / binWidth));
-                const std::complex<double> ha (snapshotA.frame.transfer[(size_t) k].real(),
-                                               snapshotA.frame.transfer[(size_t) k].imag());
-                std::complex<double> hb (snapshotB.frame.transfer[(size_t) k].real(),
-                                         snapshotB.frame.transfer[(size_t) k].imag());
+                const auto ka = juce::jlimit (1, (int) snapshotA.frame.transfer.size() - 1, (int) std::round (f / binWidthA));
+                const auto kb = juce::jlimit (1, (int) snapshotB.frame.transfer.size() - 1, (int) std::round (f / binWidthB));
+
+                const std::complex<double> ha (snapshotA.frame.transfer[(size_t) ka].real(),
+                                               snapshotA.frame.transfer[(size_t) ka].imag());
+                std::complex<double> hb (snapshotB.frame.transfer[(size_t) kb].real(),
+                                         snapshotB.frame.transfer[(size_t) kb].imag());
 
                 if (inverted)
                     hb = -hb;

@@ -29,8 +29,11 @@ void TransferFunctionAccumulator::configure (int fftSizePoints, double newSample
             points = pow2;
     }
 
-    const bool structural = points != fftSize || std::abs (newSampleRate - sampleRate) > 0.5
+    // 初回のconfigureは必ず初期化する（メンバーの既定fftSizeと同じ値を渡しても
+    // バッファ確保がスキップされないようにする）
+    const bool structural = ! configured || points != fftSize || std::abs (newSampleRate - sampleRate) > 0.5
                             || averaging.mode != config.mode || windowMethod != currentWindowMethod;
+    configured = true;
 
     fftSize = points;
     sampleRate = newSampleRate;

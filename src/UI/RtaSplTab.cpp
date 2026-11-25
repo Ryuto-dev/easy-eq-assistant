@@ -313,7 +313,8 @@ void RtaSplTab::refreshFromSettings()
 void RtaSplTab::applyAnalyzerConfig()
 {
     const auto bands = bandsCombo.getSelectedId() == 2 ? 6 : bandsCombo.getSelectedId() == 3 ? 12 : 3;
-    ctx.engine.getSplAnalyzer().configure (ctx.engine.getCurrentSampleRate(), bands,
+    configuredSampleRate = ctx.engine.getCurrentSampleRate();
+    ctx.engine.getSplAnalyzer().configure (configuredSampleRate, bands,
                                            avgTimeSecondsForId (avgTimeCombo.getSelectedId()));
     ctx.settings.setValue (settingsBandsKey, bandsCombo.getSelectedId());
     ctx.settings.setValue (settingsAvgTimeKey, avgTimeCombo.getSelectedId());
@@ -323,6 +324,11 @@ void RtaSplTab::applyAnalyzerConfig()
 void RtaSplTab::timerTick()
 {
     auto& analyzer = ctx.engine.getSplAnalyzer();
+
+    // デバイスが開き直った（サンプルレートが変わった）ときは、保存済みの
+    // ユーザー設定で解析器を張り直す（ハードコードで上書きしない）
+    if (std::abs (ctx.engine.getCurrentSampleRate() - configuredSampleRate) > 0.5)
+        applyAnalyzerConfig();
 
     // RTA表示の上端は校正オフセットに追従させる
     splTopDb = (float) (-10.0 + analyzer.getCalibrationOffsetDb());
@@ -381,8 +387,11 @@ void RtaSplTab::timerTick()
         {
             for (size_t i = 0; i < rtaCenters.size(); ++i)
             {
-                // 帯域数が同じときだけ帯域対応で計算する
-                if (i < floorLevels.size() && floorLevels[i] > -200.0f && rtaLevels[i] > -200.0f)
+                // ノイズフロアは同じ帯域数・同じ中心周波数のときだけ対応付ける
+                //（フロア取得後にバンド数を変えたら無効とみなす）
+                if (i < floorLevels.size() && i < floorCenters.size()
+                    && floorCenters[i] > 0.0 && std::abs (floorCenters[i] - rtaCenters[i]) < 0.5
+                    && floorLevels[i] > -200.0f && rtaLevels[i] > -200.0f)
                 {
                     sumSignal += std::pow (10.0, rtaLevels[i] / 10.0);
                     sumFloor += std::pow (10.0, floorLevels[i] / 10.0);
@@ -439,11 +448,13 @@ void RtaSplTab::applyCalibrationOffset()
 
     auto& analyzer = ctx.engine.getSplAnalyzer();
 
-    // 比較校正中はアプリ側の表示も dB(A) Fast に合わせる（仕様 3.4）
+    // 比較校正中はアプリ側の表示も dB(A) Fast に合わせる（仕様 3.4）。設定にも保存する
     analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
     analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
     weightingCombo.setSelectedId (3, juce::dontSendNotification);
     timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
+    ctx.settings.setValue (settingsWeightingKey, 3);
+    ctx.settings.setValue (settingsTimeConstantKey, 1);
 
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
     analyzer.copySpl (spl);
@@ -482,7 +493,7 @@ void RtaSplTab::updateGainAssist()
                              juce::dontSendNotification);
 
     // 状態に応じたメッセージ（仕様 3.6 (4)）: ピーク −6 dBFS 以下、RMS −24〜−18 dBFS
-    if (rms < -60.0f)
+    if (rmsDb < -60.0f)
     {
         gainMessageLabel.setText ({}, juce::dontSendNotification);
         return;
@@ -528,8 +539,12 @@ void RtaSplTab::updateSnHint()
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
-    for (size_t i = 0; i < rtaCenters.size() && i < floorLevels.size(); ++i)
+    for (size_t i = 0; i < rtaCenters.size() && i < floorLevels.size() && i < floorCenters.size(); ++i)
     {
+        // フロアは同じ帯域のときだけ対応付ける（バンド数を変えたら無効）
+        if (floorCenters[i] <= 0.0 || std::abs (floorCenters[i] - rtaCenters[i]) >= 0.5)
+            continue;
+
         if (rtaLevels[i] < -200.0f || floorLevels[i] < -200.0f)
             continue;
 

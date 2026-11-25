@@ -1,37 +1,70 @@
 #include "Exporters.h"
 
 #include <cmath>
-#include <fstream>
+#include <iomanip>
+#include <sstream>
 
 namespace eeq::core::exporters
 {
 
 namespace
 {
-std::ofstream openUtf8 (const juce::File& file)
+// Windows の日本語ユーザー名など非ASCIIパスでも確実に書けるよう、
+// juce::FileOutputStream を使う（std::ofstream に narrow 文字列を渡すと
+// ANSI コードページ解釈で非ASCIIパスが壊れる）。BOM 付き UTF-8 にすると
+// Excel でも文字化けしない
+class TextFileWriter
 {
-    // BOM 付き UTF-8 にすると Excel でも文字化けしない
-    std::ofstream stream (file.getFullPathName().toStdString(), std::ios::binary);
-
-    if (stream.is_open())
+public:
+    explicit TextFileWriter (const juce::File& file)
+        : stream (file.createOutputStream())
     {
-        const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-        stream.write ((const char*) bom, 3);
+        if (stream != nullptr && stream->openedOk())
+        {
+            const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
+            stream->write (bom, 3);
+            ok = true;
+        }
     }
 
-    return stream;
+    bool isOpen() const noexcept { return ok; }
+
+    void writeLine (const std::string& line)
+    {
+        if (stream != nullptr)
+            stream->write (line.data(), (size_t) line.size());
+    }
+
+    bool finalize() const
+    {
+        if (stream == nullptr)
+            return false;
+
+        stream->flush();
+        return stream->getStatus().wasOk();
+    }
+
+private:
+    std::unique_ptr<juce::FileOutputStream> stream;
+    bool ok = false;
+};
+
+std::string doubleToStdString (double value, int decimals)
+{
+    std::ostringstream s;
+    s << std::fixed << std::setprecision (decimals) << value;
+    return s.str();
 }
 } // namespace
 
 juce::String writeSnapshotCsv (const eeq::dsp::SpectrumFrame& frame, const juce::File& file)
 {
-    std::ofstream stream = openUtf8 (file);
+    TextFileWriter writer (file);
 
-    if (! stream.is_open())
+    if (! writer.isOpen())
         return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
 
-    stream << "frequency_hz,magnitude_db,phase_deg,coherence\n";
-    stream << std::fixed;
+    writer.writeLine ("frequency_hz,magnitude_db,phase_deg,coherence\n");
 
     const auto halfBins = (int) frame.magnitudeDb.size();
     const auto binWidth = frame.sampleRate / (double) frame.fftSize;
@@ -43,25 +76,27 @@ juce::String writeSnapshotCsv (const eeq::dsp::SpectrumFrame& frame, const juce:
         if (freq < 10.0 || freq > 24000.0)
             continue;
 
-        stream << freq << ',' << frame.magnitudeDb[(size_t) k] << ','
-               << frame.phaseDeg[(size_t) k] << ',' << frame.coherence[(size_t) k] << '\n';
+        writer.writeLine (doubleToStdString (freq, 2) + ","
+                          + doubleToStdString (frame.magnitudeDb[(size_t) k], 3) + ","
+                          + doubleToStdString (frame.phaseDeg[(size_t) k], 3) + ","
+                          + doubleToStdString (frame.coherence[(size_t) k], 4) + "\n");
     }
 
-    return {};
+    return writer.finalize() ? juce::String()
+                             : juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
 }
 
 juce::String writeSnapshotRewText (const eeq::dsp::SpectrumFrame& frame, const juce::String& curveName,
                                    const juce::File& file)
 {
-    std::ofstream stream = openUtf8 (file);
+    TextFileWriter writer (file);
 
-    if (! stream.is_open())
+    if (! writer.isOpen())
         return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
 
-    stream << "* Easy EQ assistant\n";
-    stream << "* " << curveName.toStdString() << "\n";
-    stream << "* Frequency (Hz)\tLevel (dB)\tPhase (deg)\n\n";
-    stream << std::fixed;
+    writer.writeLine ("* Easy EQ assistant\n");
+    writer.writeLine ("* " + curveName.toStdString() + "\n");
+    writer.writeLine ("* Frequency (Hz)\tLevel (dB)\tPhase (deg)\n\n");
 
     const auto halfBins = (int) frame.magnitudeDb.size();
     const auto binWidth = frame.sampleRate / (double) frame.fftSize;
@@ -73,11 +108,13 @@ juce::String writeSnapshotRewText (const eeq::dsp::SpectrumFrame& frame, const j
         if (freq < 10.0 || freq > 24000.0)
             continue;
 
-        stream << freq << '\t' << frame.magnitudeDb[(size_t) k] << '\t'
-               << frame.phaseDeg[(size_t) k] << '\n';
+        writer.writeLine (doubleToStdString (freq, 2) + "\t"
+                          + doubleToStdString (frame.magnitudeDb[(size_t) k], 3) + "\t"
+                          + doubleToStdString (frame.phaseDeg[(size_t) k], 3) + "\n");
     }
 
-    return {};
+    return writer.finalize() ? juce::String()
+                             : juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
 }
 
 juce::String writeImpulseResponseWav (const eeq::dsp::ImpulseResponse& ir, const juce::File& file)
@@ -102,13 +139,12 @@ juce::String writeImpulseResponseWav (const eeq::dsp::ImpulseResponse& ir, const
 
 juce::String writeEQProposalCsv (const std::vector<eeq::dsp::peq::Band>& bands, const juce::File& file)
 {
-    std::ofstream stream = openUtf8 (file);
+    TextFileWriter writer (file);
 
-    if (! stream.is_open())
+    if (! writer.isOpen())
         return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
 
-    stream << "type,frequency_hz,gain_db,q\n";
-    stream << std::fixed;
+    writer.writeLine ("type,frequency_hz,gain_db,q\n");
 
     for (const auto& band : bands)
     {
@@ -123,21 +159,25 @@ juce::String writeEQProposalCsv (const std::vector<eeq::dsp::peq::Band>& bands, 
             case eeq::dsp::peq::Band::Type::highPass: type = "high_pass"; break;
         }
 
-        stream << type << ',' << band.frequency << ',' << band.gainDb << ',' << band.q << '\n';
+        writer.writeLine (std::string (type) + ","
+                          + doubleToStdString (band.frequency, 2) + ","
+                          + doubleToStdString (band.gainDb, 3) + ","
+                          + doubleToStdString (band.q, 3) + "\n");
     }
 
-    return {};
+    return writer.finalize() ? juce::String()
+                             : juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
 }
 
 juce::String writeEQProposalText (const std::vector<eeq::dsp::peq::Band>& bands, const juce::File& file)
 {
-    std::ofstream stream = openUtf8 (file);
+    TextFileWriter writer (file);
 
-    if (! stream.is_open())
+    if (! writer.isOpen())
         return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
 
-    stream << juce::String (u8"Easy EQ assistant - 補正EQ案\n").toStdString();
-    stream << juce::String (u8"（参考値。ミキサーへの手入力用の控えです）\n\n").toStdString();
+    writer.writeLine (juce::String (u8"Easy EQ assistant - 補正EQ案\n").toStdString());
+    writer.writeLine (juce::String (u8"（参考値。ミキサーへの手入力用の控えです）\n\n").toStdString());
 
     int index = 1;
 
@@ -154,45 +194,64 @@ juce::String writeEQProposalText (const std::vector<eeq::dsp::peq::Band>& bands,
             case eeq::dsp::peq::Band::Type::highPass: type = "HPF"; break;
         }
 
-        stream << "CH? EQ" << index << ": " << type
-               << "  " << juce::String (band.frequency, 1).toStdString() << " Hz"
-               << "  " << (band.gainDb > 0 ? "+" : "") << juce::String (band.gainDb, 2).toStdString() << " dB"
-               << "  Q=" << juce::String (band.q, 2).toStdString()
-               << (band.enabled ? "" : "  (OFF)") << "\n";
+        writer.writeLine ("CH? EQ" + std::to_string (index) + ": " + type
+                          + "  " + juce::String (band.frequency, 1).toStdString() + " Hz"
+                          + "  " + (band.gainDb > 0 ? "+" : "") + juce::String (band.gainDb, 2).toStdString() + " dB"
+                          + "  Q=" + juce::String (band.q, 2).toStdString()
+                          + (band.enabled ? "" : "  (OFF)") + "\n");
 
         ++index;
     }
 
     if (bands.empty())
-        stream << juce::String (u8"（帯域なし）\n").toStdString();
+        writer.writeLine (juce::String (u8"（帯域なし）\n").toStdString());
 
-    return {};
+    return writer.finalize() ? juce::String()
+                             : juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
 }
 
 bool createSplLogCsv (const juce::File& file)
 {
-    std::ofstream stream = openUtf8 (file);
+    if (! file.getParentDirectory().exists())
+        file.getParentDirectory().createDirectory();
 
-    if (! stream.is_open())
+    TextFileWriter writer (file);
+
+    if (! writer.isOpen())
         return false;
 
-    stream << "time,spl_db,leq_1min_db,leq_15min_db,leq_session_db,peak_db\n";
-    return true;
+    writer.writeLine ("time,spl_db,leq_1min_db,leq_15min_db,leq_session_db,peak_db\n");
+    return writer.finalize();
 }
 
 bool appendSplLogLine (const juce::File& file, const juce::String& timeText,
                        double splDb, double leq1min, double leq15min, double leqSession, double peakDb)
 {
-    std::ofstream stream (file.getFullPathName().toStdString(), std::ios::app);
+    // 追記は juce::FileOutputStream の末尾へ（非ASCIIパス対応）
+    juce::FileOutputStream stream (file);
 
-    if (! stream.is_open())
+    if (! stream.openedOk())
         return false;
 
-    stream << std::fixed;
-    stream << timeText.toStdString() << ',' << splDb << ',' << leq1min << ','
-           << leq15min << ',' << leqSession << ',' << peakDb << '\n';
+    stream.setPosition (file.getSize());
+    stream.write (timeText.toUTF8(), (size_t) timeText.getNumBytesAsUTF8());
 
-    return true;
+    const auto appendField = [&stream] (double value, const char* separator)
+    {
+        const auto text = juce::String (value, 2).toStdString();
+        stream.write (separator, std::string (separator).size());
+        stream.write (text.data(), text.size());
+    };
+
+    appendField (splDb, ",");
+    appendField (leq1min, ",");
+    appendField (leq15min, ",");
+    appendField (leqSession, ",");
+    appendField (peakDb, ",");
+    stream.write ("\n", 1);
+
+    stream.flush();
+    return stream.getStatus().wasOk();
 }
 
 } // namespace eeq::core::exporters

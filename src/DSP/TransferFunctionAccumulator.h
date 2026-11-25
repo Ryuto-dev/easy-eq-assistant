@@ -69,6 +69,8 @@ private:
 
     mutable juce::CriticalSection lock;
 
+    bool configured = false; // 初回configureを確実に初期化扱いにするためのフラグ
+
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> windowData;
     juce::dsp::WindowingFunction<float>::WindowingMethod currentWindowMethod =

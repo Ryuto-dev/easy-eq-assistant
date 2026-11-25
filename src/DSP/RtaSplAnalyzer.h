@@ -27,8 +27,8 @@ public:
     void configure (double sampleRate, int bandsPerOctave, double rtaAveragingSeconds);
     void setWeighting (Weighting weighting);
     void setTimeConstant (TimeConstant timeConstant);
-    void setCalibrationOffsetDb (double offsetDb) noexcept { calibrationOffsetDb = offsetDb; }
-    double getCalibrationOffsetDb() const noexcept { return calibrationOffsetDb; }
+    void setCalibrationOffsetDb (double offsetDb) noexcept { calibrationOffsetDb.store (offsetDb, std::memory_order_relaxed); }
+    double getCalibrationOffsetDb() const noexcept { return calibrationOffsetDb.load (std::memory_order_relaxed); }
 
     // ---- 解析（解析スレッドから）----
 
@@ -79,7 +79,7 @@ private:
     double rtaAveragingSeconds = 1.0;
     Weighting weighting = Weighting::aWeighted;
     TimeConstant timeConstant = TimeConstant::fast;
-    double calibrationOffsetDb = 0.0;
+    std::atomic<double> calibrationOffsetDb { 0.0 };
 
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> window;
@@ -87,6 +87,10 @@ private:
     int assemblyPos = 0;
     int sinceFrame = 0;
     bool firstFrameDone = false;
+
+    // processFrame の作業バッファ（メンバーで持って毎フレームの確保を避ける）
+    std::vector<float> frameBuffer;
+    std::vector<double> binPower, binWeightDb;
 
     // RTA
     std::vector<double> bandCenters;

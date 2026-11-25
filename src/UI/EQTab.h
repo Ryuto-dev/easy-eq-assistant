@@ -31,6 +31,7 @@ private:
     void runProposal();
     void updatePrediction();
     void refreshBandTable();
+    void selectBandForEditing (int rowNumber);
     void exportCsv();
     void exportText();
     void loadTargetCsv();

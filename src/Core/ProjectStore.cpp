@@ -140,6 +140,13 @@ eeq::dsp::SpectrumFrame ProjectStore::frameFromVar (const juce::var& v)
         frame.sampleRate = o->getProperty ("sampleRate");
         frame.averages = o->getProperty ("averages");
 
+        // 破損したファイルの fftSize で巨大な確保や負のサイズ変換をしない
+        if (frame.fftSize < 256 || frame.fftSize > (1 << 20) || (frame.fftSize & (frame.fftSize - 1)) != 0)
+        {
+            frame = {};
+            return frame;
+        }
+
         const auto size = (size_t) (frame.fftSize / 2 + 1);
         const auto re = floatArrayFromVar (o->getProperty ("transferRe"), size);
         const auto im = floatArrayFromVar (o->getProperty ("transferIm"), size);
@@ -289,44 +296,47 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
         venue.equipment = o->getProperty ("equipment").toString();
         venue.subCrossoverHz = getPropertyWithDefault (o, "subCrossoverHz", 0.0);
 
-        for (const auto& systemVar : *o->getProperty ("systems").getArray())
-        {
-            if (auto* so = systemVar.getDynamicObject())
+        if (const auto* systems = o->getProperty ("systems").getArray())
+            for (const auto& systemVar : *systems)
             {
-                SpeakerSystemInfo system;
-                system.name = so->getProperty ("name").toString();
-                system.outputChannel = getPropertyWithDefault (so, "outputChannel", 0);
-                system.colour = colourFromVar (so->getProperty ("colour"), system.colour);
-                venue.systems.push_back (system);
+                if (auto* so = systemVar.getDynamicObject())
+                {
+                    SpeakerSystemInfo system;
+                    system.name = so->getProperty ("name").toString();
+                    system.outputChannel = getPropertyWithDefault (so, "outputChannel", 0);
+                    system.colour = colourFromVar (so->getProperty ("colour"), system.colour);
+                    venue.systems.push_back (system);
+                }
             }
-        }
 
-        for (const auto& pointVar : *o->getProperty ("micPoints").getArray())
-        {
-            if (auto* po = pointVar.getDynamicObject())
+        if (const auto* micPoints = o->getProperty ("micPoints").getArray())
+            for (const auto& pointVar : *micPoints)
             {
-                MicPoint point;
-                point.name = po->getProperty ("name").toString();
-                point.description = po->getProperty ("description").toString();
-                venue.micPoints.push_back (point);
+                if (auto* po = pointVar.getDynamicObject())
+                {
+                    MicPoint point;
+                    point.name = po->getProperty ("name").toString();
+                    point.description = po->getProperty ("description").toString();
+                    venue.micPoints.push_back (point);
+                }
             }
-        }
 
-        for (const auto& sessionVar : *o->getProperty ("sessions").getArray())
-        {
-            if (auto* so = sessionVar.getDynamicObject())
+        if (const auto* sessions = o->getProperty ("sessions").getArray())
+            for (const auto& sessionVar : *sessions)
             {
-                Session session;
-                session.name = so->getProperty ("name").toString();
-                session.startedAt = timeFromVar (so->getProperty ("startedAt"));
+                if (auto* so = sessionVar.getDynamicObject())
+                {
+                    Session session;
+                    session.name = so->getProperty ("name").toString();
+                    session.startedAt = timeFromVar (so->getProperty ("startedAt"));
 
-                if (const auto* snapshots = so->getProperty ("snapshots").getArray())
-                    for (const auto& snapshotVar : *snapshots)
-                        session.snapshots.push_back (snapshotFromVar (snapshotVar));
+                    if (const auto* snapshots = so->getProperty ("snapshots").getArray())
+                        for (const auto& snapshotVar : *snapshots)
+                            session.snapshots.push_back (snapshotFromVar (snapshotVar));
 
-                venue.sessions.push_back (session);
+                    venue.sessions.push_back (session);
+                }
             }
-        }
     }
 
     return venue;

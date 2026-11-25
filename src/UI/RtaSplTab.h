@@ -67,6 +67,7 @@ private:
 
     // SPL表示のキャッシュ
     double lastSplDb = -300.0;
+    double configuredSampleRate = 0.0; // 解析器に適用済みのサンプルレート（変化検出用）
     float splTopDb = 0.0f;   // RTA表示の上端（校正オフセットに合わせて追従）
     int rtaGraphHeight = 240;
 };

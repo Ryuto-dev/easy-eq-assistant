@@ -48,9 +48,13 @@ public:
 
     /** 測定結果へ補正を適用する。H_corr = H / H_loopback。
         ループバックのコヒーレンスが低い bin（電気系として信頼できない）はそのまま通す。
-        removeDelay: 往復遅延を位相から差し引く（平面遅延の除去） */
+        同じ内部参照で測った測定には H_loop の位相（往復遅延を含む）がそのまま乗っているので、
+        複素除算だけでループの遅延も込みで打ち消される（追加の位相補正は入れない。二重に
+        差し引くと遅延が −Δ ずれる） */
     void apply (const eeq::dsp::SpectrumFrame& input, eeq::dsp::SpectrumFrame& out, bool removeDelay) const
     {
+        juce::ignoreUnused (removeDelay); // 位相は複素除算で自動的に補正される（互換用の引数）
+
         const juce::ScopedLock sl (lock);
         out = input;
 
@@ -59,7 +63,6 @@ public:
             return;
 
         const auto halfBins = (int) input.transfer.size();
-        const auto binWidth = input.sampleRate / (double) input.fftSize;
 
         for (int k = 1; k < halfBins; ++k)
         {
@@ -74,21 +77,7 @@ public:
                                                  input.transfer[(size_t) k].imag());
             const auto corrected = h / std::complex<double> (loop.real(), loop.imag());
 
-            if (removeDelay)
-            {
-                // H_loopback に含まれる往復遅延を差し引く: e^{+j2πf·Δ} を掛ける
-                const auto freq = (double) k * binWidth;
-                const auto phase = 2.0 * juce::MathConstants<double>::pi * freq
-                                 * delaySamples.load (std::memory_order_relaxed) / input.sampleRate;
-                const auto compensation = std::polar (1.0, phase);
-                out.transfer[(size_t) k] = { (float) (corrected * compensation).real(),
-                                             (float) (corrected * compensation).imag() };
-            }
-            else
-            {
-                out.transfer[(size_t) k] = { (float) corrected.real(), (float) corrected.imag() };
-            }
-
+            out.transfer[(size_t) k] = { (float) corrected.real(), (float) corrected.imag() };
             out.magnitudeDb[(size_t) k] = (float) (20.0 * std::log10 (std::max (std::abs (corrected), 1e-9)));
             out.phaseDeg[(size_t) k] = (float) (std::arg (corrected) * 180.0 / juce::MathConstants<double>::pi);
         }

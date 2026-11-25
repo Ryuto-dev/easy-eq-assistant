@@ -13,13 +13,22 @@ namespace eeq::dsp
 struct GridPoint
 {
     double freq = 0.0;
-    std::complex<double> h;   // 複素平均した H(f)
+    std::complex<double> h;   // 振幅（パワー平均）と位相（アンラップ平均）から再構成した複素H
     float coherence = 0.0f;   // 帯域内の平均コヒーレンス
     int count = 0;            // 帯域に入った bin 数
+    float magnitudeDb = -300.0f; // 帯域内のパワー平均振幅 (dB)。遅延があっても崩れない
+    float phaseDeg = 0.0f;       // 帯域内のアンラップ平均位相 (deg)
 };
 
 /** SpectrumFrame を対数グリッドへ再サンプルしつつ、1/(2·denom) オクターブ半幅の
-    複素平均（仕様 3.1 のスムージング）を適用する。
+    スムージング（仕様 3.1）を適用する。
+
+    - 振幅は帯域内の「パワー平均」|H|² を平均する。遅延を含む測定では帯域内で位相が
+      回転するため、複素平均すると振幅が打ち消されて崩れる（従来の実装の欠陥）。
+      パワー平均なら遅延の有無に依存しない。
+    - 位相は帯域内の bin を順にアンラップしてから平均する。こちらも複素平均の位相消滅を避ける。
+      結果は連続的なアンラップ位相（表示側で −180..180 に折り返して見せる）。
+
     Ref パワーがピークより floorDbBelowPeak 以上低い bin は H1 が不定のため除外する
     （計算値は呼び出し元が保持し、表示/提案にのみ使う。仕様 3.1）。
 
@@ -49,6 +58,10 @@ struct GridPoint
     for (const auto level : frame.refPowerDb)
         refPeakDb = std::max (refPeakDb, level);
 
+    // 帯域をまたいで連続的なアンラップ位相を作るための走査状態
+    double runningPhaseDeg = 0.0;
+    bool haveRunningPhase = false;
+
     const auto w = (int) points.size();
 
     for (int px = 0; px < w; ++px)
@@ -63,7 +76,8 @@ struct GridPoint
         auto kLo = juce::jlimit (1, nBins - 1, (int) std::ceil (lo / binWidth));
         auto kHi = juce::jlimit (1, nBins - 1, std::max (kLo, (int) std::floor (hi / binWidth)));
 
-        std::complex<double> sumH;
+        double sumPower = 0.0;       // Σ|H|²
+        double sumSin = 0.0, sumCos = 0.0; // アンラップ位相の円平均用
         double sumCoherence = 0.0;
         int count = 0;
 
@@ -72,17 +86,54 @@ struct GridPoint
             if (frame.refPowerDb[(size_t) k] < refPeakDb - floorDbBelowPeak)
                 continue;
 
-            sumH += std::complex<double> (frame.transfer[(size_t) k].real(),
-                                          frame.transfer[(size_t) k].imag());
+            const auto h = std::complex<double> (frame.transfer[(size_t) k].real(),
+                                                 frame.transfer[(size_t) k].imag());
+            const auto phaseDeg = std::arg (h) * 180.0 / juce::MathConstants<double>::pi;
+
+            // 前の bin からの位相を連続になるようアンラップする（帯域をまたいで継続）
+            auto unwrapped = phaseDeg;
+
+            if (haveRunningPhase)
+            {
+                while (unwrapped - runningPhaseDeg > 180.0)
+                    unwrapped -= 360.0;
+
+                while (unwrapped - runningPhaseDeg < -180.0)
+                    unwrapped += 360.0;
+            }
+
+            runningPhaseDeg = unwrapped;
+            haveRunningPhase = true;
+
+            sumPower += std::norm (h);
+            sumSin += std::sin (unwrapped * juce::MathConstants<double>::pi / 180.0);
+            sumCos += std::cos (unwrapped * juce::MathConstants<double>::pi / 180.0);
             sumCoherence += frame.coherence[(size_t) k];
             ++count;
         }
 
         auto& point = points[(size_t) px];
         point.freq = fc;
-        point.h = count > 0 ? sumH / (double) count : std::complex<double> {};
-        point.coherence = count > 0 ? (float) (sumCoherence / (double) count) : 0.0f;
         point.count = count;
+        point.coherence = count > 0 ? (float) (sumCoherence / (double) count) : 0.0f;
+
+        if (count > 0)
+        {
+            // 振幅: パワー平均（遅延に依存しない）
+            point.magnitudeDb = (float) (10.0 * std::log10 (std::max (sumPower / (double) count, 1.0e-30)));
+
+            // 位相: アンラップ位相の円平均（帯域内で位相が回っていても消滅しない）
+            point.phaseDeg = (float) (std::atan2 (sumSin, sumCos) * 180.0 / juce::MathConstants<double>::pi);
+
+            point.h = std::polar (std::pow (10.0, point.magnitudeDb / 20.0),
+                                  point.phaseDeg * juce::MathConstants<double>::pi / 180.0);
+        }
+        else
+        {
+            point.magnitudeDb = -300.0f;
+            point.phaseDeg = 0.0f;
+            point.h = {};
+        }
     }
 
     return points;

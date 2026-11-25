@@ -54,6 +54,9 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
             ctx.state.snapshotVersion.fetch_add (1);
             snapshotList.deselectAllRows();
             snapshotList.updateContent();
+
+            // 差分表示が消えたスナップショットを参照しないよう張り直す
+            computeDiffCurve();
             refreshSnapshotList();
         }
     };
@@ -73,15 +76,20 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
                                                             juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                             "*.csv");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chooser, selected] (const juce::FileChooser& fc)
+            [safeThis = juce::Component::SafePointer<TransferFunctionTab> (this), chooser, selected]
+            (const juce::FileChooser& fc)
             {
                 const auto file = fc.getResult();
 
-                if (file == juce::File())
+                if (file == juce::File() || safeThis == nullptr)
                     return;
 
-                const auto error = eeq::core::exporters::writeSnapshotCsv (
-                    ctx.project.snapshots()[(size_t) selected].frame, file);
+                auto& snapshots = safeThis->ctx.project.snapshots();
+
+                if (selected < 0 || selected >= (int) snapshots.size())
+                    return;
+
+                const auto error = eeq::core::exporters::writeSnapshotCsv (snapshots[(size_t) selected].frame, file);
 
                 if (error.isNotEmpty())
                     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
@@ -104,16 +112,21 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
                                                             juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                             "*.txt");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-            [this, chooser, selected] (const juce::FileChooser& fc)
+            [safeThis = juce::Component::SafePointer<TransferFunctionTab> (this), chooser, selected]
+            (const juce::FileChooser& fc)
             {
                 const auto file = fc.getResult();
 
-                if (file == juce::File())
+                if (file == juce::File() || safeThis == nullptr)
+                    return;
+
+                auto& snapshots = safeThis->ctx.project.snapshots();
+
+                if (selected < 0 || selected >= (int) snapshots.size())
                     return;
 
                 const auto error = eeq::core::exporters::writeSnapshotRewText (
-                    ctx.project.snapshots()[(size_t) selected].frame,
-                    ctx.project.snapshots()[(size_t) selected].name, file);
+                    snapshots[(size_t) selected].frame, snapshots[(size_t) selected].name, file);
 
                 if (error.isNotEmpty())
                     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
@@ -333,6 +346,7 @@ void TransferFunctionTab::showSaveSnapshotDialog()
     window->addButton (strings::snapshotSaveButton, 1);
     window->addButton (strings::snapshotCancelButton, 0);
 
+    // deleteWhenDismissed = true: 閉じたら必ず破棄する（放置すると幽霊ダイアログとリークになる）
     window->enterModalState (true, juce::ModalCallbackFunction::create (
         [this, safeWindow = juce::Component::SafePointer<juce::AlertWindow> (window)] (int result)
         {
@@ -369,7 +383,7 @@ void TransferFunctionTab::showSaveSnapshotDialog()
             ctx.state.snapshotVersion.fetch_add (1);
             snapshotList.selectRow ((int) snapshots.size() - 1);
             refreshSnapshotList();
-        }), false);
+        }), true);
 }
 
 void TransferFunctionTab::exportGraphPng()
@@ -378,14 +392,14 @@ void TransferFunctionTab::exportGraphPng()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.png");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<TransferFunctionTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
-            const auto image = graph.createComponentSnapshot (graph.getLocalBounds(), true, 2.0f);
+            const auto image = safeThis->graph.createComponentSnapshot (safeThis->graph.getLocalBounds(), true, 2.0f);
             juce::PNGImageFormat png;
             juce::FileOutputStream stream (file);
             png.writeImageToStream (image, stream);

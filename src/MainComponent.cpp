@@ -84,6 +84,10 @@ MainComponent::MainComponent()
             const auto error = project.loadFromFile (projectFile);
             eeq::log::write (error.isEmpty() ? "project restored: " + projectFile.getFullPathName()
                                              : "project restore FAILED: " + error);
+
+            // タブ類に一覧の張り直しを促す（スナップショット等の生ポインタも入れ替わる）
+            uiState.snapshotVersion.fetch_add (1);
+            uiState.eqVersion.fetch_add (1);
         }
     }
 
@@ -219,8 +223,8 @@ void MainComponent::timerCallback()
         lastSeenGeneration = engine.getDeviceGeneration();
         applyMeasurementSettings();
 
-        // RTA/SPL解析器もサンプルレートに合わせる（仕様 3.4）
-        engine.getSplAnalyzer().configure (engine.getCurrentSampleRate(), 3, 0.5);
+        // RTA/SPL解析器は RtaSplTab が保存済みのユーザー設定で張り直す
+        //（ここでハードコードするとユーザーの設定が上書きされるため触らない）
     }
 
     if (engine.consumeNoiseReachedIdle())

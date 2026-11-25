@@ -150,15 +150,17 @@ void FrequencyGraphView::mouseExit (const juce::MouseEvent&)
 void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
     const auto plot = plotArea();
+    const auto amp = amplitudeArea (plot);
 
     // dBラベル帯の上では dB 軸をズーム、それ以外は周波数軸（仕様 5.2）
-    if (event.position.x < (float) dBLabelStripWidth)
+    if (wheel.deltaY != 0.0f && event.position.x < (float) dBLabelStripWidth
+        && amp.getHeight() > 0.0f)
     {
         ampAuto = false;
-        const auto anchor = ampTop - (event.position.y - amplitudeArea (plot).getY()) / amplitudeArea (plot).getHeight() * ampSpan;
+        const auto anchor = ampTop - (event.position.y - amp.getY()) / amp.getHeight() * ampSpan;
         const auto factor = wheel.deltaY > 0 ? 0.85f : 1.18f;
         ampSpan = juce::jlimit (12.0f, 300.0f, ampSpan * factor);
-        ampTop = anchor + (event.position.y - amplitudeArea (plot).getY()) / amplitudeArea (plot).getHeight() * ampSpan;
+        ampTop = anchor + (event.position.y - amp.getY()) / amp.getHeight() * ampSpan;
     }
     else if (wheel.deltaY != 0.0f && plot.contains (event.position))
     {

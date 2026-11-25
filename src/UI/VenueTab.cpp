@@ -232,6 +232,19 @@ VenueTab::VenueTab (UiContext& context)
     loadSelectedVenueFields();
 }
 
+void VenueTab::timerTick()
+{
+    // プロジェクトの復元/読込などでスナップショットのバージョンが進んだら一覧を張り直す
+    const auto version = (int) ctx.state.snapshotVersion.load();
+
+    if (version != seenSnapshotVersion)
+    {
+        seenSnapshotVersion = version;
+        refreshVenueList();
+        loadSelectedVenueFields();
+    }
+}
+
 void VenueTab::refreshVenueList()
 {
     const auto query = searchEditor.getText();
@@ -297,16 +310,16 @@ void VenueTab::saveProject()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.eea");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<VenueTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
-            const auto error = ctx.project.saveToFile (file);
-            statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
-                                 juce::dontSendNotification);
+            const auto error = safeThis->ctx.project.saveToFile (file);
+            safeThis->statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
+                                           juce::dontSendNotification);
             eeq::log::write (error.isEmpty() ? "project saved: " + file.getFullPathName()
                                              : "project save FAILED: " + error);
         });
@@ -318,19 +331,19 @@ void VenueTab::loadProject()
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.eea");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, chooser] (const juce::FileChooser& fc)
+        [safeThis = juce::Component::SafePointer<VenueTab> (this), chooser] (const juce::FileChooser& fc)
         {
             const auto file = fc.getResult();
 
-            if (file == juce::File())
+            if (file == juce::File() || safeThis == nullptr)
                 return;
 
-            const auto error = ctx.project.loadFromFile (file);
-            statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
-                                 juce::dontSendNotification);
-            ctx.state.snapshotVersion.fetch_add (1);
-            refreshVenueList();
-            loadSelectedVenueFields();
+            const auto error = safeThis->ctx.project.loadFromFile (file);
+            safeThis->statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
+                                           juce::dontSendNotification);
+            safeThis->ctx.state.snapshotVersion.fetch_add (1);
+            safeThis->refreshVenueList();
+            safeThis->loadSelectedVenueFields();
         });
 }
 
