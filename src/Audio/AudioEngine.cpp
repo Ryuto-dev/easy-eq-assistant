@@ -328,22 +328,32 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     {
         float gain = 0.0f;
 
-        if (state != NoiseState::idle)
+        // 状態ごとに明示的に処理する（running は定常出力。フェード処理と混同しない）
+        if (state == NoiseState::fadeIn)
         {
-            const auto isFadeIn = state == NoiseState::fadeIn;
-            const auto length = juce::jmax (1, isFadeIn ? fadeInLength.load (std::memory_order_relaxed)
-                                                        : fadeOutLength.load (std::memory_order_relaxed));
-            const auto t = (float) position / (float) length;
-
-            gain = level * (isFadeIn ? t : 1.0f - t);
+            const auto length = juce::jmax (1, fadeInLength.load (std::memory_order_relaxed));
+            gain = level * ((float) position / (float) length);
 
             if (++position >= length)
             {
                 position = 0;
-                state = isFadeIn ? NoiseState::running : NoiseState::idle;
+                state = NoiseState::running;
+            }
+        }
+        else if (state == NoiseState::running)
+        {
+            gain = level;
+        }
+        else if (state == NoiseState::fadeOut)
+        {
+            const auto length = juce::jmax (1, fadeOutLength.load (std::memory_order_relaxed));
+            gain = level * (1.0f - (float) position / (float) length);
 
-                if (! isFadeIn)
-                    noiseReachedIdle.store (true, std::memory_order_relaxed);
+            if (++position >= length)
+            {
+                position = 0;
+                state = NoiseState::idle;
+                noiseReachedIdle.store (true, std::memory_order_relaxed);
             }
         }
 
