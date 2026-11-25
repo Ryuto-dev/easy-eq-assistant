@@ -82,6 +82,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/RtaSplTab.h
     src/UI/EQTab.cpp
     src/UI/EQTab.h
+    src/UI/LimitTestTab.cpp
     src/UI/LimitTestTab.h
     src/UI/UtilitiesTab.cpp
     src/UI/UtilitiesTab.h
