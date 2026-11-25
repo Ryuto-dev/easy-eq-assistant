@@ -7,22 +7,54 @@
 namespace eeq::ui
 {
 
-// ツールタブ（仕様 5.6）: 8つの計算ツール
-class UtilitiesTab : public juce::Component
+// 「ツール」タブ（仕様 5.6 の計算ユーティリティ8種）。
+// 距離⇄遅延 / 音速 / 周波数⇄波長 / コムフィルタ / 距離減衰 / レベル換算 / テンポ⇄時間 / Q⇄帯域幅
+class UtilitiesTab : public juce::Component,
+                     private juce::TextEditor::Listener
 {
 public:
-    explicit UtilitiesTab (UiContext& contextIn) : ctx (contextIn) {}
+    explicit UtilitiesTab (UiContext& context);
 
-    /** 30Hzタイマーから呼ぶ（必要なタブだけ上書きする） */
-    virtual void timerTick() {}
+    void paint (juce::Graphics&) override;
+    void resized() override;
 
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (theme::get (theme::ColourId::panelBackground));
-    }
+private:
+    void textEditorTextChanged (juce::TextEditor&) override;
+    void updateCalculations();
 
-protected:
     UiContext& ctx;
+
+    // 距離⇄遅延
+    juce::Label distanceDelayTitle, distanceLabel, delayLabel2, distanceResultLabel, delayResultLabel;
+    juce::TextEditor distanceEditor, delayEditor;
+
+    // 音速
+    juce::Label temperatureTitle, temperatureEditorLabel, soundSpeedLabel, temperatureNoteLabel;
+    juce::TextEditor temperatureEditor;
+
+    // 周波数⇄波長
+    juce::Label wavelengthTitle, wavelengthFreqLabel, wavelengthResultLabel;
+    juce::TextEditor wavelengthFreqEditor;
+
+    // コムフィルタ
+    juce::Label combTitle, combDelayLabel, combResultLabel;
+    juce::TextEditor combDelayEditor;
+
+    // 距離減衰
+    juce::Label attenuationTitle, attenFromLabel, attenToLabel, attenResultLabel;
+    juce::TextEditor attenFromEditor, attenToEditor;
+
+    // レベル換算
+    juce::Label levelTitle, voltsLabel, levelResultLabel;
+    juce::TextEditor voltsEditor;
+
+    // テンポ⇄時間
+    juce::Label tempoTitle, bpmLabel, tempoResultLabel;
+    juce::TextEditor bpmEditor;
+
+    // Q⇄帯域幅
+    juce::Label qbwTitle, qLabel, qResultLabel, bwLabel, bwResultLabel;
+    juce::TextEditor qEditor, bwEditor;
 };
 
 } // namespace eeq::ui

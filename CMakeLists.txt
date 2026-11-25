@@ -83,7 +83,9 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/EQTab.cpp
     src/UI/EQTab.h
     src/UI/LimitTestTab.h
+    src/UI/UtilitiesTab.cpp
     src/UI/UtilitiesTab.h
+    src/UI/VenueTab.cpp
     src/UI/VenueTab.h
     src/UI/LiveModeOverlay.cpp
     src/UI/LiveModeOverlay.h
