@@ -38,6 +38,7 @@ MainComponent::MainComponent()
         applyThemeToComponents();
     };
 
+    measurementPanel.setSettings (appPropertiesStorage.properties.getUserSettings());
     measurementPanel.onSettingsChanged = [this] { applyMeasurementSettings(); };
 
     bottomBar.onSnapshotRequested = [this] { transferTab.showSaveSnapshotDialog(); };
@@ -123,9 +124,18 @@ MainComponent::MainComponent()
         wizardShown = true;
         appPropertiesStorage.properties.getUserSettings()->setValue ("wizardShown", true);
         appPropertiesStorage.properties.getUserSettings()->saveIfNeeded();
-        // ウィザードの内容は校正・ゲインアシストの実装と合わせて RTA・SPLタブから案内する
-        //（初回起動時は RTA・SPLタブを開いて案内文を出す）
-        tabs.setCurrentTabIndex (2);
+
+        const auto guide = juce::String (strings::wizardTitle) + "\n\n"
+                         + strings::wizardStep1 + "\n"
+                         + strings::wizardStep2 + "\n"
+                         + strings::wizardStep3 + "\n"
+                         + strings::wizardStep4 + "\n\n"
+                         + strings::shortcutHint + " / " + strings::emergencyStopHint + "\n"
+                         + juce::String (u8"※ 各ステップは「IR・遅延」タブ（ループバック校正）と「RTA・SPL」タブ")
+                         + juce::String (u8"（校正・ゲイン調整）から実行できます。Esc でいつでも出力を止められます。");
+
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            strings::wizardTitle, guide, strings::wizardClose, this, nullptr);
     }
 
     startTimerHz (30);

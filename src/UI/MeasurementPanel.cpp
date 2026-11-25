@@ -88,6 +88,40 @@ MeasurementPanel::MeasurementPanel()
     addAndMakeVisible (averagesDisplay);
 }
 
+void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
+{
+    settings = settingsToUse;
+
+    if (settings == nullptr)
+        return;
+
+    // 前回の測定設定を復元する
+    const juce::ScopedValueSetter<bool> guard (loadingSettings, true);
+
+    fftCombo.setSelectedId (juce::jlimit (1, 4, settings->getIntValue ("measurementFftId", 3)),
+                            juce::dontSendNotification);
+    windowCombo.setSelectedId (juce::jlimit (1, 3, settings->getIntValue ("measurementWindowId", 1)),
+                               juce::dontSendNotification);
+    avgModeCombo.setSelectedId (juce::jlimit (1, 2, settings->getIntValue ("measurementAvgModeId", 1)),
+                                juce::dontSendNotification);
+    smoothingCombo.setSelectedId (juce::jlimit (1, 6, settings->getIntValue ("measurementSmoothingId", 5)),
+                                  juce::dontSendNotification);
+    avgCountSlider.setValue (settings->getDoubleValue ("measurementAvgCount", 64.0), juce::dontSendNotification);
+}
+
+void MeasurementPanel::saveSettings()
+{
+    if (settings == nullptr || loadingSettings)
+        return;
+
+    settings->setValue ("measurementFftId", fftCombo.getSelectedId());
+    settings->setValue ("measurementWindowId", windowCombo.getSelectedId());
+    settings->setValue ("measurementAvgModeId", avgModeCombo.getSelectedId());
+    settings->setValue ("measurementSmoothingId", smoothingCombo.getSelectedId());
+    settings->setValue ("measurementAvgCount", avgCountSlider.getValue());
+    settings->saveIfNeeded();
+}
+
 int MeasurementPanel::getFftSize() const noexcept
 {
     const auto id = fftCombo.getSelectedId();
@@ -127,12 +161,16 @@ void MeasurementPanel::setAverageCountDisplay (int averages)
 
 void MeasurementPanel::comboBoxChanged (juce::ComboBox*)
 {
+    saveSettings();
+
     if (onSettingsChanged)
         onSettingsChanged();
 }
 
 void MeasurementPanel::sliderValueChanged (juce::Slider*)
 {
+    saveSettings();
+
     if (onSettingsChanged)
         onSettingsChanged();
 }

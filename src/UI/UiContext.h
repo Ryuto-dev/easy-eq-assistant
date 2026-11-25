@@ -22,6 +22,7 @@ struct UiState
     std::atomic<bool> showRawPhase { false };        // 補正前の生位相に切り替え（仕様 3.1）
     std::atomic<double> manualDelayMs { 0.0 };       // 手動入力の遅延（ms。仕様 3.3.2）
     std::atomic<double> airTemperatureC { 20.0 };    // 気温（既定 20 ℃。仕様 3.3.2）
+    std::atomic<bool> loopbackEnabled { true };      // システム補正のON/OFF（仕様 6.1）
     std::atomic<uint32_t> snapshotVersion { 0 };     // スナップショット一覧の更新カウンタ
     std::atomic<uint32_t> eqVersion { 0 };           // ターゲット/予測カーブの更新カウンタ
 

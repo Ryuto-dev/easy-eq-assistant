@@ -132,6 +132,15 @@ if(APPLE)
     target_link_libraries(EasyEQAssistant PRIVATE "-framework AVFoundation")
 endif()
 
+# ---- ASIO（Windows・任意）----
+# 規約により ASIO SDK はリポジトリにコミットできない。libs/asio_sdk/ に展開して
+# ビルドすると ASIO 対応が有効になる（ない場合は WASAPI で動く。仕様 6.1）
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/asio_sdk/common/asio.cpp")
+    message(STATUS "ASIO SDK found: enabling ASIO support")
+    target_include_directories(EasyEQAssistant PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libs/asio_sdk")
+    target_compile_definitions(EasyEQAssistant PRIVATE JUCE_ASIO=1)
+endif()
+
 # ---- テスト ----
 
 option(EASYEQ_BUILD_TESTS "Build unit tests" ON)

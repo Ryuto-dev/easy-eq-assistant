@@ -173,6 +173,10 @@ DelayIrTab::DelayIrTab (UiContext& context)
 
     loopbackEnableToggle.setButtonText (strings::loopbackEnableToggle);
     loopbackEnableToggle.setToggleState (true, juce::dontSendNotification);
+    loopbackEnableToggle.onClick = [this]
+    {
+        ctx.state.loopbackEnabled.store (loopbackEnableToggle.getToggleState());
+    };
     styleToggle (loopbackEnableToggle);
     addAndMakeVisible (loopbackEnableToggle);
 
@@ -288,6 +292,35 @@ void DelayIrTab::timerTick()
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
     rebuildIrIfDirty();
+
+    // ---- 温度変化による遅延のずれ予測（仕様 3.8）----
+    // 遅延を適用したときの気温を基準に、現在の気温でのずれを計算する
+    if (ctx.state.appliedDelaySamples.load() != 0.0 && ctx.engine.getCurrentSampleRate() > 0.0)
+    {
+        const auto appliedMs = eeq::acoustics::delayMsForSamples (ctx.state.appliedDelaySamples.load(),
+                                                                  ctx.engine.getCurrentSampleRate());
+        const auto tempNow = ctx.state.airTemperatureC.load();
+
+        if (tempAtDelayApply < 900.0)
+        {
+            // 同じ距離を新しい気温で伝わる時間を計算し、ずれを出す
+            const auto distance = eeq::acoustics::distanceMetresForDelay (appliedMs, tempAtDelayApply);
+            const auto delayNow = eeq::acoustics::delayMillisecondsForDistance (distance, tempNow);
+            const auto drift = delayNow - appliedMs;
+
+            if (std::abs (drift) > 0.5) // しきい値は既定 0.5 ms（仕様 3.8）
+            {
+                delayProposalLabel.setText (juce::String (strings::temperatureDriftWarning)
+                                                + juce::String (drift, 2) + strings::temperatureDriftSuffix,
+                                            juce::dontSendNotification);
+                delayProposalLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+            }
+            else if (delayProposalLabel.getText().contains (strings::temperatureDriftWarning))
+            {
+                delayProposalLabel.setText ({}, juce::dontSendNotification);
+            }
+        }
+    }
 
     // スナップショット一覧の変化を比較コンボへ反映
     const auto version = (int) ctx.state.snapshotVersion.load();
@@ -518,12 +551,27 @@ void DelayIrTab::applyDelay()
         return;
 
     ctx.state.appliedDelaySamples.store (lastEstimate.delaySamples);
+    tempAtDelayApply = ctx.state.airTemperatureC.load(); // 温度ずれ予測の基準（仕様 3.8）
     eeq::log::write (juce::String ("delay: applied ") + juce::String (lastEstimate.delaySamples, 2) + " samples");
 
     // 手動入力欄に値を反映する（ms）
     const auto ms = eeq::acoustics::delayMsForSamples (lastEstimate.delaySamples,
                                                        ctx.engine.getCurrentSampleRate());
     manualDelayEditor.setText (juce::String (ms, 2), juce::dontSendNotification);
+
+    // 内部参照のときは、システム補正で測った往復遅延を差し引いた
+    // 「音が空間を伝わった時間」も表示する（仕様 3.3.2）
+    if (ctx.correction.isActive())
+    {
+        const auto roundtripMs = eeq::acoustics::delayMsForSamples (ctx.correction.getRoundtripDelaySamples(),
+                                                                    ctx.engine.getCurrentSampleRate());
+        delayProposalLabel.setText (juce::String (strings::systemDelayLabel) + ": "
+                                        + juce::String (roundtripMs, 2) + " ms / "
+                                        + strings::spatialDelayLabel + ": "
+                                        + juce::String (std::max (0.0, ms - roundtripMs), 2) + " ms",
+                                    juce::dontSendNotification);
+        delayProposalLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    }
 }
 
 void DelayIrTab::clearDelay()

@@ -58,6 +58,7 @@ private:
     eeq::dsp::DelayEstimate lastEstimate;
     bool hasEstimate = false;
     bool usePhat = false;
+    double tempAtDelayApply = 999.0; // 遅延適用時の気温（温度ずれ予測の基準。仕様 3.8）
     juce::String delayUnit = strings::delayMsUnit; // ms / samples / m / ft（仕様 3.3.1）
 
     // IRのキャッシュ

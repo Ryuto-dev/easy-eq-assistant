@@ -14,6 +14,9 @@ class MeasurementPanel : public juce::Component, private juce::ComboBox::Listene
 public:
     MeasurementPanel();
 
+    /** 設定の保存先（起動時に復元し、変更時に保存する） */
+    void setSettings (juce::PropertiesFile* settingsToUse);
+
     /** いずれかの設定が変わったときに呼ばれる */
     std::function<void()> onSettingsChanged;
 
@@ -30,7 +33,10 @@ public:
 private:
     void comboBoxChanged (juce::ComboBox*) override;
     void sliderValueChanged (juce::Slider*) override;
+    void saveSettings();
 
+    juce::PropertiesFile* settings = nullptr;
+    bool loadingSettings = false;
     juce::Label titleLabel;
     juce::Label fftLabel, windowLabel, avgModeLabel, avgCountLabel, smoothingLabel;
     juce::ComboBox fftCombo, windowCombo, avgModeCombo, smoothingCombo;

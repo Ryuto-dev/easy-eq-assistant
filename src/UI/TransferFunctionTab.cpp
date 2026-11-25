@@ -150,6 +150,14 @@ void TransferFunctionTab::timerTick()
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
+    // システム補正（ループバック校正。仕様 6.1）: 有効ならインターフェース自身の応答を差し引く
+    if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))
+    {
+        eeq::dsp::SpectrumFrame corrected;
+        ctx.correction.apply (frame, corrected, true);
+        frame = corrected;
+    }
+
     const auto smoothing = ctx.state.smoothingDenom;
     graph.setLiveFrame (frame, smoothing, ctx.state.appliedDelaySamples.load(),
                         ctx.state.showRawPhase.load());

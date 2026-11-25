@@ -704,18 +704,56 @@ void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 
 void AudioEngine::openInitialDevice()
 {
-    // デバイスタイプ（Mac: CoreAudio。Windows の ASIO/WASAPI はフェーズ6で追加）
     juce::OwnedArray<juce::AudioIODeviceType> types;
     deviceManager.createAudioDeviceTypes (types);
 
     if (types.isEmpty())
         return;
 
-    deviceManager.setCurrentAudioDeviceType (types[0]->getTypeName(), true);
+    // デバイスタイプの優先順位（仕様 6.1）:
+    //   Windows は ASIO を優先し、なければ WASAPI へフォールバック。Mac は CoreAudio
+    juce::AudioIODeviceType* chosen = types[0];
+
+    for (auto* type : types)
+    {
+        type->scanForDevices();
+
+       #if JUCE_WINDOWS
+        if (type->getTypeName().containsIgnoreCase ("ASIO") && type->getDeviceNames (false).size() > 0)
+        {
+            chosen = type;
+            break;
+        }
+       #endif
+
+       #if JUCE_MAC
+        if (type->getTypeName().containsIgnoreCase ("CoreAudio")
+            && type->getDeviceNames (true).size() + type->getDeviceNames (false).size() > 0)
+            chosen = type;
+       #else
+        if (type->getTypeName().containsIgnoreCase ("Windows Audio")
+            && type->getDeviceNames (true).size() + type->getDeviceNames (false).size() > 0)
+            chosen = type;
+       #endif
+    }
+
+   #if JUCE_WINDOWS
+    // ASIO が使えるなら最優先に切り替える（上のループで見つかっていなければここで探す）
+    for (auto* type : types)
+    {
+        if (type->getTypeName().containsIgnoreCase ("ASIO") && type->getDeviceNames (false).size() > 0)
+        {
+            chosen = type;
+            break;
+        }
+    }
+   #endif
+
+    deviceManager.setCurrentAudioDeviceType (chosen->getTypeName(), true);
 
     // 起動直後はまだ deviceManager がデバイス型を持っていない（initialise 内のスキャンで
-    // 作られる）ため、ローカルの types[0] を使って列挙する
-    auto* typeForEnumeration = types[0];
+    // 作られる）ため、ローカルの types で列挙する
+    auto* typeForEnumeration = chosen;
     typeForEnumeration->scanForDevices(); // 遅延スキャンを明示的に起こす
 
     eeq::log::write ("device type: " + typeForEnumeration->getTypeName()

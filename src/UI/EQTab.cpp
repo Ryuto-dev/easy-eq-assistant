@@ -290,6 +290,14 @@ void EQTab::runProposal()
     if (frame.averages == 0)
         return;
 
+    // システム補正が有効なら補正後のカーブに対してEQ案を作る（仕様 6.1）
+    if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))
+    {
+        eeq::dsp::SpectrumFrame corrected;
+        ctx.correction.apply (frame, corrected, true);
+        frame = corrected;
+    }
+
     const auto fMin = std::max (20.0, minFreqEditor.getText().getDoubleValue());
     const auto fMax = std::min (frame.sampleRate * 0.45, maxFreqEditor.getText().getDoubleValue());
 
