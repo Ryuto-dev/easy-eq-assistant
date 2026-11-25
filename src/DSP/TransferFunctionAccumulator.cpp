@@ -16,7 +16,19 @@ void TransferFunctionAccumulator::configure (int fftSizePoints, double newSample
 {
     const juce::ScopedLock sl (lock);
 
-    const auto points = juce::jlimit (256, 1 << 20, fftSizePoints);
+    auto points = juce::jlimit (256, 1 << 20, fftSizePoints);
+
+    // FFTは2の冪のみ対応。冪でない値は直近の冪へ落とす（防御: UIは冪しか渡さない）
+    {
+        int pow2 = 256;
+
+        while (pow2 * 2 <= points && pow2 < (1 << 20))
+            pow2 *= 2;
+
+        if (pow2 != points)
+            points = pow2;
+    }
+
     const bool structural = points != fftSize || std::abs (newSampleRate - sampleRate) > 0.5
                             || averaging.mode != config.mode || windowMethod != currentWindowMethod;
 

@@ -52,6 +52,18 @@ target_sources(EasyEQAssistant PRIVATE
     src/DSP/TransferFunctionAccumulator.h
     src/DSP/MeasurementEngine.cpp
     src/DSP/MeasurementEngine.h
+    src/DSP/DelayEstimator.cpp
+    src/DSP/DelayEstimator.h
+    src/DSP/ImpulseResponseBuilder.cpp
+    src/DSP/ImpulseResponseBuilder.h
+    src/DSP/EQProposer.cpp
+    src/DSP/EQProposer.h
+    src/DSP/RtaSplAnalyzer.cpp
+    src/DSP/RtaSplAnalyzer.h
+    src/DSP/OctaveSmoother.h
+    src/DSP/PEQ.h
+    src/DSP/SweepGenerator.h
+    src/DSP/Waterfall.h
     src/UI/LevelMeter.cpp
     src/UI/LevelMeter.h
     src/UI/TopBar.cpp
@@ -64,8 +76,10 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/MeasurementPanel.h
     src/UI/Strings.h
     src/Core/Acoustics.h
+    src/Core/Utilities.h
     src/Core/Log.cpp
     src/Core/Log.h
+    src/Core/SystemCorrection.h
     src/Core/MicPermission.h
 )
 
@@ -113,7 +127,17 @@ if(EASYEQ_BUILD_TESTS)
     add_executable(EasyEQTests
         tests/AcousticsTests.cpp
         tests/TransferFunctionTests.cpp
+        tests/DelayEstimatorTests.cpp
+        tests/ImpulseResponseTests.cpp
+        tests/PEQTests.cpp
+        tests/EQProposerTests.cpp
+        tests/RtaSplTests.cpp
+        tests/UtilitiesTests.cpp
         src/DSP/TransferFunctionAccumulator.cpp
+        src/DSP/DelayEstimator.cpp
+        src/DSP/ImpulseResponseBuilder.cpp
+        src/DSP/EQProposer.cpp
+        src/DSP/RtaSplAnalyzer.cpp
     )
     target_include_directories(EasyEQTests PRIVATE src)
     target_link_libraries(EasyEQTests PRIVATE
