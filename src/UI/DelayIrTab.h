@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <JuceHeader.h>
 
@@ -88,6 +88,7 @@ private:
 
     // ---- IR表示 ----
     juce::Label irTitle;
+    juce::TextButton irExportButton; // IR を WAV (32bit float) で書き出す（仕様 6.2）
 
     // ---- ループバック校正 ----
     juce::Label loopbackTitle, loopbackStatusLabel;

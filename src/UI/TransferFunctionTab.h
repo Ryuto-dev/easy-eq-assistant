@@ -46,7 +46,7 @@ private:
     UiContext& ctx;
     FrequencyGraphView graph;
     juce::ListBox snapshotList { {}, this };
-    juce::TextButton saveButton, deleteButton, exportCsvButton, exportRewButton;
+    juce::TextButton saveButton, deleteButton, exportCsvButton, exportRewButton, exportPngButton;
     juce::ComboBox diffComboA, diffComboB;
     juce::Label diffLabel, hintLabel;
     bool dialogOpen = false;

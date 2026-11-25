@@ -140,6 +140,12 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     diffLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (diffLabel);
 
+    // グラフをPNGで保存（仕様 6.2）
+    styleButton (exportPngButton);
+    exportPngButton.setButtonText (strings::exportGraphPng);
+    exportPngButton.onClick = [this] { exportGraphPng(); };
+    addAndMakeVisible (exportPngButton);
+
     for (auto* combo : { &diffComboA, &diffComboB })
     {
         styleCombo (*combo);
@@ -480,6 +486,8 @@ void TransferFunctionTab::resized()
     diffComboA.setBounds (diffRow.removeFromLeft (160));
     diffRow.removeFromLeft (6);
     diffComboB.setBounds (diffRow.removeFromLeft (160));
+    diffRow.removeFromLeft (6);
+    exportPngButton.setBounds (diffRow.removeFromLeft (120));
     snapshotPanel.removeFromTop (4);
 
     snapshotList.setBounds (snapshotPanel);

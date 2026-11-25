@@ -17,7 +17,7 @@ public:
         bandsPerOctave = juce::jlimit (6, 24, bandsPerOctave);
         lengthSeconds = juce::jlimit (10.0, 600.0, lengthSeconds);
         this->minDb = minDb;
-        this->maxDb = std::max (minDb + 10.0, maxDb);
+        this->maxDb = juce::jmax (minDb + 10.0, maxDb);
 
         if (bandsPerOctave != this->bandsPerOctave)
         {
@@ -26,6 +26,13 @@ public:
         }
 
         maxColumns = (int) juce::jlimit (60.0, 2000.0, lengthSeconds * 10.0); // 0.1秒間隔の上限
+    }
+
+    /** 表示する dB レンジ（色の対応。現在のレベルに合わせて随時更新できる） */
+    void setDbRange (double newMinDb, double newMaxDb)
+    {
+        minDb = newMinDb;
+        maxDb = juce::jmax (minDb + 10.0, newMaxDb);
     }
 
     /** RTAのバンドレベル（dB）を1列ぶん追加する。columnSeconds は列間の時間間隔 */

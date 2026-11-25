@@ -1,6 +1,7 @@
 #include "DelayIrTab.h"
 
 #include "../Core/Acoustics.h"
+#include "../Core/Exporters.h"
 #include "../Core/Log.h"
 #include "../Core/Utilities.h"
 #include "Buttons.h"
@@ -141,6 +142,38 @@ DelayIrTab::DelayIrTab (UiContext& context)
     irTitle.setText (strings::irLabel, juce::dontSendNotification);
     styleLabel (irTitle, 13.0f, false);
     addAndMakeVisible (irTitle);
+
+    styleButton (irExportButton);
+    irExportButton.setButtonText (strings::exportIrWav);
+    irExportButton.onClick = [this]
+    {
+        // 最新の測定から IR を作って書き出す（仕様 6.2: 32bit float WAV）
+        eeq::dsp::SpectrumFrame frame;
+        ctx.engine.getMeasurement().copyLatestResult (frame);
+
+        if (frame.averages == 0)
+            return;
+
+        auto chooser = std::make_shared<juce::FileChooser> ("impulse_response.wav",
+                                                            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                            "*.wav");
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+            [chooser, frame] (const juce::FileChooser& fc)
+            {
+                const auto file = fc.getResult();
+
+                if (file == juce::File())
+                    return;
+
+                const auto error = eeq::core::exporters::writeImpulseResponseWav (
+                    eeq::dsp::buildImpulseResponse (frame), file);
+
+                if (error.isNotEmpty())
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                        strings::snapshotExportTitle, error, strings::okButton, nullptr, nullptr);
+            });
+    };
+    addAndMakeVisible (irExportButton);
 
     peakAlignToggle.setButtonText (strings::irPeakAlignToggle);
     peakAlignToggle.setToggleState (true, juce::dontSendNotification);
@@ -848,6 +881,7 @@ void DelayIrTab::resized()
     irGraphHeight = juce::jlimit (120, 240, left.getHeight() / 3);
     auto irArea = left.removeFromTop (irGraphHeight);
     irTitle.setBounds (irArea.removeFromTop (18));
+    irExportButton.setBounds (irArea.removeFromTop (26).removeFromRight (170));
 
     auto toggles = irArea.removeFromBottom (20);
     etcToggle.setBounds (toggles.removeFromLeft (160));
