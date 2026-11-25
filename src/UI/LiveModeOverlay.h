@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include "../Audio/AudioEngine.h"
 #include "../Core/KeepAwake.h"
@@ -62,7 +62,7 @@ private:
                 return;
             }
 
-            if (juce::Time::getMillisecondCounter() - pressStart >= (uint32) pressMs)
+            if (juce::Time::getMillisecondCounter() - pressStart >= (juce::uint32) pressMs)
             {
                 stopTimer();
 
@@ -72,7 +72,7 @@ private:
         }
 
     private:
-        uint32 pressStart = 0;
+        juce::uint32 pressStart = 0;
     };
 
     void paintHistory (juce::Graphics& g, const juce::Rectangle<float>& area, juce::Colour frameColour);

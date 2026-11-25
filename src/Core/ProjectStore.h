@@ -2,7 +2,7 @@
 
 #include "../DSP/TransferFunctionAccumulator.h"
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include <vector>
 

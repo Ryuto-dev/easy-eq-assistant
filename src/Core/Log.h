@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 // エラーとデバイス情報をローカルのログファイルに保存する（仕様 6.3）。
 // macOS: ~/Library/Application Support/EasyEQAssistant/eeq.log

@@ -2,7 +2,7 @@
 
 #include "Theme.h"
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 // ダーク/ライト両テーマで使う共通のウィジェットスタイル（仕様 5.5）
 

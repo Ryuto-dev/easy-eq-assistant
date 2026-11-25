@@ -4,7 +4,7 @@
 #include "../DSP/PEQ.h"
 #include "../DSP/TransferFunctionAccumulator.h"
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 namespace eeq::core::exporters
 {

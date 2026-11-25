@@ -266,8 +266,10 @@ void AudioEngine::setSweep (std::vector<float> sweepSamples)
     eeq::log::write ("excitation: sweep set (" + juce::String (sweepSamples.size()) + " samples, "
                      + juce::String (logLength, 2) + " s)");
 
-    pendingBuffer.store (std::make_shared<const std::vector<float>> (std::move (sweepSamples)),
-                         std::memory_order_relaxed);
+    {
+        const juce::ScopedLock lock (bufferMutex);
+        pendingBuffer = std::make_shared<const std::vector<float>> (std::move (sweepSamples));
+    }
     excitationSource.store (ExcitationSource::sweep, std::memory_order_relaxed);
 }
 
@@ -313,8 +315,10 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
     eeq::log::write ("excitation: WAV loaded \"" + file.getFullPathName() + "\" ("
                      + juce::String ((double) length / std::max (1.0, (double) reader->sampleRate), 2) + " s)");
 
-    pendingBuffer.store (std::make_shared<const std::vector<float>> (std::move (mono)),
-                         std::memory_order_relaxed);
+    {
+        const juce::ScopedLock lock (bufferMutex);
+        pendingBuffer = std::make_shared<const std::vector<float>> (std::move (mono));
+    }
     excitationSource.store (ExcitationSource::wavFile, std::memory_order_relaxed);
 
     return true;
@@ -325,8 +329,16 @@ double AudioEngine::getExcitationProgress() const noexcept
     if (const auto source = excitationSource.load (std::memory_order_relaxed);
         source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
     {
-        if (const auto buffer = activeBuffer.load (std::memory_order_relaxed);
-            buffer != nullptr && ! buffer->empty())
+        std::shared_ptr<const std::vector<float>> buffer;
+
+        {
+            // getExcitationProgress は const なので、ミューテックスの一時外しは行わない
+            const auto* self = const_cast<AudioEngine*> (this);
+            const juce::ScopedLock lock (self->bufferMutex);
+            buffer = activeBuffer;
+        }
+
+        if (buffer != nullptr && ! buffer->empty())
             return juce::jlimit (0.0, 1.0, (double) playbackPosition.load (std::memory_order_relaxed)
                                             / (double) buffer->size());
     }
@@ -452,7 +464,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 // スイープ/WAVは開始時にUIスレッドが用意したバッファへ取り替える
                 //（ソースを切り替えた直後の開始でも確実に新しいバッファを使う）
                 if (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
-                    activeBuffer.store (pendingBuffer.load (std::memory_order_relaxed), std::memory_order_relaxed);
+                {
+                    const juce::ScopedLock lock (bufferMutex);
+                    activeBuffer = pendingBuffer;
+                }
             }
             break;
 
@@ -469,10 +484,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     }
 
     // オーディオスレッドで使う値はブロックの先頭で一度だけ読む（リアルタイム性。
-    // shared_ptr のアトミック読み込みはスピンロックを伴うので per-sample では行わない）
-    const auto activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
-                                 ? activeBuffer.load (std::memory_order_relaxed)
-                                 : nullptr;
+    // バッファの取り込みはここだけで、per-sample のロックは行わない）
+    std::shared_ptr<const std::vector<float>> activeSweep;
+
+    if (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
+    {
+        const juce::ScopedLock lock (bufferMutex);
+        activeSweep = activeBuffer;
+    }
     const auto ceilingGain = juce::Decibels::decibelsToGain (outputCeilingDb.load (std::memory_order_relaxed));
 
     const float* refIn = (refIndex >= 0 && refIndex < numInputChannels) ? inputChannelData[refIndex] : nullptr;

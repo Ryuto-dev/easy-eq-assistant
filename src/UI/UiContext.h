@@ -7,7 +7,7 @@
 #include "../DSP/PEQ.h"
 #include "Theme.h"
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include <atomic>
 #include <vector>

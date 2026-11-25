@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include "Audio/AudioEngine.h"
 #include "Core/Log.h"

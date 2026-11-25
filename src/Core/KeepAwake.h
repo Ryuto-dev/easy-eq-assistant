@@ -2,14 +2,18 @@
 
 // 本番モード中の画面スリープ防止（仕様 5.4）。
 // スコープを抜けると自動で解除される RAII。
+//
+// 注意: Apple のヘッダ（IOKit等）は JuceHeader より必ず先に include すること。
+// 生成された JuceHeader.h は using namespace juce を含むため、後から MacTypes.h を
+// 読み込むと Point の名前が juce::Point と衝突してコンパイルエラーになる。
 
-#include <JuceHeader.h>
-
-#if JUCE_WINDOWS
+#if defined(_WIN32)
  #include <windows.h>
-#elif JUCE_MAC
+#elif defined(__APPLE__)
  #include <IOKit/pwr_mgt/IOPMLib.h>
 #endif
+
+#include "Core/JuceModules.h"
 
 namespace eeq::core
 {

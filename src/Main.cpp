@@ -1,4 +1,4 @@
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include "MainComponent.h"
 
@@ -7,8 +7,8 @@ class EasyEQAssistantApplication : public juce::JUCEApplication
 public:
     EasyEQAssistantApplication() = default;
 
-    const juce::String getApplicationName() override    { return ProjectInfo::projectName; }
-    const juce::String getApplicationVersion() override { return ProjectInfo::versionString; }
+    const juce::String getApplicationName() override    { return eeq::strings::appName; }
+    const juce::String getApplicationVersion() override { return "0.1.0"; }
     bool moreThanOneInstanceAllowed() override          { return true; }
 
     void initialise (const juce::String&) override

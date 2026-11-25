@@ -3,7 +3,7 @@
 #include <atomic>
 #include <memory>
 
-#include <JuceHeader.h>
+#include "Core/JuceModules.h"
 
 #include "../DSP/MeasurementEngine.h"
 #include "../DSP/RtaSplAnalyzer.h"
@@ -204,9 +204,12 @@ private:
     std::atomic<ExcitationSource> excitationSource { ExcitationSource::pinkNoise };
     std::atomic<float> outputCeilingDb { 0.0f };
 
-    // スイープ/WAVのバッファ。shared_ptr のアトミック入れ替えでオーディオスレッドと共有する
-    std::atomic<std::shared_ptr<const std::vector<float>>> pendingBuffer;
-    std::atomic<std::shared_ptr<const std::vector<float>>> activeBuffer;
+    // スイープ/WAVのバッファ。UIスレッドが pending を差し替え、オーディオスレッドが
+    // ブロック先頭で active へ取り込む。（std::atomic<std::shared_ptr> はこの環境の
+    // libc++ では使えないため CriticalSection で守る。アクセスはブロックあたり数回）
+    juce::CriticalSection bufferMutex;
+    std::shared_ptr<const std::vector<float>> pendingBuffer;
+    std::shared_ptr<const std::vector<float>> activeBuffer; // 取り込み後はオーディオスレッドだけが読む
     std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
     std::atomic<bool> excitationFinished { false };
     std::atomic<uint64_t> outputMask { 1 };

@@ -43,7 +43,7 @@ juce::var colourToVar (juce::Colour colour)
 
 juce::Colour colourFromVar (const juce::var& v, juce::Colour fallback)
 {
-    return v.isVoid() ? fallback : juce::Colour ((uint32) (juce::int64) v);
+    return v.isVoid() ? fallback : juce::Colour ((juce::uint32) (juce::int64) v);
 }
 
 juce::var timeToVar (juce::Time time)
