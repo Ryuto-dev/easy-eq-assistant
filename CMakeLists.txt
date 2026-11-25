@@ -80,6 +80,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/DelayIrTab.h
     src/UI/RtaSplTab.cpp
     src/UI/RtaSplTab.h
+    src/UI/EQTab.cpp
     src/UI/EQTab.h
     src/UI/LimitTestTab.h
     src/UI/UtilitiesTab.h

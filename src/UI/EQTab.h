@@ -2,27 +2,64 @@
 
 #include <JuceHeader.h>
 
+#include "../DSP/EQProposer.h"
 #include "UiContext.h"
 
 namespace eeq::ui
 {
 
-// EQ案タブ（仕様 4章）: ターゲット、反復アルゴリズム、帯域一覧、予測カーブ、書き出し
-class EQTab : public juce::Component
+// 「EQ案」タブ（仕様 4章）。
+// 測定カーブとターゲット曲線の差を埋めるPEQを反復法で提案し、
+// 帯域一覧（種別・周波数・ゲイン・Q、ON/OFF・手動調整）、予測カーブ、CSV/テキスト書き出しを提供する。
+class EQTab : public juce::Component,
+              private juce::ListBoxModel
 {
 public:
-    explicit EQTab (UiContext& contextIn) : ctx (contextIn) {}
+    explicit EQTab (UiContext& context);
 
-    /** 30Hzタイマーから呼ぶ（必要なタブだけ上書きする） */
-    virtual void timerTick() {}
+    void timerTick();
+    void paint (juce::Graphics&) override;
+    void resized() override;
 
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (theme::get (theme::ColourId::panelBackground));
-    }
+private:
+    // ListBoxModel（帯域一覧）
+    int getNumRows() override;
+    void paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+    void listBoxItemClicked (int rowNumber, const juce::MouseEvent&) override;
 
-protected:
+    void buildTargetPoints();
+    void runProposal();
+    void updatePrediction();
+    void refreshBandTable();
+    void exportCsv();
+    void exportText();
+    void loadTargetCsv();
+
     UiContext& ctx;
+
+    // 入力
+    juce::ComboBox targetCombo;
+    juce::Label targetTitle, tiltTitle, rangeTitle, coherenceTitle, maxBandsTitle;
+    juce::TextEditor tiltEditor, minFreqEditor, maxFreqEditor, coherenceEditor;
+    juce::Slider maxBandsSlider;
+    juce::ToggleButton valleyBoostToggle;
+    juce::TextButton targetCsvButton, createButton, exportCsvButton, exportTextButton;
+
+    // 帯域一覧と手動調整
+    juce::ListBox bandList { {}, this };
+    juce::Label bandTitle, selectedLabel;
+    juce::ComboBox bandTypeCombo;
+    juce::TextEditor bandFreqEditor, bandGainEditor, bandQEditor;
+    juce::ToggleButton bandEnableToggle;
+    juce::Label convergenceLabel;
+
+    eeq::dsp::EQProposalResult lastResult;
+    bool hasResult = false;
+    std::vector<double> gridFrequencies;
+    std::vector<double> measuredDb;
+    std::vector<double> weight;
+    // CSV読み込みしたターゲット（freq, dB）
+    std::vector<std::pair<double, double>> csvTargetPoints;
 };
 
 } // namespace eeq::ui
