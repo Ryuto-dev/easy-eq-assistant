@@ -22,6 +22,7 @@ juce_add_gui_app(EasyEQAssistant
     PRODUCT_NAME "Easy EQ assistant"
     COMPANY_NAME "Ryuto"
     BUNDLE_ID "com.ryuto.easyeqassistant"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/icon_1024.png"
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
@@ -34,6 +35,15 @@ target_sources(EasyEQAssistant PRIVATE
     src/Main.cpp
     src/MainComponent.cpp
     src/MainComponent.h
+    src/Audio/AudioEngine.cpp
+    src/Audio/AudioEngine.h
+    src/Audio/PinkNoiseGenerator.h
+    src/UI/LevelMeter.cpp
+    src/UI/LevelMeter.h
+    src/UI/TopBar.cpp
+    src/UI/TopBar.h
+    src/UI/BottomBar.cpp
+    src/UI/BottomBar.h
     src/UI/Strings.h
     src/Core/Acoustics.h
 )
