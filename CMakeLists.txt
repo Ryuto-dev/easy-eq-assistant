@@ -20,6 +20,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    # ソースと実行文字セットを UTF-8 に統一する（日本語を含むソース/リテラルのため。仕様 2.）
+    add_compile_options(/utf-8)
+endif()
+
 add_subdirectory(libs/JUCE)
 
 juce_add_gui_app(EasyEQAssistant
@@ -61,9 +66,15 @@ target_sources(EasyEQAssistant PRIVATE
     src/Core/Acoustics.h
     src/Core/Log.cpp
     src/Core/Log.h
-    src/Core/MicPermission.mm
     src/Core/MicPermission.h
 )
+
+if(APPLE)
+    # マイク許可の実装は macOS のみ Objective-C++（その他プラットフォームはスタブ）
+    target_sources(EasyEQAssistant PRIVATE src/Core/MicPermission.mm)
+else()
+    target_sources(EasyEQAssistant PRIVATE src/Core/MicPermissionStub.cpp)
+endif()
 
 target_compile_definitions(EasyEQAssistant PRIVATE
     JUCE_WEB_BROWSER=0
