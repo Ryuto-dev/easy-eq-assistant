@@ -123,6 +123,11 @@ private:
     std::atomic<float> noiseLevelDb { -20.0f };
 
     enum class NoiseState : int { idle, fadeIn, running, fadeOut };
+    enum class NoiseCommand : int { none, start, stop };
+
+    // UI はコマンドだけを出す。状態遷移はオーディオスレッドが一括して管理する
+    //（UI が直接 state を書くと、コールバックの書き戻しと競合するため）
+    std::atomic<NoiseCommand> noiseCommand { NoiseCommand::none };
     std::atomic<NoiseState> noiseState { NoiseState::idle };
     std::atomic<int> fadePosition { 0 };
     std::atomic<int> fadeInLength { 1 };

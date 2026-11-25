@@ -1,5 +1,7 @@
 #include "AudioEngine.h"
 
+#include "../Core/Log.h"
+
 #include <cmath>
 
 namespace eeq::audio
@@ -90,6 +92,8 @@ juce::String AudioEngine::selectInputDevice (const juce::String& deviceName)
     setup.inputChannels.setRange (0, 64, true);
 
     auto error = deviceManager.setAudioDeviceSetup (setup, true);
+    eeq::log::write (error.isEmpty() ? "input device changed to \"" + deviceName + "\""
+                                     : "input device change to \"" + deviceName + "\" FAILED: " + error);
 
     if (error.isEmpty())
         saveSettings();
@@ -106,6 +110,8 @@ juce::String AudioEngine::selectOutputDevice (const juce::String& deviceName)
     setup.outputChannels.setRange (0, 64, true);
 
     auto error = deviceManager.setAudioDeviceSetup (setup, true);
+    eeq::log::write (error.isEmpty() ? "output device changed to \"" + deviceName + "\""
+                                     : "output device change to \"" + deviceName + "\" FAILED: " + error);
 
     if (error.isEmpty())
         saveSettings();
@@ -216,19 +222,12 @@ void AudioEngine::clearClipLatches() noexcept
 
 void AudioEngine::startNoise() noexcept
 {
-    fadePosition.store (0, std::memory_order_relaxed);
-    noiseState.store (NoiseState::fadeIn, std::memory_order_relaxed);
+    noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
 void AudioEngine::stopNoise() noexcept
 {
-    const auto state = noiseState.load (std::memory_order_relaxed);
-
-    if (state == NoiseState::running || state == NoiseState::fadeIn)
-    {
-        fadePosition.store (0, std::memory_order_relaxed);
-        noiseState.store (NoiseState::fadeOut, std::memory_order_relaxed);
-    }
+    noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
 }
 
 bool AudioEngine::isNoiseAudible() const noexcept
@@ -292,6 +291,29 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const auto level = juce::Decibels::decibelsToGain (noiseLevelDb.load (std::memory_order_relaxed));
     auto state = noiseState.load (std::memory_order_relaxed);
     auto position = fadePosition.load (std::memory_order_relaxed);
+
+    // UIからの開始/停止コマンドをブロックの先頭で反映する（状態はオーディオスレッドが所有する）
+    switch (noiseCommand.exchange (NoiseCommand::none, std::memory_order_relaxed))
+    {
+        case NoiseCommand::start:
+            if (state == NoiseState::idle || state == NoiseState::fadeOut)
+            {
+                state = NoiseState::fadeIn;
+                position = 0;
+            }
+            break;
+
+        case NoiseCommand::stop:
+            if (state == NoiseState::running || state == NoiseState::fadeIn)
+            {
+                state = NoiseState::fadeOut;
+                position = 0;
+            }
+            break;
+
+        case NoiseCommand::none:
+            break;
+    }
 
     const float* refIn = (refIndex >= 0 && refIndex < numInputChannels) ? inputChannelData[refIndex] : nullptr;
     const float* measIn = (measIndex >= 0 && measIndex < numInputChannels) ? inputChannelData[measIndex] : nullptr;
@@ -366,6 +388,14 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     if (sampleRate <= 0.0)
         sampleRate = 48000.0;
 
+    // レート/バッファが変わったときだけログに残す
+    if (std::abs (currentSampleRate.load() - sampleRate) > 0.5
+        || currentBufferSize.load() != device->getCurrentBufferSizeSamples())
+    {
+        eeq::log::write ("device restarted: rate=" + juce::String (sampleRate, 0)
+                         + " buffer=" + juce::String (device->getCurrentBufferSizeSamples()));
+    }
+
     currentSampleRate.store (sampleRate, std::memory_order_relaxed);
     currentBufferSize.store (device->getCurrentBufferSizeSamples(), std::memory_order_relaxed);
 
@@ -382,14 +412,37 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     fadeOutLength.store ((int) (fadeOutSeconds * sampleRate), std::memory_order_relaxed);
     deviceGeneration.fetch_add (1, std::memory_order_relaxed);
 
-    // デバイスを開き直したときは、必ずフェードインから再開する（急な大音量を避ける）
-    const auto state = noiseState.load (std::memory_order_relaxed);
+    // デバイスが変わると前のデバイスのチャンネル番号が範囲外になることがある。
+    // 範囲外のままでは出力がどこにも届かず、メーターだけが動くので、ここで直す
+    const auto numIn = device->getActiveInputChannels().countNumberOfSetBits();
+    const auto numOut = device->getActiveOutputChannels().countNumberOfSetBits();
 
-    if (state == NoiseState::running || state == NoiseState::fadeOut)
+    auto fixChannel = [] (int channel, int availableChannels)
     {
-        fadePosition.store (0, std::memory_order_relaxed);
-        noiseState.store (NoiseState::fadeIn, std::memory_order_relaxed);
+        if (availableChannels <= 0)
+            return -1;
+        if (channel < 0)
+            return -1;
+        return juce::jlimit (0, availableChannels - 1, channel);
+    };
+
+    const auto currentRef = refChannel.load (std::memory_order_relaxed);
+
+    if (currentRef != internalRefChannel)
+    {
+        // 入力が範囲外になったら、2ch以上なら末尾ch、1chなら内部参照へ
+        const auto fixed = numIn == 0 ? internalRefChannel
+                         : currentRef >= numIn ? (numIn > 1 ? numIn - 1 : internalRefChannel)
+                         : currentRef;
+        refChannel.store (fixed, std::memory_order_relaxed);
     }
+
+    measChannel.store (fixChannel (measChannel.load (std::memory_order_relaxed), numIn), std::memory_order_relaxed);
+    outputChannel.store (fixChannel (outputChannel.load (std::memory_order_relaxed), numOut), std::memory_order_relaxed);
+
+    // 鳴っている最中にデバイスが開き直ったら、フェードインからやり直す（急な大音量を避ける）
+    if (isNoiseAudible())
+        noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
 void AudioEngine::audioDeviceStopped() {}
@@ -398,6 +451,8 @@ void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 {
     stopNoise();
     measurement.stopMeasurement();
+
+    eeq::log::write ("audio device error: " + errorMessage + " (noise and measurement stopped)");
 
     {
         const juce::ScopedLock lock (errorMutex);
@@ -420,7 +475,34 @@ void AudioEngine::openInitialDevice()
 
     deviceManager.setCurrentAudioDeviceType (types[0]->getTypeName(), true);
 
+    // 起動直後はまだ deviceManager がデバイス型を持っていない（initialise 内のスキャンで
+    // 作られる）ため、ローカルの types[0] を使って列挙する
+    auto* typeForEnumeration = types[0];
+    typeForEnumeration->scanForDevices(); // 遅延スキャンを明示的に起こす
+
+    eeq::log::write ("device type: " + typeForEnumeration->getTypeName()
+                     + " / input devices: [" + typeForEnumeration->getDeviceNames (true).joinIntoString ("; ")
+                     + "] / output devices: [" + typeForEnumeration->getDeviceNames (false).joinIntoString ("; ") + "]");
+
     auto setup = deviceManager.getAudioDeviceSetup();
+
+    // デバイス名が未指定のときは、入力/出力それぞれの既定デバイスを明示的に埋める。
+    // （名前が空のまま setAudioDeviceSetup に渡すと、JUCE はエラー無しで何も開かない）
+    if (setup.inputDeviceName.isEmpty())
+    {
+        const auto names = typeForEnumeration->getDeviceNames (true);
+
+        if (! names.isEmpty())
+            setup.inputDeviceName = names[typeForEnumeration->getDefaultDeviceIndex (true)];
+    }
+
+    if (setup.outputDeviceName.isEmpty())
+    {
+        const auto names = typeForEnumeration->getDeviceNames (false);
+
+        if (! names.isEmpty())
+            setup.outputDeviceName = names[typeForEnumeration->getDefaultDeviceIndex (false)];
+    }
     setup.useDefaultInputChannels = false;
     setup.useDefaultOutputChannels = false;
     setup.inputChannels.clear();
@@ -452,12 +534,18 @@ void AudioEngine::openInitialDevice()
 
     auto error = deviceManager.initialise (0, 0, nullptr, true, {}, &setup);
 
+    eeq::log::write ("initialise result: \"" + error + "\" setup: input=\"" + setup.inputDeviceName
+                     + "\" output=\"" + setup.outputDeviceName + "\"");
+
     if (error.isNotEmpty())
     {
-        // フォールバック: 既定のチャンネル構成で再試行
+        // フォールバック: 保存したレート/バッファを捨てて既定の構成で再試行
+        eeq::log::write ("initial open FAILED: " + error + " (retrying with default settings)");
         auto fallback = deviceManager.getAudioDeviceSetup();
         fallback.useDefaultInputChannels = true;
         fallback.useDefaultOutputChannels = true;
+        fallback.sampleRate = 0.0;
+        fallback.bufferSize = 0;
         deviceManager.initialise (0, 0, nullptr, true, {}, &fallback);
     }
 
@@ -467,6 +555,29 @@ void AudioEngine::openInitialDevice()
     {
         numInputs = device->getActiveInputChannels().countNumberOfSetBits();
         numOutputs = device->getActiveOutputChannels().countNumberOfSetBits();
+
+        const auto setupNow = deviceManager.getAudioDeviceSetup();
+        eeq::log::write ("audio opened: input=\"" + (setupNow.inputDeviceName.isNotEmpty() ? setupNow.inputDeviceName : juce::String (u8"(既定)"))
+                         + "\" output=\"" + (setupNow.outputDeviceName.isNotEmpty() ? setupNow.outputDeviceName : juce::String (u8"(既定)"))
+                         + "\" rate=" + juce::String (device->getCurrentSampleRate(), 0)
+                         + " buffer=" + juce::String (device->getCurrentBufferSizeSamples())
+                         + " in=" + juce::String (numInputs) + "ch"
+                         + " out=" + juce::String (numOutputs) + "ch");
+    }
+    else
+    {
+        eeq::log::write ("audio open FAILED: no device");
+    }
+
+    // 既定のサンプルレートは 48 kHz（仕様 2.）。保存された設定がなければ切り替える
+    if (settings != nullptr && settings->getDoubleValue ("sampleRate", 0.0) == 0.0)
+    {
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            if (device->getAvailableSampleRates().contains (48000.0)
+                && std::abs (device->getCurrentSampleRate() - 48000.0) > 0.5)
+                applyRateAndBuffer (48000.0, -1);
+        }
     }
 
     restoreSavedAssignment (numInputs, numOutputs);

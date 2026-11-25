@@ -55,6 +55,8 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/MeasurementPanel.h
     src/UI/Strings.h
     src/Core/Acoustics.h
+    src/Core/Log.cpp
+    src/Core/Log.h
 )
 
 target_compile_definitions(EasyEQAssistant PRIVATE

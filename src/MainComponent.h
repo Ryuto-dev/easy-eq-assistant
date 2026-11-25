@@ -23,7 +23,24 @@ private:
     void showError (const juce::String& message);
     void applyMeasurementSettings();
 
-    juce::ApplicationProperties appProperties;
+    // 設定ファイルの保存先を確定させてから engine に渡す必要があるため、
+    // 初期化順を保証するラッパ（メンバー宣言順に構築される）
+    struct AppPropertiesStorage
+    {
+        juce::ApplicationProperties properties;
+
+        AppPropertiesStorage()
+        {
+            juce::PropertiesFile::Options options;
+            options.applicationName = "EasyEQAssistant";
+            options.folderName = "EasyEQAssistant";
+            options.filenameSuffix = "xml";
+            options.storageFormat = juce::PropertiesFile::storeAsXML;
+            properties.setStorageParameters (options);
+        }
+    };
+
+    AppPropertiesStorage appPropertiesStorage;
     eeq::audio::AudioEngine engine;
     eeq::ui::TopBar topBar;
     eeq::ui::BottomBar bottomBar;

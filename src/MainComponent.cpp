@@ -1,12 +1,14 @@
 #include "MainComponent.h"
 
+#include "Core/Log.h"
 #include "UI/Strings.h"
 
 MainComponent::MainComponent()
-    : engine (appProperties.getUserSettings()),
+    : engine (appPropertiesStorage.properties.getUserSettings()),
       topBar (engine),
       bottomBar (engine)
 {
+    eeq::log::write ("--- Easy EQ assistant started (phase 2) ---");
     setOpaque (true);
 
     topBar.onError = [this] (const juce::String& message) { showError (message); };
@@ -26,7 +28,7 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     engine.saveSettings();
-    appProperties.getUserSettings()->saveIfNeeded();
+    appPropertiesStorage.properties.getUserSettings()->saveIfNeeded();
 }
 
 void MainComponent::paint (juce::Graphics& g)
