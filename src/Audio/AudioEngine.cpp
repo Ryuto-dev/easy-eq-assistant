@@ -52,6 +52,8 @@ AudioEngine::AudioEngine (juce::PropertiesFile* settingsToUse)
       measurementRing (1 << 18),
       measurement (measurementRing)
 {
+    formatManager.registerBasicFormats();
+    measurement.setSplAnalyzer (&splAnalyzer);
     deviceManager.addAudioCallback (this);
     openInitialDevice();
 }
@@ -229,24 +231,107 @@ void AudioEngine::clearClipLatches() noexcept
 }
 
 //==============================================================================
-// ピンクノイズ
+// 励起信号（ピンクノイズ / スイープ / WAV / 外部入力）
 
-void AudioEngine::startNoise() noexcept
+void AudioEngine::startExcitation() noexcept
 {
-    eeq::log::write ("noise: start requested");
+    eeq::log::write ("excitation: start requested");
     noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
-void AudioEngine::stopNoise() noexcept
+void AudioEngine::stopExcitation() noexcept
 {
-    eeq::log::write ("noise: stop requested");
+    eeq::log::write ("excitation: stop requested");
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
 }
 
-bool AudioEngine::isNoiseAudible() const noexcept
+void AudioEngine::emergencyStop() noexcept
+{
+    eeq::log::write ("EMERGENCY STOP (Esc): stopping output and measurement");
+    noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
+    measurement.stopMeasurement();
+}
+
+bool AudioEngine::isExcitationAudible() const noexcept
 {
     const auto state = noiseState.load (std::memory_order_relaxed);
     return state == NoiseState::fadeIn || state == NoiseState::running;
+}
+
+void AudioEngine::setSweep (std::vector<float> sweepSamples)
+{
+    stopExcitation();
+
+    const auto logLength = (double) sweepSamples.size() / std::max (1.0, currentSampleRate.load());
+    eeq::log::write ("excitation: sweep set (" + juce::String (sweepSamples.size()) + " samples, "
+                     + juce::String (logLength, 2) + " s)");
+
+    pendingBuffer.store (std::make_shared<const std::vector<float>> (std::move (sweepSamples)),
+                         std::memory_order_relaxed);
+    excitationSource.store (ExcitationSource::sweep, std::memory_order_relaxed);
+}
+
+bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& errorOut)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
+
+    if (reader == nullptr)
+    {
+        errorOut = juce::String (u8"読み込める音源ファイルがありません: ") + file.getFullPathName();
+        eeq::log::write ("excitation: WAV load FAILED: " + errorOut);
+        return false;
+    }
+
+    // 20分を超えるファイルは読み込まない（メモリ保護）
+    const auto length = (juce::int64) juce::jmin (reader->lengthInSamples,
+                                                  (juce::int64) 20 * 60 * (juce::int64) reader->sampleRate);
+
+    if (length <= 0)
+    {
+        errorOut = juce::String (u8"空のファイルです: ") + file.getFullPathName();
+        return false;
+    }
+
+    juce::AudioBuffer<float> buffer ((int) reader->numChannels, (int) length);
+    reader->read (&buffer, 0, (int) length, 0, true, true);
+
+    // 励起信号はモノラルで十分（系統の1chに出す）。ステレオは平均する
+    std::vector<float> mono ((size_t) length, 0.0f);
+    const auto channels = buffer.getNumChannels();
+
+    for (int i = 0; i < (int) length; ++i)
+    {
+        float sum = 0.0f;
+
+        for (int ch = 0; ch < channels; ++ch)
+            sum += buffer.getSample (ch, i);
+
+        mono[(size_t) i] = sum / (float) channels;
+    }
+
+    stopExcitation();
+    eeq::log::write ("excitation: WAV loaded \"" + file.getFullPathName() + "\" ("
+                     + juce::String ((double) length / std::max (1.0, (double) reader->sampleRate), 2) + " s)");
+
+    pendingBuffer.store (std::make_shared<const std::vector<float>> (std::move (mono)),
+                         std::memory_order_relaxed);
+    excitationSource.store (ExcitationSource::wavFile, std::memory_order_relaxed);
+
+    return true;
+}
+
+double AudioEngine::getExcitationProgress() const noexcept
+{
+    if (const auto source = excitationSource.load (std::memory_order_relaxed);
+        source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
+    {
+        if (const auto buffer = activeBuffer.load (std::memory_order_relaxed);
+            buffer != nullptr && ! buffer->empty())
+            return juce::jlimit (0.0, 1.0, (double) playbackPosition.load (std::memory_order_relaxed)
+                                            / (double) buffer->size());
+    }
+
+    return 0.0;
 }
 
 //==============================================================================
@@ -282,7 +367,9 @@ void AudioEngine::saveSettings()
     settings->setValue ("refChannel", refChannel.load (std::memory_order_relaxed));
     settings->setValue ("measChannel", measChannel.load (std::memory_order_relaxed));
     settings->setValue ("outputChannel", outputChannel.load (std::memory_order_relaxed));
+    settings->setValue ("outputMask", (juce::int64) outputMask.load (std::memory_order_relaxed));
     settings->setValue ("noiseLevelDb", (double) noiseLevelDb.load (std::memory_order_relaxed));
+    settings->setValue ("outputCeilingDb", (double) outputCeilingDb.load (std::memory_order_relaxed));
     settings->saveIfNeeded();
 }
 
@@ -295,15 +382,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 {
     const auto refIndex = refChannel.load (std::memory_order_relaxed);
     const auto measIndex = measChannel.load (std::memory_order_relaxed);
-    const auto outIndex = outputChannel.load (std::memory_order_relaxed);
     const auto refIsInternal = refIndex == internalRefChannel;
 
     measureChannel (inputChannelData, numInputChannels, numSamples, refIndex, refMeter, clipThresholdLinear);
     measureChannel (inputChannelData, numInputChannels, numSamples, measIndex, measMeter, clipThresholdLinear);
 
     const auto level = juce::Decibels::decibelsToGain (noiseLevelDb.load (std::memory_order_relaxed));
+    const auto source = excitationSource.load (std::memory_order_relaxed);
+    const auto routingMask = outputMask.load (std::memory_order_relaxed);
     auto state = noiseState.load (std::memory_order_relaxed);
     auto position = fadePosition.load (std::memory_order_relaxed);
+    auto playPos = playbackPosition.load (std::memory_order_relaxed);
+    const auto activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
+                                 ? activeBuffer.load (std::memory_order_relaxed)
+                                 : nullptr;
 
     // UIからの開始/停止コマンドをブロックの先頭で反映する（状態はオーディオスレッドが所有する）
     switch (noiseCommand.exchange (NoiseCommand::none, std::memory_order_relaxed))
@@ -313,6 +405,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             {
                 state = NoiseState::fadeIn;
                 position = 0;
+                playPos = 0;
+                playbackPosition.store (0, std::memory_order_relaxed);
+
+                // スイープ/WAVは開始時にUIスレッドが用意したバッファへ取り替える
+                if (activeSweep != nullptr)
+                    activeBuffer.store (pendingBuffer.load (std::memory_order_relaxed), std::memory_order_relaxed);
             }
             break;
 
@@ -368,14 +466,50 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             }
         }
 
-        const auto sample = noise.nextSample() * gain;
+        // 励起信号ソースを選ぶ（仕様 3.2）
+        float sourceSample = 0.0f;
+
+        switch (source)
+        {
+            case ExcitationSource::pinkNoise:
+                sourceSample = noise.nextSample();
+                break;
+
+            case ExcitationSource::sweep:
+            case ExcitationSource::wavFile:
+            {
+                if (const auto* buffer = activeBuffer.load (std::memory_order_relaxed).get();
+                    buffer != nullptr && playPos < (int) buffer->size())
+                {
+                    sourceSample = (*buffer)[(size_t) playPos];
+                    ++playPos;
+                }
+                else if (state == NoiseState::running)
+                {
+                    // 最後まで再生したらフェードアウトしてUIへ通知する
+                    state = NoiseState::fadeOut;
+                    position = 0;
+                    excitationFinished.store (true, std::memory_order_relaxed);
+                }
+                break;
+            }
+
+            case ExcitationSource::external:
+                sourceSample = 0.0f; // アプリは出力せず取り込みだけ（仕様 3.2）
+                break;
+        }
+
+        // 出力のハード上限（仕様 3.7 の安全設計）。フェードとレベルを掛けた最終値に適用する
+        const auto ceilingGain = juce::Decibels::decibelsToGain (outputCeilingDb.load (std::memory_order_relaxed));
+        const auto sample = juce::jlimit (-ceilingGain, ceilingGain, sourceSample * gain);
 
         outPeak = juce::jmax (outPeak, std::abs (sample));
         outSumSquares += (double) sample * (double) sample;
 
+        // 系統ルーティング（仕様 3.3.4）: マスクが立っている出力chへ同じ励起信号を出す
         for (int ch = 0; ch < numOutputChannels; ++ch)
             if (auto* out = outputChannelData[ch])
-                out[i] = (ch == outIndex) ? sample : 0.0f;
+                out[i] = ((routingMask & ((uint64_t) 1 << ch)) != 0) ? sample : 0.0f;
 
         // 測定ストリーム（仕様 2. の (1)）: Ref/Meas のペアをリングバッファへ書く
         if (i < streamCount)
@@ -384,6 +518,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             measStream[(size_t) i] = (measIn != nullptr ? measIn[i] : 0.0f);
         }
     }
+
+    playbackPosition.store (playPos, std::memory_order_relaxed);
 
     if (streamCount > 0)
         measurementRing.write (refStream.data(), measStream.data(), streamCount);
@@ -630,6 +766,18 @@ void AudioEngine::restoreSavedAssignment (int numInputs, int numOutputs)
     }
     measChannel.store (clamp (savedMeas, numInputs, numInputs > 0 ? 0 : -1), std::memory_order_relaxed);
     outputChannel.store (clamp (savedOut, numOutputs, 0), std::memory_order_relaxed);
+
+    // 系統ルーティング。保存があれば復元し、なければ出力1chだけ
+    if (settings != nullptr)
+    {
+        const auto savedMask = (uint64_t) settings->getIntValue ("outputMask", (int) (1ull << outputChannel.load (std::memory_order_relaxed)));
+
+        if (savedMask != 0)
+            outputMask.store (savedMask, std::memory_order_relaxed);
+
+        const auto savedCeiling = (float) settings->getDoubleValue ("outputCeilingDb", 0.0);
+        outputCeilingDb.store (juce::jlimit (-60.0f, 0.0f, savedCeiling), std::memory_order_relaxed);
+    }
 
     if (settings != nullptr)
     {

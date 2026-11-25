@@ -1,5 +1,7 @@
 #include "MeasurementEngine.h"
 
+#include "RtaSplAnalyzer.h"
+
 #include <algorithm>
 
 namespace eeq::dsp
@@ -11,6 +13,8 @@ MeasurementEngine::MeasurementEngine (SampleRingBuffer& ringToUse)
 {
     readRef.resize (16384);
     readMeas.resize (16384);
+    captureRef.resize (captureCapacity, 0.0f);
+    captureMeas.resize (captureCapacity, 0.0f);
     startThread (juce::Thread::Priority::low);
 }
 
@@ -50,6 +54,58 @@ int MeasurementEngine::getAverages() const
     return accumulator.getAverages();
 }
 
+bool MeasurementEngine::copyRecentSamples (int numSamples, std::vector<float>& refOut,
+                                           std::vector<float>& measOut) const
+{
+    // 2の冪に制限する
+    auto size = 256;
+
+    while (size * 2 <= numSamples && size * 2 <= captureCapacity)
+        size *= 2;
+
+    const juce::ScopedLock sl (captureLock);
+
+    if (captureFilled < size)
+        return false;
+
+    refOut.assign ((size_t) size, 0.0f);
+    measOut.assign ((size_t) size, 0.0f);
+
+    const auto start = (capturePos - size + captureCapacity) % captureCapacity;
+
+    for (int i = 0; i < size; ++i)
+    {
+        const auto idx = (start + i) % captureCapacity;
+        refOut[(size_t) i] = captureRef[(size_t) idx];
+        measOut[(size_t) i] = captureMeas[(size_t) idx];
+    }
+
+    return true;
+}
+
+DelayEstimate MeasurementEngine::estimateCurrentDelay (bool usePhat) const
+{
+    std::vector<float> ref, meas;
+
+    if (! copyRecentSamples (32768, ref, meas))
+        return {};
+
+    return estimateDelay (ref.data(), meas.data(), (int) ref.size(), usePhat);
+}
+
+void MeasurementEngine::appendCapture (const float* ref, const float* meas, int numSamples)
+{
+    const juce::ScopedLock sl (captureLock);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        captureRef[(size_t) capturePos] = ref[i];
+        captureMeas[(size_t) capturePos] = meas[i];
+        capturePos = (capturePos + 1) % captureCapacity;
+        captureFilled = std::min (captureFilled + 1, captureCapacity);
+    }
+}
+
 void MeasurementEngine::run()
 {
     while (! threadShouldExit())
@@ -69,6 +125,12 @@ void MeasurementEngine::run()
 
             if (got <= 0)
                 break;
+
+            appendCapture (readRef.data(), readMeas.data(), got);
+
+            // RTA/SPLは測定の開始/停止にかかわらず常に入力を流す（仕様 3.4 / 5.4）
+            if (splAnalyzer != nullptr)
+                splAnalyzer->process (readMeas.data(), got);
 
             if (measuring.load (std::memory_order_relaxed))
                 accumulator.feedSamples (readRef.data(), readMeas.data(), got);

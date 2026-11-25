@@ -1,10 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 
 #include <JuceHeader.h>
 
 #include "../DSP/MeasurementEngine.h"
+#include "../DSP/RtaSplAnalyzer.h"
 #include "PinkNoiseGenerator.h"
 
 namespace eeq::audio
@@ -64,10 +66,20 @@ public:
     bool isRefInternal() const noexcept { return getRefChannel() == internalRefChannel; }
     int getRefChannel() const noexcept { return refChannel.load (std::memory_order_relaxed); }
     int getMeasChannel() const noexcept { return measChannel.load (std::memory_order_relaxed); }
+    /** ルーティングマスクの最下位ビット（互換用。系統選択は setOutputRoutingMask を使う） */
     int getOutputChannel() const noexcept { return outputChannel.load (std::memory_order_relaxed); }
     void setRefChannel (int index) noexcept { refChannel.store (index, std::memory_order_relaxed); }
     void setMeasChannel (int index) noexcept { measChannel.store (index, std::memory_order_relaxed); }
-    void setOutputChannel (int index) noexcept { outputChannel.store (index, std::memory_order_relaxed); }
+    void setOutputChannel (int index) noexcept
+    {
+        outputChannel.store (index, std::memory_order_relaxed);
+        outputMask.store (index >= 0 ? (uint64_t) 1 << index : 0, std::memory_order_relaxed);
+    }
+
+    /** 出力の系統ルーティング（仕様 3.3.4）。ビット t が立っている出力chに励起信号を出す。
+        「全体（合成）」は全系統分のビットを立てる */
+    void setOutputRoutingMask (uint64_t mask) noexcept { outputMask.store (mask, std::memory_order_relaxed); }
+    uint64_t getOutputRoutingMask() const noexcept { return outputMask.load (std::memory_order_relaxed); }
 
     // ---- メーター ----
 
@@ -76,19 +88,60 @@ public:
     const MeterState& getOutMeter() const noexcept { return outMeter; }
     void clearClipLatches() noexcept;
 
-    // ---- ピンクノイズ（仕様 3.2）----
+    // ---- 励起信号（仕様 3.2 / 3.3.4）----
+
+    enum class ExcitationSource : int
+    {
+        pinkNoise, // アプリ内蔵のピンクノイズ（既定）
+        sweep,     // 対数スイープ（セットアップ時の測定用）
+        wavFile,   // WAVファイルの再生
+        external   // アプリは出力せず取り込みだけ（本番素材での測定）
+    };
+
+    /** 励起信号の種類を選ぶ（音が出ている間は切り替えないこと） */
+    void setExcitationSource (ExcitationSource source) noexcept
+    { excitationSource.store (source, std::memory_order_relaxed); }
+    ExcitationSource getExcitationSource() const noexcept
+    { return excitationSource.load (std::memory_order_relaxed); }
 
     /** 出力をフェードイン付きで開始する */
-    void startNoise() noexcept;
+    void startExcitation() noexcept;
     /** 出力をフェードアウト付きで停止する */
-    void stopNoise() noexcept;
+    void stopExcitation() noexcept;
+    /** 互換用エイリアス（ピンクノイズ） */
+    void startNoise() noexcept { startExcitation(); }
+    void stopNoise() noexcept { stopExcitation(); }
+    bool isNoiseAudible() const noexcept { return isExcitationAudible(); }
+
     void setNoiseLevelDb (float levelDb) noexcept { noiseLevelDb.store (levelDb, std::memory_order_relaxed); }
     float getNoiseLevelDb() const noexcept { return noiseLevelDb.load (std::memory_order_relaxed); }
     /** 音が出ている（フェードイン/定常）状態か */
-    bool isNoiseAudible() const noexcept;
+    bool isExcitationAudible() const noexcept;
+
+    /** 対数スイープを生成して渡す（UIスレッドで生成。長さ 2〜30 秒: 仕様 3.2） */
+    void setSweep (std::vector<float> sweepSamples);
+    /** WAVファイルを読み込んで励起信号にする（モノラルにダウンミックス）。失敗時 false */
+    bool loadWavExcitation (const juce::File& file, juce::String& errorOut);
+    /** スイープ/WAVの再生位置（0..1）。ノイズのときは意味を持たない */
+    double getExcitationProgress() const noexcept;
+    /** スイープ/WAVが最後まで再生されたら true を1度だけ返す */
+    bool consumeExcitationFinished() noexcept
+    { return excitationFinished.exchange (false, std::memory_order_relaxed); }
+
+    // 出力の安全装置（仕様 3.7 / 6.3）: 生成サンプルをこの dBFS でハードクリップする
+    void setOutputCeilingDb (float ceilingDb) noexcept
+    { outputCeilingDb.store (ceilingDb, std::memory_order_relaxed); }
+    float getOutputCeilingDb() const noexcept { return outputCeilingDb.load (std::memory_order_relaxed); }
+
+    /** 緊急停止（Esc。仕様 6.3）: 出力をフェードアウトし、測定も止める */
+    void emergencyStop() noexcept;
 
     // これを超える出力レベルは確認ダイアログを出す（仕様 3.2: 既定 −20 dBFS）
     static constexpr float outputLevelLimitDb = -20.0f;
+
+    // ---- RTA・SPL（仕様 3.4 / 5.4）: Meas 1chだけで常時動く ----
+
+    eeq::dsp::RtaSplAnalyzer& getSplAnalyzer() noexcept { return splAnalyzer; }
 
     // ---- デバイスエラー（UIが消費する。仕様 6.1）----
 
@@ -139,6 +192,16 @@ private:
     std::atomic<int> fadeInLength { 1 };
     std::atomic<int> fadeOutLength { 1 };
 
+    std::atomic<ExcitationSource> excitationSource { ExcitationSource::pinkNoise };
+    std::atomic<float> outputCeilingDb { 0.0f };
+
+    // スイープ/WAVのバッファ。shared_ptr のアトミック入れ替えでオーディオスレッドと共有する
+    std::atomic<std::shared_ptr<const std::vector<float>>> pendingBuffer;
+    std::atomic<std::shared_ptr<const std::vector<float>>> activeBuffer;
+    std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
+    std::atomic<bool> excitationFinished { false };
+    std::atomic<uint64_t> outputMask { 1 };
+
     std::atomic<double> currentSampleRate { 48000.0 };
     std::atomic<int> currentBufferSize { 512 };
     std::atomic<uint32_t> deviceGeneration { 0 };
@@ -149,6 +212,8 @@ private:
     std::atomic<bool> noiseReachedIdle { false };
 
     PinkNoiseGenerator noise;
+    juce::AudioFormatManager formatManager;
+    eeq::dsp::RtaSplAnalyzer splAnalyzer;
 
     // 測定ストリーム（フェーズ2）: オーディオスレッド → リングバッファ → 解析スレッド
     dsp::SampleRingBuffer measurementRing;
