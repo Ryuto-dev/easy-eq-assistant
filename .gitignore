@@ -1,0 +1,20 @@
+# ビルド出力
+build/
+Builds/
+DerivedData/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+xcuserdata/
+*.xcuserstate
+
+# OS
+.DS_Store
+
+# ASIO SDK（Steinberg の規約により再配布不可。コミット禁止）
+libs/asio_sdk/
+
+# ローカル設定
+*.local
