@@ -25,5 +25,6 @@ ctest --test-dir build --output-on-failure
 
 ## メモ
 
+- UI 文字列は `src/UI/Strings.h` に集約する。非 ASCII を含むリテラルには必ず `u8` プレフィックスを付ける（JUCE の `String(const char*)` は ASCII 前提のため文字化けする）
 - Windows ビルドはフェーズ6 で確認。ASIO 対応には Steinberg の ASIO SDK が別途必要（規約によりリポジトリへはコミット不可。`libs/asio_sdk/` に配置してビルドする想定）
 - ライセンス: JUCE 8 Personal（個人利用・非商用・非配布）
