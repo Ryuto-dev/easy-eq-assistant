@@ -9,7 +9,7 @@ namespace eeq::ui
 {
 
 // 上部バー（仕様 5.1）: 入力/出力デバイス（別々に選択可）、サンプルレート、バッファ、
-// 入出力チャンネル割当（Ref / Meas / 出力）、レベルメーター。
+// 入出力チャンネル割当（Ref / Meas / 出力）、レベルメーター、テーマ切替と本番モードへのボタン。
 class TopBar : public juce::Component, private juce::ComboBox::Listener
 {
 public:
@@ -20,6 +20,12 @@ public:
 
     /** デバイス適用などで失敗したときの通知先 */
     std::function<void (const juce::String&)> onError;
+
+    /** 本番モード（5.4）への切替要求 */
+    std::function<void()> onLiveModeRequested;
+
+    /** テーマ切替の要求 */
+    std::function<void()> onThemeToggleRequested;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -38,6 +44,7 @@ private:
 
     juce::Label inputDeviceTitle, outputDeviceTitle, rateTitle, bufferTitle, refTitle, measTitle, outTitle;
     juce::ComboBox inputDeviceCombo, outputDeviceCombo, rateCombo, bufferCombo, refCombo, measCombo, outCombo;
+    juce::TextButton liveModeButton, themeButton;
 
     LevelMeter refMeter, measMeter, outMeter;
 

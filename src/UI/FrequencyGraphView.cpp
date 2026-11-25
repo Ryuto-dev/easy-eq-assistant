@@ -1,45 +1,51 @@
 #include "FrequencyGraphView.h"
 
 #include "Strings.h"
+#include "Theme.h"
 
 #include <cmath>
 
 namespace eeq::ui
 {
-namespace
-{
-const juce::Colour backgroundColour { 0xff1a1c20 };
-const juce::Colour gridColour { 0xff2a2d33 };
-const juce::Colour gridTextColour { 0xff7a8087 };
-
-const juce::Colour ampCurveColour { 0xff3fc9d2 };   // 振幅: シアン
-const juce::Colour phaseCurveColour { 0xffe0a34f }; // 位相: アンバー
-const juce::Colour coherenceColour { 0xff6a7078 };  // コヒーレンス: グレー
-constexpr float dimmedAlpha = 0.25f;                // コヒーレンス未満の帯域の薄さ
-} // namespace
 
 FrequencyGraphView::FrequencyGraphView()
 {
     setOpaque (false);
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
+    axis.limitMin = freqLimitMin;
+    axis.limitMax = freqLimitMax;
 }
 
-void FrequencyGraphView::setResult (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom)
+void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
+                                       double delaySamples, bool rawPhase)
 {
     current = frame;
+    appliedDelaySamples = delaySamples;
+    showRawPhase = rawPhase;
 
     if (smoothingOctDenom != smoothingDenom)
     {
         smoothingDenom = smoothingOctDenom;
         dirty = true;
+        lastOverlayVersion = -1; // オーバーレイのスムージングも合わせ直す
     }
 
     repaint();
 }
 
+void FrequencyGraphView::setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom)
+{
+    overlaySources = sources;
+    overlayVersion = version;
+    smoothingDenom = smoothingOctDenom;
+    lastOverlayVersion = -1;
+    dirty = true;
+    repaint();
+}
+
 juce::Rectangle<float> FrequencyGraphView::plotArea() const
 {
-    return getLocalBounds().toFloat().withTrimmedLeft (46).withTrimmedRight (10)
+    return getLocalBounds().toFloat().withTrimmedLeft (dBLabelStripWidth + 6).withTrimmedRight (10)
                .withTrimmedTop (6).withTrimmedBottom (22);
 }
 
@@ -53,16 +59,69 @@ juce::Rectangle<float> FrequencyGraphView::lowerArea (const juce::Rectangle<floa
     return plot.withTrimmedTop (plot.getHeight() * 0.62f + 4.0f);
 }
 
-float FrequencyGraphView::freqToX (double freq, const juce::Rectangle<float>& area) const
+void FrequencyGraphView::rebuildLive()
 {
-    const auto t = std::log (freq / freqMin) / std::log (freqMax / freqMin);
-    return area.getX() + (float) juce::jlimit (0.0, 1.0, t) * area.getWidth();
+    dirty = false;
+    lastWidth = getWidth();
+    columns.clear();
+
+    if (current.fftSize == 0 || current.sampleRate <= 0.0 || current.averages == 0
+        || current.magnitudeDb.empty() || current.transfer.size() != current.magnitudeDb.size())
+        return;
+
+    const auto effectiveMax = std::min (axis.limitMax, current.sampleRate * 0.5);
+    const auto points = eeq::dsp::smoothToLogGrid (current, smoothingDenom, axis.viewMin, effectiveMax,
+                                                   juce::jmax (2, (int) plotArea().getWidth()));
+
+    columns.resize (points.size());
+
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        columns[i].freq = points[i].freq;
+        columns[i].h = { (float) points[i].h.real(), (float) points[i].h.imag() };
+        columns[i].coherence = points[i].coherence;
+    }
 }
 
-double FrequencyGraphView::xToFreq (float x, const juce::Rectangle<float>& area) const
+void FrequencyGraphView::rebuildOverlays()
 {
-    const auto t = juce::jlimit (0.0f, 1.0f, (x - area.getX()) / area.getWidth());
-    return freqMin * std::pow (freqMax / freqMin, (double) t);
+    lastOverlayVersion = overlayVersion;
+    overlayColumns.assign (overlaySources.size(), {});
+
+    const auto width = juce::jmax (2, (int) plotArea().getWidth());
+    const auto effectiveMax = current.sampleRate > 0 ? std::min (axis.limitMax, current.sampleRate * 0.5)
+                                                     : axis.limitMax;
+
+    for (size_t s = 0; s < overlaySources.size(); ++s)
+    {
+        const auto& source = overlaySources[s];
+
+        if (source.frame != nullptr)
+        {
+            const auto points = eeq::dsp::smoothToLogGrid (*source.frame, smoothingDenom,
+                                                           axis.viewMin, effectiveMax, width);
+            auto& out = overlayColumns[s];
+            out.resize (points.size());
+
+            for (size_t i = 0; i < points.size(); ++i)
+                out[i] = { points[i].freq, { (float) points[i].h.real(), (float) points[i].h.imag() } };
+        }
+        else if (source.points != nullptr)
+        {
+            // 点列（ターゲット/予測）はグリッドにそのまま乗る
+            const auto& in = *source.points;
+            auto& out = overlayColumns[s];
+            out.clear();
+
+            for (const auto& point : in)
+            {
+                if (point.freq < axis.viewMin || point.freq > effectiveMax)
+                    continue;
+
+                out.push_back ({ point.freq, { (float) point.h.real(), (float) point.h.imag() } });
+            }
+        }
+    }
 }
 
 void FrequencyGraphView::mouseMove (const juce::MouseEvent& event)
@@ -88,114 +147,92 @@ void FrequencyGraphView::mouseExit (const juce::MouseEvent&)
     repaint();
 }
 
-void FrequencyGraphView::rebuildDisplay()
+void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    dirty = false;
-    lastWidth = getWidth();
-    columns.clear();
+    const auto plot = plotArea();
 
-    if (current.fftSize == 0 || current.sampleRate <= 0.0 || current.averages == 0
-        || current.magnitudeDb.empty() || current.transfer.size() != current.magnitudeDb.size())
-        return;
-
-    const auto nBins = (int) current.magnitudeDb.size();
-    const auto effectiveMax = std::min (freqMax, current.sampleRate * 0.5);
-    const auto area = plotArea();
-    const auto w = juce::jmax (2, (int) area.getWidth());
-    const auto binWidth = current.sampleRate / (double) current.fftSize;
-
-    // 1/(2·denom) オクターブの半幅を持つ帯域で複素平均する（仕様 3.1 のスムージング）
-    const auto factor = smoothingDenom > 0 ? std::pow (2.0, 1.0 / (2.0 * smoothingDenom)) : 1.0;
-
-    // Ref がエネルギーを持たない bins では H1 が不定になるため、
-    // ピークから80dB以上下の bins は表示から除外する（計算値は保持したまま）
-    float refPeakDb = -300.0f;
-
-    for (const auto level : current.refPowerDb)
-        refPeakDb = std::max (refPeakDb, level);
-
-    columns.resize ((size_t) w);
-
-    for (int px = 0; px < w; ++px)
+    // dBラベル帯の上では dB 軸をズーム、それ以外は周波数軸（仕様 5.2）
+    if (event.position.x < (float) dBLabelStripWidth)
     {
-        const auto f0 = freqMin * std::pow (effectiveMax / freqMin, px / (double) w);
-        const auto f1 = freqMin * std::pow (effectiveMax / freqMin, (px + 1) / (double) w);
-        const auto fc = std::sqrt (f0 * f1);
-
-        const auto lo = smoothingDenom > 0 ? fc / factor : f0;
-        const auto hi = smoothingDenom > 0 ? fc * factor : f1;
-
-        auto kLo = juce::jlimit (1, nBins - 1, (int) std::ceil (lo / binWidth));
-        auto kHi = juce::jlimit (1, nBins - 1, std::max (kLo, (int) std::floor (hi / binWidth)));
-
-        std::complex<double> sumH;
-        double sumCoherence = 0.0;
-        int count = 0;
-
-        for (int k = kLo; k <= kHi; ++k)
-        {
-            if (current.refPowerDb[(size_t) k] < refPeakDb - 80.0f)
-                continue;
-
-            sumH += std::complex<double> (current.transfer[(size_t) k].real(),
-                                          current.transfer[(size_t) k].imag());
-            sumCoherence += current.coherence[(size_t) k];
-            ++count;
-        }
-
-        auto& column = columns[(size_t) px];
-        column.freq = fc;
-        column.h = count > 0 ? std::complex<float> ((float) (sumH.real() / count), (float) (sumH.imag() / count))
-                             : std::complex<float> {};
-        column.coherence = count > 0 ? (float) (sumCoherence / (double) count) : 0.0f;
+        ampAuto = false;
+        const auto anchor = ampTop - (event.position.y - amplitudeArea (plot).getY()) / amplitudeArea (plot).getHeight() * ampSpan;
+        const auto factor = wheel.deltaY > 0 ? 0.85f : 1.18f;
+        ampSpan = juce::jlimit (12.0f, 300.0f, ampSpan * factor);
+        ampTop = anchor + (event.position.y - amplitudeArea (plot).getY()) / amplitudeArea (plot).getHeight() * ampSpan;
     }
+    else if (wheel.deltaY != 0.0f && plot.contains (event.position))
+    {
+        if (axis.zoom (event.position.x, plot, wheel.deltaY))
+            dirty = true;
+    }
+
+    repaint();
+}
+
+void FrequencyGraphView::mouseDown (const juce::MouseEvent& event)
+{
+    dragStart = event.position;
+    dragStartAmpTop = ampTop;
+}
+
+void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
+{
+    const auto plot = plotArea();
+
+    // 横ドラッグ: 周波数のパン（仕様 5.2）
+    if (std::abs (event.position.x - dragStart.x) > std::abs (event.position.y - dragStart.y))
+    {
+        if (axis.pan (event.position.x - dragStart.x, plot))
+            dirty = true;
+    }
+    else if (! ampAuto)
+    {
+        // 縦ドラッグ: dB軸のパン
+        const auto amp = amplitudeArea (plot);
+
+        if (amp.getHeight() > 0.0f)
+        {
+            const auto shift = (event.position.y - dragStart.y) / amp.getHeight() * ampSpan;
+            ampTop = dragStartAmpTop + shift;
+        }
+    }
+
+    repaint();
+}
+
+void FrequencyGraphView::mouseDoubleClick (const juce::MouseEvent&)
+{
+    axis.resetView();
+    ampAuto = true;
+    dirty = true;
+    repaint();
 }
 
 void FrequencyGraphView::paint (juce::Graphics& g)
 {
     if (dirty || getWidth() != lastWidth)
-        rebuildDisplay();
+        rebuildLive();
+
+    if (lastOverlayVersion != overlayVersion || (int) overlayColumns.size() != (int) overlaySources.size())
+        rebuildOverlays();
 
     const auto bounds = getLocalBounds().toFloat();
     const auto plot = plotArea();
     const auto ampArea = amplitudeArea (plot);
     const auto lower = lowerArea (plot);
+    const auto background = theme::get (theme::ColourId::graphBackground);
+    const auto grid = theme::get (theme::ColourId::grid);
+    const auto gridMajor = theme::get (theme::ColourId::gridMajor);
+    const auto gridText = theme::get (theme::ColourId::gridText);
 
-    g.setColour (juce::Colour (backgroundColour));
+    g.setColour (background);
     g.fillRoundedRectangle (bounds, 6.0f);
 
-    const auto effectiveMax = current.sampleRate > 0 ? std::min (freqMax, current.sampleRate * 0.5) : freqMax;
-
     // ---- 周波数グリッド（上下で共有: 仕様 5.1）----
-    g.setFont (juce::Font (juce::FontOptions (10.5f)));
-
-    for (int p = 1; p <= 4; ++p)
-    {
-        for (int m = 1; m <= 9; ++m)
-        {
-            const auto f = (double) m * std::pow (10.0, (double) p);
-
-            if (f < freqMin || f > effectiveMax)
-                continue;
-
-            const auto x = freqToX (f, plot);
-            const bool major = (m == 1) || (m == 2) || (m == 5);
-
-            g.setColour (juce::Colour (gridColour).withAlpha (major ? 0.9f : 0.45f));
-            g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
-
-            if (m == 1 || m == 2 || m == 5)
-            {
-                g.setColour (juce::Colour (gridTextColour));
-                const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
-                g.drawText (text, (int) x - 20, (int) plot.getBottom() + 2, 40, 14,
-                            juce::Justification::centred);
-            }
-        }
-    }
+    axis.drawGrid (g, plot, grid, gridMajor, gridText);
 
     // ---- 振幅エリア: dBグリッド ----
-    if (current.averages > 0 && ! columns.empty())
+    if (ampAuto && current.averages > 0 && ! columns.empty())
     {
         // 自動スケール（滑らかに追従）
         float minAmp = 1.0e9f, maxAmp = -1.0e9f;
@@ -223,95 +260,164 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     const auto mapAmpY = [&ampArea] (float db, float top, float span)
     { return ampArea.getY() + (top - db) / span * ampArea.getHeight(); };
 
-    for (int db = -100; db <= 40; db += 10)
+    const auto dbStep = ampSpan > 150.0f ? 20 : ampSpan > 60.0f ? 10 : 5;
+
+    for (int db = -160; db <= 80; db += dbStep)
     {
         const auto y = mapAmpY ((float) db, ampTop, ampSpan);
 
         if (y < ampArea.getY() - 1 || y > ampArea.getBottom() + 1)
             continue;
 
-        g.setColour (juce::Colour (gridColour));
+        g.setColour (grid);
         g.drawLine (ampArea.getX(), y, ampArea.getRight(), y, 1.0f);
 
-        g.setColour (juce::Colour (gridTextColour));
-        g.drawText (juce::String (db), 4, (int) y - 7, 38, 14, juce::Justification::centredRight);
+        g.setColour (gridText);
+        g.drawText (juce::String (db), 4, (int) y - 7, dBLabelStripWidth - 4, 14, juce::Justification::centredRight);
     }
 
     // ---- 下段: 位相グリッド ----
     for (int deg = -180; deg <= 180; deg += 90)
     {
         const auto y = lower.getY() + (180.0f - (float) deg) / 360.0f * lower.getHeight();
-        g.setColour (juce::Colour (gridColour));
+        g.setColour (grid);
         g.drawLine (lower.getX(), y, lower.getRight(), y, 1.0f);
 
-        g.setColour (juce::Colour (gridTextColour));
-        g.drawText (juce::String (deg), 4, (int) y - 7, 38, 14, juce::Justification::centredRight);
+        g.setColour (gridText);
+        g.drawText (juce::String (deg), 4, (int) y - 7, dBLabelStripWidth - 4, 14, juce::Justification::centredRight);
     }
 
     // コヒーレンスしきい値（点線）
-    g.setColour (juce::Colours::white.withAlpha (0.22f));
+    g.setColour (theme::get (theme::ColourId::text).withAlpha (0.22f));
     const auto thY = lower.getBottom() - coherenceThreshold * lower.getHeight();
     const float dashes[] = { 4.0f, 4.0f };
     g.drawDashedLine ({ lower.getX(), thY, lower.getRight(), thY }, dashes, 2, 1.0f);
 
     if (current.averages == 0 || columns.empty())
     {
-        g.setColour (juce::Colour (0xff6a7078));
+        g.setColour (gridText);
         g.setFont (juce::Font (juce::FontOptions (15.0f)));
         g.drawText (strings::graphPlaceholder, getLocalBounds(), juce::Justification::centred);
         return;
     }
 
-    // ---- カーブ（コヒーレンスがしきい値未満の区間は薄く: 仕様 3.1 / 5.5）----
-    auto appendCurve = [this] (juce::Path& path, const juce::Rectangle<float>& area, bool bright,
-                               auto&& valueOf, auto&& yOf)
+    // ---- カーブ描画ヘルパ（コヒーレンスがしきい値未満の区間は薄く: 仕様 3.1 / 5.5）----
+    auto strokeColumnCurve = [&] (juce::Graphics& graphics, const auto& curveColumns,
+                                  const juce::Rectangle<float>& area, const juce::Colour& colour,
+                                  float thickness, bool brightRunsOnly, bool dashed, float alphaDim,
+                                  auto&& valueOf, auto&& yOf, auto&& isBright)
     {
-        bool inRun = false;
+        juce::Path dimPath, brightPath;
+        bool inDim = false, inBright = false;
 
-        for (size_t i = 0; i < columns.size(); ++i)
+        const auto count = (int) curveColumns.size();
+
+        for (int i = 0; i < count; ++i)
         {
-            const auto& column = columns[i];
+            const auto& column = curveColumns[(size_t) i];
             const auto value = valueOf (column);
 
             if (! std::isfinite (value))
             {
-                inRun = false;
+                inDim = inBright = false;
                 continue;
             }
 
-            const auto isBright = column.coherence >= coherenceThreshold;
-
-            if (isBright != bright)
-            {
-                inRun = false;
-                continue;
-            }
-
-            const auto x = area.getX() + (float) i / (float) (columns.size() - 1) * area.getWidth();
+            const auto x = count > 1 ? area.getX() + (float) i / (float) (count - 1) * area.getWidth() : area.getX();
             const auto y = yOf (value);
+            const bool bright = isBright (column);
 
-            if (! inRun)
+            if (bright && brightRunsOnly)
             {
-                path.startNewSubPath (x, y);
-                inRun = true;
+                if (! inBright)
+                {
+                    brightPath.startNewSubPath (x, y);
+                    inBright = true;
+                }
+                else
+                    brightPath.lineTo (x, y);
+
+                inDim = false;
             }
             else
             {
-                path.lineTo (x, y);
+                if (! inDim)
+                {
+                    dimPath.startNewSubPath (x, y);
+                    inDim = true;
+                }
+                else
+                    dimPath.lineTo (x, y);
+
+                inBright = false;
             }
         }
+
+        if (dashed)
+        {
+            // 点線は createDashedStroke で描く（破線パスをfillPathする）
+            juce::Path combined = brightPath;
+            combined.addPath (dimPath);
+            juce::Path dashedPath;
+            const float dashPattern[] = { 5.0f, 4.0f };
+            juce::PathStrokeType (thickness).createDashedStroke (dashedPath, combined, dashPattern, 2);
+            graphics.setColour (colour.withAlpha (alphaDim));
+            graphics.fillPath (dashedPath);
+            return;
+        }
+
+        graphics.setColour (colour.withAlpha (alphaDim));
+        graphics.strokePath (dimPath, juce::PathStrokeType (thickness));
+        graphics.setColour (colour);
+        graphics.strokePath (brightPath, juce::PathStrokeType (thickness + 0.4f));
     };
 
-    const auto ampOf = [] (const DisplayColumn& column)
+    const auto ampOf = [] (const auto& column)
     { return 20.0f * std::log10 (juce::jmax (std::abs (column.h), 1.0e-9f)); };
-    const auto phaseOf = [] (const DisplayColumn& column)
-    { return std::arg (column.h) * 180.0f / juce::MathConstants<float>::pi; };
+
+    // 遅延補正済み位相（仕様 3.1 / 3.3）: arg(H) − 2πf·τ
+    auto phaseOfLive = [this] (const DisplayColumn& column)
+    {
+        auto deg = std::arg (std::complex<double> (column.h.real(), column.h.imag()))
+                 * 180.0 / juce::MathConstants<double>::pi;
+
+        if (! showRawPhase && appliedDelaySamples != 0.0 && current.sampleRate > 0.0)
+        {
+            const auto correction = -360.0 * column.freq * appliedDelaySamples / current.sampleRate;
+            deg += correction;
+        }
+
+        return (float) std::remainder ((double) deg, 360.0);
+    };
+
     const auto ampY = [&ampArea, top = ampTop, span = ampSpan] (float db)
     { return ampArea.getY() + (top - db) / span * ampArea.getHeight(); };
     const auto phaseY = [&lower] (float deg) { return lower.getY() + (180.0f - deg) / 360.0f * lower.getHeight(); };
     const auto cohY = [&lower] (float c) { return lower.getBottom() - c * lower.getHeight(); };
 
-    // コヒーレンス（下段の背景として）
+    // ---- オーバーレイ（先に描いて主役を目立たせる）----
+    for (size_t s = 0; s < overlayColumns.size(); ++s)
+    {
+        const auto& source = overlaySources[s];
+        const auto& curve = overlayColumns[s];
+
+        if (curve.empty())
+            continue;
+
+        const auto overlayAmpOf = ampOf;
+        const auto overlayPhaseOf = [] (const OverlayColumn& column)
+        { return (float) (std::arg (std::complex<double> (column.h.real(), column.h.imag()))
+                          * 180.0 / juce::MathConstants<double>::pi); };
+
+        strokeColumnCurve (g, curve, ampArea, source.colour, source.thickness, false, source.dashed, 1.0f,
+                           overlayAmpOf, ampY, [] (const OverlayColumn&) { return true; });
+
+        if (source.showPhase)
+            strokeColumnCurve (g, curve, lower, source.colour, source.thickness, false, source.dashed, 0.8f,
+                               overlayPhaseOf, phaseY, [] (const OverlayColumn&) { return true; });
+    }
+
+    // ---- コヒーレンス（下段の背景として）----
     juce::Path coherencePath;
 
     for (size_t i = 0; i < columns.size(); ++i)
@@ -325,26 +431,20 @@ void FrequencyGraphView::paint (juce::Graphics& g)
             coherencePath.lineTo (x, y);
     }
 
-    g.setColour (juce::Colour (coherenceColour).withAlpha (0.55f));
+    g.setColour (gridText.withAlpha (0.55f));
     g.strokePath (coherencePath, juce::PathStrokeType (1.0f));
 
-    // 振幅
-    juce::Path ampDim, ampBright;
-    appendCurve (ampDim, ampArea, false, ampOf, ampY);
-    appendCurve (ampBright, ampArea, true, ampOf, ampY);
-    g.setColour (juce::Colour (ampCurveColour).withAlpha (dimmedAlpha));
-    g.strokePath (ampDim, juce::PathStrokeType (1.2f));
-    g.setColour (juce::Colour (ampCurveColour));
-    g.strokePath (ampBright, juce::PathStrokeType (1.6f));
+    // ---- ライブの測定カーブ ----
+    const auto liveColour = theme::get (theme::ColourId::accent);
+    const auto livePhaseColour = theme::get (theme::ColourId::accent2);
 
-    // 位相
-    juce::Path phaseDim, phaseBright;
-    appendCurve (phaseDim, lower, false, phaseOf, phaseY);
-    appendCurve (phaseBright, lower, true, phaseOf, phaseY);
-    g.setColour (juce::Colour (phaseCurveColour).withAlpha (dimmedAlpha));
-    g.strokePath (phaseDim, juce::PathStrokeType (1.2f));
-    g.setColour (juce::Colour (phaseCurveColour));
-    g.strokePath (phaseBright, juce::PathStrokeType (1.6f));
+    strokeColumnCurve (g, columns, ampArea, liveColour, 1.2f, true, false, dimmedAlpha,
+                       ampOf, ampY,
+                       [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
+
+    strokeColumnCurve (g, columns, lower, livePhaseColour, 1.2f, true, false, dimmedAlpha,
+                       phaseOfLive, phaseY,
+                       [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
 
     // ---- カーソル読み取り（仕様 5.2）----
     if (hoverColumn >= 0 && hoverColumn < (int) columns.size())
@@ -352,15 +452,12 @@ void FrequencyGraphView::paint (juce::Graphics& g)
         const auto& column = columns[(size_t) hoverColumn];
         const auto x = ampArea.getX() + (float) hoverColumn / (float) (columns.size() - 1) * ampArea.getWidth();
 
-        g.setColour (juce::Colours::white.withAlpha (0.25f));
+        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.25f));
         g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
 
-        const auto freqText = column.freq >= 1000.0
-                                  ? juce::String (column.freq / 1000.0, 2) + " kHz"
-                                  : juce::String (column.freq, 1) + " Hz";
         const auto ampDb = ampOf (column);
-        const auto phaseDeg = phaseOf (column);
-        const auto readout = freqText + "   " + juce::String (ampDb, 1) + " dB   "
+        const auto phaseDeg = phaseOfLive (column);
+        const auto readout = LogFrequencyAxis::freqText (column.freq) + "   " + juce::String (ampDb, 1) + " dB   "
                            + juce::String (phaseDeg, 1) + strings::degreeSymbol
                            + "   " + strings::gammaSquared + " " + juce::String (column.coherence, 2);
 
@@ -368,7 +465,7 @@ void FrequencyGraphView::paint (juce::Graphics& g)
         const auto box = juce::Rectangle<float> (ampArea.getRight() - 340.0f, ampArea.getY() + 4, 340.0f, 20.0f);
         g.setColour (juce::Colours::black.withAlpha (0.65f));
         g.fillRoundedRectangle (box, 4.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.9f));
+        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));
         g.drawText (readout, box, juce::Justification::centred);
     }
 }

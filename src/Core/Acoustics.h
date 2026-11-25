@@ -18,4 +18,22 @@ namespace eeq::acoustics
     return distanceMetres / speedOfSoundMetresPerSecond (airTemperatureCelsius) * 1000.0;
 }
 
+/** 遅延 [ms] → 距離 [m]（気温補正つき。提案値の妥当性チェックに使う: 仕様 3.3.2） */
+[[nodiscard]] inline constexpr double distanceMetresForDelay (double delayMilliseconds, double airTemperatureCelsius) noexcept
+{
+    return delayMilliseconds * speedOfSoundMetresPerSecond (airTemperatureCelsius) / 1000.0;
+}
+
+/** 遅延 [ms] → サンプル数 */
+[[nodiscard]] inline constexpr double samplesForDelayMs (double delayMilliseconds, double sampleRate) noexcept
+{
+    return delayMilliseconds * sampleRate / 1000.0;
+}
+
+/** サンプル数 → 遅延 [ms] */
+[[nodiscard]] inline constexpr double delayMsForSamples (double samples, double sampleRate) noexcept
+{
+    return samples * 1000.0 / sampleRate;
+}
+
 } // namespace eeq::acoustics

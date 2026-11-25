@@ -1,25 +1,10 @@
 #include "TopBar.h"
 
+#include "Buttons.h"
 #include "Strings.h"
 
 namespace eeq::ui
 {
-namespace
-{
-void styleCombo (juce::ComboBox& combo)
-{
-    combo.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff26282e));
-    combo.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff34373f));
-    combo.setColour (juce::ComboBox::textColourId, juce::Colour (0xffe4e6ea));
-    combo.setColour (juce::ComboBox::arrowColourId, juce::Colour (0xff8a9099));
-}
-
-void styleLabel (juce::Label& label)
-{
-    label.setColour (juce::Label::textColourId, juce::Colour (0xff9aa0a8));
-    label.setFont (juce::Font (juce::FontOptions (12.5f)));
-}
-} // namespace
 
 TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
     : engine (engineIn),
@@ -37,7 +22,7 @@ TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
 
     for (auto* label : { &inputDeviceTitle, &outputDeviceTitle, &rateTitle, &bufferTitle, &refTitle, &measTitle, &outTitle })
     {
-        styleLabel (*label);
+        styleLabel (*label, 12.5f);
         addAndMakeVisible (label);
     }
 
@@ -50,6 +35,26 @@ TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
 
     for (auto* meter : { &refMeter, &measMeter, &outMeter })
         addAndMakeVisible (meter);
+
+    // 本番モード（5.4）へのワンボタン切替
+    styleAccentButton (liveModeButton);
+    liveModeButton.setButtonText (strings::tabLiveMode);
+    liveModeButton.onClick = [this]
+    {
+        if (onLiveModeRequested != nullptr)
+            onLiveModeRequested();
+    };
+    addAndMakeVisible (liveModeButton);
+
+    // ダーク/ライト切替（仕様 5.）
+    styleButton (themeButton);
+    themeButton.setButtonText (strings::themeToggle);
+    themeButton.onClick = [this]
+    {
+        if (onThemeToggleRequested != nullptr)
+            onThemeToggleRequested();
+    };
+    addAndMakeVisible (themeButton);
 
     rebuildAll();
 }
@@ -114,21 +119,26 @@ void TopBar::resized()
     place (bufferTitle, row1, 56);
     bufferCombo.setBounds (row1.removeFromLeft (105));
 
-    // 2行目: [Ref] [Meas] [出力] の各割当と、右側に3本のメーター
+    // 2行目: [Ref] [Meas] [出力] の各割当、右側にテーマ/本番モードのボタンと3本のメーター
     place (refTitle, row2, 32);
-    place (refCombo, row2, 150);
+    place (refCombo, row2, 130);
     place (measTitle, row2, 42);
-    place (measCombo, row2, 150);
+    place (measCombo, row2, 130);
     place (outTitle, row2, 36);
-    place (outCombo, row2, 150);
+    outCombo.setBounds (row2.removeFromLeft (130));
 
-    auto metersArea = row2;
-    const auto meterWidth = juce::jmin (130, (metersArea.getWidth() - 16) / 3);
-    outMeter.setBounds (metersArea.removeFromRight (meterWidth));
-    metersArea.removeFromRight (10);
-    measMeter.setBounds (metersArea.removeFromRight (meterWidth));
-    metersArea.removeFromRight (10);
-    refMeter.setBounds (metersArea.removeFromRight (meterWidth));
+    auto rightArea = row2;
+    themeButton.setBounds (rightArea.removeFromRight (96).withSizeKeepingCentre (96, 24));
+    rightArea.removeFromRight (6);
+    liveModeButton.setBounds (rightArea.removeFromRight (96).withSizeKeepingCentre (96, 24));
+    rightArea.removeFromRight (10);
+
+    const auto meterWidth = juce::jmin (110, (rightArea.getWidth() - 16) / 3);
+    outMeter.setBounds (rightArea.removeFromRight (meterWidth));
+    rightArea.removeFromRight (8);
+    measMeter.setBounds (rightArea.removeFromRight (meterWidth));
+    rightArea.removeFromRight (8);
+    refMeter.setBounds (rightArea.removeFromRight (meterWidth));
 }
 
 void TopBar::comboBoxChanged (juce::ComboBox* combo)

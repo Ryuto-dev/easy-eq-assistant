@@ -1,6 +1,8 @@
 #include "BottomBar.h"
 
 #include "../Core/Log.h"
+#include "../DSP/SweepGenerator.h"
+#include "Buttons.h"
 #include "Strings.h"
 
 namespace eeq::ui
@@ -9,11 +11,8 @@ namespace eeq::ui
 BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     : engine (engineIn)
 {
+    styleAccentButton (measurementButton);
     measurementButton.setButtonText (strings::measurementStartButton);
-    measurementButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
-    measurementButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
-    measurementButton.setWantsKeyboardFocus (false);
-    measurementButton.setMouseClickGrabsKeyboardFocus (false);
     measurementButton.onClick = [this]
     {
         auto& measurement = engine.getMeasurement();
@@ -25,11 +24,8 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     };
     addAndMakeVisible (measurementButton);
 
+    styleButton (resetButton);
     resetButton.setButtonText (strings::resetAveragesButton);
-    resetButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff33363d));
-    resetButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
-    resetButton.setWantsKeyboardFocus (false);
-    resetButton.setMouseClickGrabsKeyboardFocus (false);
     resetButton.onClick = [this]
     {
         engine.getMeasurement().resetAverages();
@@ -37,50 +33,137 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     };
     addAndMakeVisible (resetButton);
 
+    styleButton (snapshotButton);
+    snapshotButton.setButtonText (strings::snapshotButton);
+    snapshotButton.onClick = [this]
+    {
+        if (onSnapshotRequested != nullptr)
+            onSnapshotRequested();
+    };
+    addAndMakeVisible (snapshotButton);
+
+    styleButton (delayButton);
+    delayButton.setButtonText (strings::delayMeasureButton);
+    delayButton.onClick = [this]
+    {
+        if (onDelayMeasureRequested != nullptr)
+            onDelayMeasureRequested();
+    };
+    addAndMakeVisible (delayButton);
+
+    styleButton (calibrationButton);
+    calibrationButton.setButtonText (strings::calibrationButton);
+    calibrationButton.onClick = [this]
+    {
+        if (onCalibrationRequested != nullptr)
+            onCalibrationRequested();
+    };
+    addAndMakeVisible (calibrationButton);
+
+    // 励起信号（仕様 3.2）: ピンクノイズ（既定）/ スイープ / WAV / 外部入力のみ
+    styleCombo (excitationCombo);
+    excitationCombo.addItem (strings::excitationPinkNoise, 1);
+    excitationCombo.addItem (strings::excitationSweep, 2);
+    excitationCombo.addItem (strings::excitationWav, 3);
+    excitationCombo.addItem (strings::excitationExternal, 4);
+    excitationCombo.setSelectedId (1, juce::dontSendNotification);
+    excitationCombo.onChange = [this] { applyExcitationSource (excitationCombo.getSelectedId()); };
+    addAndMakeVisible (excitationCombo);
+
+    styleAccentButton (noiseButton);
     noiseButton.setButtonText (strings::startNoiseButton);
-    noiseButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
-    noiseButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
-    // マウス専用にする（クリックでフォーカスを取らず、Space/Enterの誤発火を防ぐ）
-    noiseButton.setWantsKeyboardFocus (false);
-    noiseButton.setMouseClickGrabsKeyboardFocus (false);
     noiseButton.onClick = [this]
     {
         if (engine.isNoiseAudible())
         {
-            eeq::log::write ("noise button: stop clicked");
-            engine.stopNoise();
+            eeq::log::write ("excitation button: stop clicked");
+            engine.stopExcitation();
         }
         else
         {
-            eeq::log::write ("noise button: start clicked");
-            engine.startNoise();
+            eeq::log::write ("excitation button: start clicked");
+            engine.startExcitation();
         }
     };
     addAndMakeVisible (noiseButton);
 
     levelTitle.setText (strings::outputLevelLabel, juce::dontSendNotification);
     levelTitle.setJustificationType (juce::Justification::centredRight);
-    levelTitle.setColour (juce::Label::textColourId, juce::Colour (0xff9aa0a8));
-    levelTitle.setFont (juce::Font (juce::FontOptions (12.5f)));
+    styleLabel (levelTitle);
     addAndMakeVisible (levelTitle);
 
+    styleSlider (levelSlider);
     levelSlider.setRange (-60.0, 0.0, 0.5);
     levelSlider.setValue (engine.getNoiseLevelDb(), juce::dontSendNotification);
     levelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, 24);
     levelSlider.setTextValueSuffix (" dBFS");
-    levelSlider.setColour (juce::Slider::backgroundColourId, juce::Colour (0xff26282e));
-    levelSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff3fc9d2));
-    levelSlider.setColour (juce::Slider::thumbColourId, juce::Colour (0xffdfe2e6));
-    levelSlider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe4e6ea));
-    levelSlider.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff26282e));
-    levelSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff34373f));
     levelSlider.addListener (this);
     addAndMakeVisible (levelSlider);
 
-    statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff777d86));
+    statusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     statusLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
     statusLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLabel);
+}
+
+void BottomBar::applyExcitationSource (int comboId)
+{
+    if (comboId == lastExcitationId)
+        return;
+
+    lastExcitationId = comboId;
+    auto& measurement = engine.getMeasurement();
+
+    switch (comboId)
+    {
+        case 2:
+        {
+            // ログスイープ（既定 10 秒。長さは IR・遅延タブで変えられる。仕様 3.2: 2〜30秒）
+            const auto sampleRate = engine.getCurrentSampleRate();
+            auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0,
+                                                                (float) juce::Decibels::decibelsToGain (engine.getNoiseLevelDb()));
+            engine.setSweep (std::move (sweep));
+            break;
+        }
+
+        case 3:
+        {
+            // WAVファイルを選んで読み込む
+            auto chooser = std::make_shared<juce::FileChooser> (strings::wavFileChooserTitle,
+                                                                juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                                "*.wav;*.aiff;*.aif");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [this, chooser] (const juce::FileChooser& fc)
+                {
+                    const auto file = fc.getResult();
+
+                    if (file == juce::File())
+                    {
+                        excitationCombo.setSelectedId (1, juce::sendNotificationSync);
+                        return;
+                    }
+
+                    juce::String error;
+
+                    if (! engine.loadWavExcitation (file, error))
+                    {
+                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                            strings::wavLoadFailed, error, strings::okButton, nullptr, nullptr);
+                        excitationCombo.setSelectedId (1, juce::sendNotificationSync);
+                    }
+                });
+            break;
+        }
+
+        case 4:
+            engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::external);
+            break;
+
+        case 1:
+        default:
+            engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::pinkNoise);
+            break;
+    }
 }
 
 void BottomBar::update()
@@ -104,27 +187,37 @@ void BottomBar::setStatusText (const juce::String& text)
 
 void BottomBar::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xff1a1c20));
+    g.setColour (theme::get (theme::ColourId::panelBackground));
     g.fillRect (getLocalBounds());
-    g.setColour (juce::Colour (0xff2c2f36));
+    g.setColour (theme::get (theme::ColourId::controlOutline));
     g.fillRect (getLocalBounds().removeFromTop (1));
 }
 
 void BottomBar::resized()
 {
-    auto bounds = getLocalBounds().reduced (12, 8);
+    auto bounds = getLocalBounds().reduced (8, 8);
 
-    measurementButton.setBounds (bounds.removeFromLeft (96).withSizeKeepingCentre (96, 30));
-    bounds.removeFromLeft (8);
-    resetButton.setBounds (bounds.removeFromLeft (108).withSizeKeepingCentre (108, 30));
-    bounds.removeFromLeft (20);
+    measurementButton.setBounds (bounds.removeFromLeft (86).withSizeKeepingCentre (86, 30));
+    bounds.removeFromLeft (6);
+    resetButton.setBounds (bounds.removeFromLeft (96).withSizeKeepingCentre (96, 30));
+    bounds.removeFromLeft (10);
 
-    noiseButton.setBounds (bounds.removeFromLeft (140).withSizeKeepingCentre (140, 30));
-    bounds.removeFromLeft (24);
+    snapshotButton.setBounds (bounds.removeFromLeft (104).withSizeKeepingCentre (104, 30));
+    bounds.removeFromLeft (6);
+    delayButton.setBounds (bounds.removeFromLeft (72).withSizeKeepingCentre (72, 30));
+    bounds.removeFromLeft (6);
+    calibrationButton.setBounds (bounds.removeFromLeft (56).withSizeKeepingCentre (56, 30));
+    bounds.removeFromLeft (12);
 
-    levelTitle.setBounds (bounds.removeFromLeft (80));
-    bounds.removeFromLeft (8);
-    levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (300, bounds.getWidth())).withSizeKeepingCentre (juce::jmin (300, bounds.getWidth()), 30));
+    excitationCombo.setBounds (bounds.removeFromLeft (128).withSizeKeepingCentre (128, 26));
+    bounds.removeFromLeft (6);
+    noiseButton.setBounds (bounds.removeFromLeft (104).withSizeKeepingCentre (104, 30));
+    bounds.removeFromLeft (12);
+
+    levelTitle.setBounds (bounds.removeFromLeft (70));
+    bounds.removeFromLeft (6);
+    levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (250, bounds.getWidth())).withSizeKeepingCentre (
+        juce::jmin (250, bounds.getWidth()), 30));
 
     statusLabel.setBounds (bounds.withTrimmedLeft (12));
 }

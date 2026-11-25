@@ -74,11 +74,31 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/FrequencyGraphView.h
     src/UI/MeasurementPanel.cpp
     src/UI/MeasurementPanel.h
+    src/UI/TransferFunctionTab.cpp
+    src/UI/TransferFunctionTab.h
+    src/UI/DelayIrTab.cpp
+    src/UI/DelayIrTab.h
+    src/UI/RtaSplTab.h
+    src/UI/EQTab.h
+    src/UI/LimitTestTab.h
+    src/UI/UtilitiesTab.h
+    src/UI/VenueTab.h
+    src/UI/LiveModeOverlay.cpp
+    src/UI/LiveModeOverlay.h
+    src/UI/UiContext.h
+    src/UI/LogFrequencyGraph.h
+    src/UI/Theme.h
+    src/UI/Buttons.h
     src/UI/Strings.h
     src/Core/Acoustics.h
     src/Core/Utilities.h
     src/Core/Log.cpp
     src/Core/Log.h
+    src/Core/KeepAwake.h
+    src/Core/ProjectStore.cpp
+    src/Core/ProjectStore.h
+    src/Core/Exporters.cpp
+    src/Core/Exporters.h
     src/Core/SystemCorrection.h
     src/Core/MicPermission.h
 )

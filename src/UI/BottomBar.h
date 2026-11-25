@@ -7,8 +7,8 @@
 namespace eeq::ui
 {
 
-// 下部バー（仕様 5.1 下部バー相当）: 測定 Start/Stop、平均リセット、
-// ピンクノイズの開始/停止、出力レベル、状態表示。
+// 下部バー（仕様 5.1 下部バー）: Start/Stop、平均リセット、スナップショット保存、遅延測定、
+// 校正、励起信号（ピンクノイズ/スイープ/WAV/外部）の開始/停止、出力レベル、状態表示。
 // 出力レベルが −20 dBFS（engine.outputLevelLimitDb）を超えるときは確認ダイアログを出す（仕様 3.2）。
 class BottomBar : public juce::Component, private juce::Slider::Listener
 {
@@ -19,6 +19,13 @@ public:
     void update();
     void setStatusText (const juce::String& text);
 
+    /** スナップショット保存（Sキー/ボタン共通） */
+    std::function<void()> onSnapshotRequested;
+    /** 遅延測定（IR・遅延タブへ移動して実行） */
+    std::function<void()> onDelayMeasureRequested;
+    /** 校正（RTA・SPLタブへ移動） */
+    std::function<void()> onCalibrationRequested;
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -26,13 +33,17 @@ private:
     void sliderValueChanged (juce::Slider*) override;
     void sliderDragEnded (juce::Slider*) override;
     void confirmOverLimitIfNeeded();
+    void applyExcitationSource (int comboId);
 
     eeq::audio::AudioEngine& engine;
 
     juce::TextButton measurementButton, resetButton, noiseButton;
+    juce::TextButton snapshotButton, delayButton, calibrationButton;
+    juce::ComboBox excitationCombo;
     juce::Label levelTitle, statusLabel;
     juce::Slider levelSlider;
 
+    int lastExcitationId = 1; // 変化検出（デバイス再構築でコンボが再設定されても発火させない）
     bool overLimitConfirmed = false;
     bool dialogOpen = false;
 };

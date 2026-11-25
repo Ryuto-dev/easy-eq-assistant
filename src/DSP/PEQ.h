@@ -123,7 +123,7 @@ struct Coeffs
     const auto num = c.b0 + c.b1 * z1 + c.b2 * z2;
     const auto den = 1.0 + c.a1 * z1 + c.a2 * z2;
 
-    return 20.0 * std::log10 (std::max (std::abs (num) / std::max (std::abs (den), 1.0e-12), 1.0e-12));
+    return 20.0 * std::log10 (juce::jmax (std::abs (num) / juce::jmax (std::abs (den), 1.0e-12), 1.0e-12));
 }
 
 /** 複数帯域の直列（カスケード）応答。EQ案の予測カーブ計算に使う（仕様 4.4） */
