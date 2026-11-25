@@ -32,6 +32,8 @@ juce_add_gui_app(EasyEQAssistant
     COMPANY_NAME "Ryuto"
     BUNDLE_ID "com.ryuto.easyeqassistant"
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/icon_1024.png"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "このアプリは、スピーカー系の周波数特性を測定するためにマイク入力を使用します。"
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
