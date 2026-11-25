@@ -129,7 +129,7 @@ target_link_libraries(EasyEQAssistant PRIVATE
 )
 
 if(APPLE)
-    target_link_libraries(EasyEQAssistant PRIVATE "-framework AVFoundation")
+    target_link_libraries(EasyEQAssistant PRIVATE "-framework AVFoundation" "-framework IOKit")
 endif()
 
 # ---- ASIO（Windows・任意）----

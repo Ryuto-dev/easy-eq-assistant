@@ -453,7 +453,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 playbackPosition.store (0, std::memory_order_relaxed);
 
                 // スイープ/WAVは開始時にUIスレッドが用意したバッファへ取り替える
-                if (activeSweep != nullptr)
+                //（ソースを切り替えた直後の開始でも確実に新しいバッファを使う）
+                if (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
                     activeBuffer.store (pendingBuffer.load (std::memory_order_relaxed), std::memory_order_relaxed);
             }
             break;
@@ -711,43 +712,48 @@ void AudioEngine::openInitialDevice()
         return;
 
     // デバイスタイプの優先順位（仕様 6.1）:
-    //   Windows は ASIO を優先し、なければ WASAPI へフォールバック。Mac は CoreAudio
-    juce::AudioIODeviceType* chosen = types[0];
-
-    for (auto* type : types)
+    //   Windows は ASIO を最優先、なければ WASAPI（共有 "Windows Audio"）へフォールバック。
+    //   Mac は CoreAudio。どれも使えなければ先頭の型
+    auto hasDevices = [] (juce::AudioIODeviceType* type)
     {
         type->scanForDevices();
+        return type->getDeviceNames (true).size() + type->getDeviceNames (false).size() > 0;
+    };
 
-       #if JUCE_WINDOWS
-        if (type->getTypeName().containsIgnoreCase ("ASIO") && type->getDeviceNames (false).size() > 0)
+    auto findType = [&types, &hasDevices] (bool exact, const juce::String& name)
+    {
+        for (auto* type : types)
         {
-            chosen = type;
-            break;
-        }
-       #endif
+            const auto matches = exact ? type->getTypeName() == name
+                                       : type->getTypeName().containsIgnoreCase (name);
 
-       #if JUCE_MAC
-        if (type->getTypeName().containsIgnoreCase ("CoreAudio")
-            && type->getDeviceNames (true).size() + type->getDeviceNames (false).size() > 0)
-            chosen = type;
-       #else
-        if (type->getTypeName().containsIgnoreCase ("Windows Audio")
-            && type->getDeviceNames (true).size() + type->getDeviceNames (false).size() > 0)
-            chosen = type;
-       #endif
-    }
+            if (matches && hasDevices (type))
+                return type;
+        }
+
+        return (juce::AudioIODeviceType*) nullptr;
+    };
+
+    juce::AudioIODeviceType* chosen = nullptr;
 
    #if JUCE_WINDOWS
-    // ASIO が使えるなら最優先に切り替える（上のループで見つかっていなければここで探す）
-    for (auto* type : types)
-    {
-        if (type->getTypeName().containsIgnoreCase ("ASIO") && type->getDeviceNames (false).size() > 0)
-        {
-            chosen = type;
-            break;
-        }
-    }
+    chosen = findType (false, "ASIO");           // 仕様 6.1: ASIO を優先
+    if (chosen == nullptr)
+        chosen = findType (true, "Windows Audio"); // WASAPI 共有
+    if (chosen == nullptr)
+        chosen = findType (false, "Windows Audio"); // WASAPI の他のモード
+   #elif JUCE_MAC
+    chosen = findType (true, "CoreAudio");
    #endif
+
+    if (chosen == nullptr && hasDevices (types[0]))
+        chosen = types[0];
+
+    if (chosen == nullptr)
+    {
+        eeq::log::write ("audio open FAILED: no usable device type");
+        return;
+    }
 
     deviceManager.setCurrentAudioDeviceType (chosen->getTypeName(), true);
 

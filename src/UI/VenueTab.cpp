@@ -109,6 +109,7 @@ VenueTab::VenueTab (UiContext& context)
         venue.date = juce::Time::getCurrentTime();
         venue.temperatureC = ctx.state.airTemperatureC.load();
         ctx.project.venues().push_back (venue);
+        ctx.state.snapshotVersion.fetch_add (1);
         refreshVenueList();
     };
     addAndMakeVisible (newVenueButton);
@@ -327,6 +328,7 @@ void VenueTab::loadProject()
             const auto error = ctx.project.loadFromFile (file);
             statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
                                  juce::dontSendNotification);
+            ctx.state.snapshotVersion.fetch_add (1);
             refreshVenueList();
             loadSelectedVenueFields();
         });
@@ -445,6 +447,11 @@ void VenueTab::listBoxItemClicked (int rowNumber, const juce::MouseEvent&)
 
     selectedVenueIndex = venueIndices[(size_t) rowNumber];
     ctx.project.setCurrentVenueIndex (selectedVenueIndex);
+
+    // 会場が変わるとスナップショット一覧（vector）も入れ替わる。
+    // 他タブが保持する生ポインタを張り替えさせるためバージョンを進める
+    ctx.state.snapshotVersion.fetch_add (1);
+
     loadSelectedVenueFields();
     micPointList.updateContent();
     sessionList.updateContent();

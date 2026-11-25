@@ -160,6 +160,15 @@ void LiveModeOverlay::paint (juce::Graphics& g)
         const auto count = (int) rtaCenters.size();
         const auto barWidth = rtaArea.getWidth() / (float) count;
 
+        // 表示レンジはフレーム内のピークから60 dB下まで（校正オフセットに影響されない）
+        float peakLevel = -300.0f;
+
+        for (const auto level : rtaLevels)
+            peakLevel = juce::jmax (peakLevel, level);
+
+        const auto rangeTop = peakLevel > -200.0f ? peakLevel : 0.0f;
+        const auto rangeBottom = rangeTop - 60.0f;
+
         for (int i = 0; i < count; ++i)
         {
             const auto db = rtaLevels[(size_t) i];
@@ -167,8 +176,7 @@ void LiveModeOverlay::paint (juce::Graphics& g)
             if (db < -200.0f)
                 continue;
 
-            // RTAのレベル範囲は 60 dB 幅で見る（SPLの校正オフセット込みの値を -60..0 に置く）
-            const auto normalized = juce::jlimit (0.0f, 1.0f, (db + 120.0f) / 60.0f);
+            const auto normalized = juce::jlimit (0.0f, 1.0f, (db - rangeBottom) / 60.0f);
             const auto h = normalized * (rtaArea.getHeight() - 16.0f);
             const auto x = rtaArea.getX() + (float) i * barWidth;
 

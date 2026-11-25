@@ -3,7 +3,8 @@
 #include <JuceHeader.h>
 
 // エラーとデバイス情報をローカルのログファイルに保存する（仕様 6.3）。
-// ~/Library/Application Support/EasyEQAssistant/eeq.log
+// macOS: ~/Library/Application Support/EasyEQAssistant/eeq.log
+// Windows: %APPDATA%\EasyEQAssistant\eeq.log
 
 namespace eeq::log
 {
