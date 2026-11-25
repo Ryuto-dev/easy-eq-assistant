@@ -27,20 +27,21 @@ TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
       measMeter (strings::measLabel),
       outMeter (strings::outLabel)
 {
-    deviceTitle.setText (strings::deviceLabel, juce::dontSendNotification);
+    inputDeviceTitle.setText (strings::inputDeviceLabel, juce::dontSendNotification);
+    outputDeviceTitle.setText (strings::outputDeviceLabel, juce::dontSendNotification);
     rateTitle.setText (strings::sampleRateLabel, juce::dontSendNotification);
     bufferTitle.setText (strings::bufferSizeLabel, juce::dontSendNotification);
     refTitle.setText (strings::refLabel, juce::dontSendNotification);
     measTitle.setText (strings::measLabel, juce::dontSendNotification);
     outTitle.setText (strings::outLabel, juce::dontSendNotification);
 
-    for (auto* label : { &deviceTitle, &rateTitle, &bufferTitle, &refTitle, &measTitle, &outTitle })
+    for (auto* label : { &inputDeviceTitle, &outputDeviceTitle, &rateTitle, &bufferTitle, &refTitle, &measTitle, &outTitle })
     {
         styleLabel (*label);
         addAndMakeVisible (label);
     }
 
-    for (auto* combo : { &deviceCombo, &rateCombo, &bufferCombo, &refCombo, &measCombo, &outCombo })
+    for (auto* combo : { &inputDeviceCombo, &outputDeviceCombo, &rateCombo, &bufferCombo, &refCombo, &measCombo, &outCombo })
     {
         styleCombo (*combo);
         combo->addListener (this);
@@ -96,12 +97,16 @@ void TopBar::resized()
         area.removeFromLeft (8);
     };
 
-    // 1行目: [デバイス] [デバイス名（可変幅）] [サンプルレート] [▽] [バッファ] [▽]
+    // 1行目: [入力デバイス][combo 可変] [出力デバイス][combo 可変] [サンプルレート][▽] [バッファ][▽]
     const auto fixedRightSide = 88 + 8 + 105 + 8 + 56 + 8 + 105; // レート+バッファ部分の合計幅
-    place (deviceTitle, row1, 62);
+    place (inputDeviceTitle, row1, 82);
 
-    const auto deviceWidth = juce::jmax (140, row1.getWidth() - fixedRightSide - 8);
-    deviceCombo.setBounds (row1.removeFromLeft (deviceWidth));
+    const auto deviceComboWidth = juce::jmax (120, (row1.getWidth() - fixedRightSide - 8 - 82 - 8 - 82 - 8) / 2);
+    inputDeviceCombo.setBounds (row1.removeFromLeft (deviceComboWidth));
+    row1.removeFromLeft (8);
+
+    place (outputDeviceTitle, row1, 82);
+    outputDeviceCombo.setBounds (row1.removeFromLeft (deviceComboWidth));
     row1.removeFromLeft (8);
 
     place (rateTitle, row1, 88);
@@ -131,9 +136,20 @@ void TopBar::comboBoxChanged (juce::ComboBox* combo)
     if (updating)
         return;
 
-    if (combo == &deviceCombo)
+    if (combo == &inputDeviceCombo)
     {
-        const auto error = engine.selectDevice (deviceCombo.getText());
+        const auto error = engine.selectInputDevice (inputDeviceCombo.getText());
+
+        if (error.isNotEmpty() && onError)
+            onError (error);
+
+        rebuildAll();
+        return;
+    }
+
+    if (combo == &outputDeviceCombo)
+    {
+        const auto error = engine.selectOutputDevice (outputDeviceCombo.getText());
 
         if (error.isNotEmpty() && onError)
             onError (error);
@@ -198,23 +214,9 @@ void TopBar::rebuildAll()
     const juce::ScopedValueSetter<bool> guard (updating, true);
     lastGeneration = engine.getDeviceGeneration();
 
-    // デバイス
-    deviceCombo.clear (juce::dontSendNotification);
-    const auto names = engine.getDeviceNames();
-
-    for (int i = 0; i < names.size(); ++i)
-        deviceCombo.addItem (names[i], i + 1);
-
-    const auto selectedDevice = engine.getSelectedDeviceName();
-    int deviceIndex = names.indexOf (selectedDevice);
-
-    if (deviceIndex < 0 && names.size() > 0)
-        deviceIndex = 0;
-
-    if (deviceIndex >= 0)
-        deviceCombo.setSelectedItemIndex (deviceIndex, juce::dontSendNotification);
-
-    deviceCombo.setTextWhenNothingSelected (strings::noDeviceInfo);
+    // デバイス（入力と出力は別々の一覧）
+    fillDeviceCombo (inputDeviceCombo, engine.getAvailableDeviceNames (true), engine.getSelectedInputDeviceName());
+    fillDeviceCombo (outputDeviceCombo, engine.getAvailableDeviceNames (false), engine.getSelectedOutputDeviceName());
 
     rebuildRateCombo();
     rebuildBufferCombo();
@@ -228,6 +230,24 @@ void TopBar::rebuildAll()
 
     engine.getOpenedOutputChannels (indices, channelNames);
     rebuildChannelCombo (outCombo, false, indices, channelNames, engine.getOutputChannel());
+}
+
+void TopBar::fillDeviceCombo (juce::ComboBox& combo, const juce::StringArray& names, const juce::String& selectedName)
+{
+    combo.clear (juce::dontSendNotification);
+
+    for (int i = 0; i < names.size(); ++i)
+        combo.addItem (names[i], i + 1);
+
+    auto selectedIndex = names.indexOf (selectedName);
+
+    if (selectedIndex < 0 && names.size() > 0)
+        selectedIndex = 0;
+
+    if (selectedIndex >= 0)
+        combo.setSelectedItemIndex (selectedIndex, juce::dontSendNotification);
+
+    combo.setTextWhenNothingSelected (strings::noDeviceInfo);
 }
 
 void TopBar::rebuildRateCombo()

@@ -8,6 +8,30 @@ namespace eeq::ui
 BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     : engine (engineIn)
 {
+    measurementButton.setButtonText (strings::measurementStartButton);
+    measurementButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
+    measurementButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
+    measurementButton.onClick = [this]
+    {
+        auto& measurement = engine.getMeasurement();
+
+        if (measurement.isMeasuring())
+            measurement.stopMeasurement();
+        else
+            measurement.startMeasurement();
+    };
+    addAndMakeVisible (measurementButton);
+
+    resetButton.setButtonText (strings::resetAveragesButton);
+    resetButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff33363d));
+    resetButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
+    resetButton.onClick = [this]
+    {
+        engine.getMeasurement().resetAverages();
+        engine.clearClipLatches();
+    };
+    addAndMakeVisible (resetButton);
+
     noiseButton.setButtonText (strings::startNoiseButton);
     noiseButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2e5a63));
     noiseButton.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e6ea));
@@ -38,6 +62,11 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     levelSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff34373f));
     levelSlider.addListener (this);
     addAndMakeVisible (levelSlider);
+
+    statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff777d86));
+    statusLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
+    statusLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (statusLabel);
 }
 
 void BottomBar::update()
@@ -46,6 +75,17 @@ void BottomBar::update()
     noiseButton.setButtonText (audible ? strings::stopNoiseButton : strings::startNoiseButton);
     noiseButton.setColour (juce::TextButton::buttonColourId,
                            audible ? juce::Colour (0xff8c3a3a) : juce::Colour (0xff2e5a63));
+
+    const auto measuring = engine.getMeasurement().isMeasuring();
+    measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
+    measurementButton.setColour (juce::TextButton::buttonColourId,
+                                 measuring ? juce::Colour (0xff8c3a3a) : juce::Colour (0xff2e5a63));
+}
+
+void BottomBar::setStatusText (const juce::String& text)
+{
+    if (statusLabel.getText() != text)
+        statusLabel.setText (text, juce::dontSendNotification);
 }
 
 void BottomBar::paint (juce::Graphics& g)
@@ -60,12 +100,19 @@ void BottomBar::resized()
 {
     auto bounds = getLocalBounds().reduced (12, 8);
 
-    noiseButton.setBounds (bounds.removeFromLeft (150).withSizeKeepingCentre (150, 30));
+    measurementButton.setBounds (bounds.removeFromLeft (96).withSizeKeepingCentre (96, 30));
+    bounds.removeFromLeft (8);
+    resetButton.setBounds (bounds.removeFromLeft (108).withSizeKeepingCentre (108, 30));
+    bounds.removeFromLeft (20);
+
+    noiseButton.setBounds (bounds.removeFromLeft (140).withSizeKeepingCentre (140, 30));
     bounds.removeFromLeft (24);
 
     levelTitle.setBounds (bounds.removeFromLeft (80));
     bounds.removeFromLeft (8);
-    levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (360, bounds.getWidth())).withSizeKeepingCentre (juce::jmin (360, bounds.getWidth()), 30));
+    levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (300, bounds.getWidth())).withSizeKeepingCentre (juce::jmin (300, bounds.getWidth()), 30));
+
+    statusLabel.setBounds (bounds.withTrimmedLeft (12));
 }
 
 void BottomBar::sliderValueChanged (juce::Slider* slider)

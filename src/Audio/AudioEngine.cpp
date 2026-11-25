@@ -46,7 +46,9 @@ juce::String channelDisplayName (int index, const juce::String& name, bool input
 } // namespace
 
 AudioEngine::AudioEngine (juce::PropertiesFile* settingsToUse)
-    : settings (settingsToUse)
+    : settings (settingsToUse),
+      measurementRing (1 << 18),
+      measurement (measurementRing)
 {
     deviceManager.addAudioCallback (this);
     openInitialDevice();
@@ -59,46 +61,51 @@ AudioEngine::~AudioEngine()
 }
 
 //==============================================================================
-// デバイス
+// デバイス（入力と出力は別々に選べる）
 
-juce::StringArray AudioEngine::getDeviceNames() const
+juce::StringArray AudioEngine::getAvailableDeviceNames (bool wantInputNames) const
 {
     if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-        return type->getDeviceNames();
+        return type->getDeviceNames (wantInputNames);
 
     return {};
 }
 
-juce::String AudioEngine::getSelectedDeviceName() const
+juce::String AudioEngine::getSelectedInputDeviceName() const
 {
-    if (auto* device = deviceManager.getCurrentAudioDevice())
-        return device->getName();
-
-    return {};
+    return deviceManager.getAudioDeviceSetup().inputDeviceName;
 }
 
-juce::String AudioEngine::selectDevice (const juce::String& deviceName)
+juce::String AudioEngine::getSelectedOutputDeviceName() const
+{
+    return deviceManager.getAudioDeviceSetup().outputDeviceName;
+}
+
+juce::String AudioEngine::selectInputDevice (const juce::String& deviceName)
 {
     auto setup = deviceManager.getAudioDeviceSetup();
     setup.inputDeviceName = deviceName;
-    setup.outputDeviceName = deviceName;
     setup.useDefaultInputChannels = false;
-    setup.useDefaultOutputChannels = false;
     setup.inputChannels.clear();
     setup.inputChannels.setRange (0, 64, true);
+
+    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+
+    if (error.isEmpty())
+        saveSettings();
+
+    return error;
+}
+
+juce::String AudioEngine::selectOutputDevice (const juce::String& deviceName)
+{
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.outputDeviceName = deviceName;
+    setup.useDefaultOutputChannels = false;
     setup.outputChannels.clear();
     setup.outputChannels.setRange (0, 64, true);
 
     auto error = deviceManager.setAudioDeviceSetup (setup, true);
-
-    if (error.isNotEmpty())
-    {
-        // 全チャンネル開放に失敗したら、既定の構成で再試行する
-        auto fallback = setup;
-        fallback.useDefaultInputChannels = true;
-        fallback.useDefaultOutputChannels = true;
-        error = deviceManager.setAudioDeviceSetup (fallback, true);
-    }
 
     if (error.isEmpty())
         saveSettings();
@@ -177,8 +184,19 @@ void AudioEngine::getOpenedOutputChannels (juce::Array<int>& indicesOut, juce::S
 juce::String AudioEngine::getStatusText() const
 {
     if (auto* device = deviceManager.getCurrentAudioDevice())
-        return device->getName() + "   /   " + juce::String (device->getCurrentSampleRate(), 0) + " Hz   /   "
+    {
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        const auto inputName = setup.inputDeviceName.isNotEmpty()
+                                 ? setup.inputDeviceName
+                                 : juce::String (u8"(既定)");
+        const auto outputName = setup.outputDeviceName.isNotEmpty()
+                                  ? setup.outputDeviceName
+                                  : juce::String (u8"(既定)");
+
+        return juce::String (u8"入力: ") + inputName + "   /   " + juce::String (u8"出力: ") + outputName
+             + "   /   " + juce::String (device->getCurrentSampleRate(), 0) + " Hz   /   "
              + juce::String (device->getCurrentBufferSizeSamples()) + " samples";
+    }
 
     return {};
 }
@@ -242,7 +260,9 @@ void AudioEngine::saveSettings()
 
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
-        settings->setValue ("deviceName", device->getName());
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        settings->setValue ("inputDeviceName", setup.inputDeviceName);
+        settings->setValue ("outputDeviceName", setup.outputDeviceName);
         settings->setValue ("sampleRate", device->getCurrentSampleRate());
         settings->setValue ("bufferSize", device->getCurrentBufferSizeSamples());
     }
@@ -272,6 +292,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const auto level = juce::Decibels::decibelsToGain (noiseLevelDb.load (std::memory_order_relaxed));
     auto state = noiseState.load (std::memory_order_relaxed);
     auto position = fadePosition.load (std::memory_order_relaxed);
+
+    const float* refIn = (refIndex >= 0 && refIndex < numInputChannels) ? inputChannelData[refIndex] : nullptr;
+    const float* measIn = (measIndex >= 0 && measIndex < numInputChannels) ? inputChannelData[measIndex] : nullptr;
+    const auto streamCount = juce::jmin (numSamples, (int) refStream.size());
 
     float outPeak = 0.0f;
     double outSumSquares = 0.0;
@@ -304,7 +328,17 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         for (int ch = 0; ch < numOutputChannels; ++ch)
             if (auto* out = outputChannelData[ch])
                 out[i] = (ch == outIndex) ? sample : 0.0f;
+
+        // 測定ストリーム（仕様 2. の (1)）: Ref/Meas のペアをリングバッファへ書く
+        if (i < streamCount)
+        {
+            refStream[(size_t) i] = refIsInternal ? sample : (refIn != nullptr ? refIn[i] : 0.0f);
+            measStream[(size_t) i] = (measIn != nullptr ? measIn[i] : 0.0f);
+        }
     }
+
+    if (streamCount > 0)
+        measurementRing.write (refStream.data(), measStream.data(), streamCount);
 
     fadePosition.store (position, std::memory_order_relaxed);
     noiseState.store (state, std::memory_order_relaxed);
@@ -334,6 +368,16 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     currentSampleRate.store (sampleRate, std::memory_order_relaxed);
     currentBufferSize.store (device->getCurrentBufferSizeSamples(), std::memory_order_relaxed);
+
+    // 測定ストリーム用のスクラッチ（ここはメッセージスレッドなので確保してよい）
+    const auto needed = juce::jmax (8192, device->getCurrentBufferSizeSamples());
+
+    if ((int) refStream.size() < needed)
+    {
+        refStream.resize ((size_t) needed);
+        measStream.resize ((size_t) needed);
+    }
+
     fadeInLength.store ((int) (fadeInSeconds * sampleRate), std::memory_order_relaxed);
     fadeOutLength.store ((int) (fadeOutSeconds * sampleRate), std::memory_order_relaxed);
     deviceGeneration.fetch_add (1, std::memory_order_relaxed);
@@ -353,6 +397,7 @@ void AudioEngine::audioDeviceStopped() {}
 void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 {
     stopNoise();
+    measurement.stopMeasurement();
 
     {
         const juce::ScopedLock lock (errorMutex);
@@ -385,13 +430,14 @@ void AudioEngine::openInitialDevice()
 
     if (settings != nullptr)
     {
-        const auto savedName = settings->getValue ("deviceName");
+        const auto savedInputName = settings->getValue ("inputDeviceName");
+        const auto savedOutputName = settings->getValue ("outputDeviceName");
 
-        if (savedName.isNotEmpty())
-        {
-            setup.inputDeviceName = savedName;
-            setup.outputDeviceName = savedName;
-        }
+        if (savedInputName.isNotEmpty())
+            setup.inputDeviceName = savedInputName;
+
+        if (savedOutputName.isNotEmpty())
+            setup.outputDeviceName = savedOutputName;
 
         const auto savedRate = settings->getDoubleValue ("sampleRate", 0.0);
 

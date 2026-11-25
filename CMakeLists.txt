@@ -38,12 +38,21 @@ target_sources(EasyEQAssistant PRIVATE
     src/Audio/AudioEngine.cpp
     src/Audio/AudioEngine.h
     src/Audio/PinkNoiseGenerator.h
+    src/DSP/SampleRingBuffer.h
+    src/DSP/TransferFunctionAccumulator.cpp
+    src/DSP/TransferFunctionAccumulator.h
+    src/DSP/MeasurementEngine.cpp
+    src/DSP/MeasurementEngine.h
     src/UI/LevelMeter.cpp
     src/UI/LevelMeter.h
     src/UI/TopBar.cpp
     src/UI/TopBar.h
     src/UI/BottomBar.cpp
     src/UI/BottomBar.h
+    src/UI/FrequencyGraphView.cpp
+    src/UI/FrequencyGraphView.h
+    src/UI/MeasurementPanel.cpp
+    src/UI/MeasurementPanel.h
     src/UI/Strings.h
     src/Core/Acoustics.h
 )
@@ -80,9 +89,14 @@ if(EASYEQ_BUILD_TESTS)
 
     add_executable(EasyEQTests
         tests/AcousticsTests.cpp
+        tests/TransferFunctionTests.cpp
+        src/DSP/TransferFunctionAccumulator.cpp
     )
     target_include_directories(EasyEQTests PRIVATE src)
-    target_link_libraries(EasyEQTests PRIVATE gtest_main)
+    target_link_libraries(EasyEQTests PRIVATE
+        gtest_main
+        juce::juce_dsp
+    )
 
     include(GoogleTest)
     gtest_discover_tests(EasyEQTests)

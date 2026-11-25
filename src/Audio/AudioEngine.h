@@ -4,6 +4,7 @@
 
 #include <JuceHeader.h>
 
+#include "../DSP/MeasurementEngine.h"
 #include "PinkNoiseGenerator.h"
 
 namespace eeq::audio
@@ -26,12 +27,15 @@ public:
     explicit AudioEngine (juce::PropertiesFile* settingsToUse);
     ~AudioEngine() override;
 
-    // ---- デバイス ----
+    // ---- デバイス（入力と出力は別々に選べる）----
 
-    juce::StringArray getDeviceNames() const;
-    juce::String getSelectedDeviceName() const;
-    /** デバイスを選び直す。成功時は空文字、失敗時はエラーメッセージを返す */
-    juce::String selectDevice (const juce::String& deviceName);
+    juce::StringArray getAvailableDeviceNames (bool wantInputNames) const;
+    juce::String getSelectedInputDeviceName() const;
+    juce::String getSelectedOutputDeviceName() const;
+    /** 入力デバイスだけを選び直す。成功時は空文字、失敗時はエラーメッセージを返す */
+    juce::String selectInputDevice (const juce::String& deviceName);
+    /** 出力デバイスだけを選び直す。成功時は空文字、失敗時はエラーメッセージを返す */
+    juce::String selectOutputDevice (const juce::String& deviceName);
     /** サンプルレート / バッファサイズを変更する（負/0の項目は変更しない） */
     juce::String applyRateAndBuffer (double sampleRate, int bufferSize);
 
@@ -93,6 +97,10 @@ public:
 
     void saveSettings();
 
+    // ---- 伝達関数測定（フェーズ2）----
+
+    dsp::MeasurementEngine& getMeasurement() noexcept { return measurement; }
+
 private:
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
@@ -129,6 +137,11 @@ private:
     std::atomic<bool> hasPendingError { false };
 
     PinkNoiseGenerator noise;
+
+    // 測定ストリーム（フェーズ2）: オーディオスレッド → リングバッファ → 解析スレッド
+    dsp::SampleRingBuffer measurementRing;
+    dsp::MeasurementEngine measurement;
+    std::vector<float> refStream, measStream;
 
     static constexpr float defaultNoiseLevelDb = -20.0f;
     static constexpr float clipThresholdLinear = 0.98f; // 約 −0.2 dBFS（仕様 3.5 のクリップ検出）

@@ -40,7 +40,23 @@ inline const juce::String deviceErrorMessage
     { u8"デバイスでエラーが発生したため、出力を停止しました。デバイスを選び直してください。" };
 inline const juce::String noDeviceInfo { u8"デバイス未接続" };
 inline const juce::String okButton { u8"OK" };
+inline const juce::String degreeSymbol { u8"°" };
+inline const juce::String gammaSquared { u8"γ²" };
 
-inline const juce::String phaseMessage
-    { u8"フェーズ1：土台 — デバイス選択 / レベルメーター / ピンクノイズ出力が動作中。次は伝達関数測定（フェーズ2）" };
+// フェーズ2
+inline const juce::String measurementStartButton { u8"測定開始" };
+inline const juce::String measurementStopButton { u8"測定停止" };
+inline const juce::String resetAveragesButton { u8"平均リセット" };
+inline const juce::String graphPlaceholder { u8"測定開始でカーブが表示されます" };
+inline const juce::String measurementPanelTitle { u8"測定設定" };
+inline const juce::String fftSizeLabel { u8"FFTサイズ" };
+inline const juce::String windowLabel { u8"窓関数" };
+inline const juce::String averagingModeLabel { u8"平均方式" };
+inline const juce::String averagingCountLabel { u8"平均回数" };
+inline const juce::String smoothingLabel { u8"スムージング" };
+inline const juce::String averagingModeCumulative { u8"累積平均" };
+inline const juce::String averagingModeExponential { u8"指数平均" };
+inline const juce::String noSmoothingItem { u8"なし" };
+inline const juce::String inputDeviceLabel { u8"入力デバイス" };
+inline const juce::String outputDeviceLabel { u8"出力デバイス" };
 } // namespace eeq::strings

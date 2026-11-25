@@ -7,7 +7,8 @@
 namespace eeq::ui
 {
 
-// 下部バー（仕様 5.1 下部バー相当）: ピンクノイズの開始/停止と出力レベル。
+// 下部バー（仕様 5.1 下部バー相当）: 測定 Start/Stop、平均リセット、
+// ピンクノイズの開始/停止、出力レベル、状態表示。
 // 出力レベルが −20 dBFS（engine.outputLevelLimitDb）を超えるときは確認ダイアログを出す（仕様 3.2）。
 class BottomBar : public juce::Component, private juce::Slider::Listener
 {
@@ -16,6 +17,7 @@ public:
 
     /** 30Hz程度のタイマーから呼ぶ。ボタンの表示を状態に合わせる */
     void update();
+    void setStatusText (const juce::String& text);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -27,8 +29,8 @@ private:
 
     eeq::audio::AudioEngine& engine;
 
-    juce::TextButton noiseButton;
-    juce::Label levelTitle;
+    juce::TextButton measurementButton, resetButton, noiseButton;
+    juce::Label levelTitle, statusLabel;
     juce::Slider levelSlider;
 
     bool overLimitConfirmed = false;

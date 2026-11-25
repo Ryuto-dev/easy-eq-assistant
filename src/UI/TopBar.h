@@ -8,7 +8,7 @@
 namespace eeq::ui
 {
 
-// 上部バー（仕様 5.1）: デバイス選択、サンプルレート、バッファ、
+// 上部バー（仕様 5.1）: 入力/出力デバイス（別々に選択可）、サンプルレート、バッファ、
 // 入出力チャンネル割当（Ref / Meas / 出力）、レベルメーター。
 class TopBar : public juce::Component, private juce::ComboBox::Listener
 {
@@ -32,11 +32,12 @@ private:
     void rebuildBufferCombo();
     void rebuildChannelCombo (juce::ComboBox& combo, bool allowInternal, const juce::Array<int>& indices,
                               const juce::StringArray& names, int selected);
+    void fillDeviceCombo (juce::ComboBox& combo, const juce::StringArray& names, const juce::String& selectedName);
 
     eeq::audio::AudioEngine& engine;
 
-    juce::Label deviceTitle, rateTitle, bufferTitle, refTitle, measTitle, outTitle;
-    juce::ComboBox deviceCombo, rateCombo, bufferCombo, refCombo, measCombo, outCombo;
+    juce::Label inputDeviceTitle, outputDeviceTitle, rateTitle, bufferTitle, refTitle, measTitle, outTitle;
+    juce::ComboBox inputDeviceCombo, outputDeviceCombo, rateCombo, bufferCombo, refCombo, measCombo, outCombo;
 
     LevelMeter refMeter, measMeter, outMeter;
 
