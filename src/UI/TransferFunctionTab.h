@@ -41,7 +41,6 @@ private:
     void rebuildOverlays();
     void computeDiffCurve();
     void updateDiffCombos();
-    void refreshFromSettings();
 
     UiContext& ctx;
     FrequencyGraphView graph;
@@ -50,7 +49,6 @@ private:
     juce::ComboBox diffComboA, diffComboB;
     juce::Label diffLabel, hintLabel;
     bool dialogOpen = false;
-    bool loopbackEnabled = true;
     std::vector<eeq::dsp::GridPoint> diffPoints;
     int cachedSmoothing = -1;
     uint32_t lastSeenSnapshotVersion = 0;

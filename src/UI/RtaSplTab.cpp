@@ -61,6 +61,11 @@ RtaSplTab::RtaSplTab (UiContext& context)
     peakHoldResetButton.onClick = [this] { ctx.engine.getSplAnalyzer().resetPeakHold(); };
     addAndMakeVisible (peakHoldResetButton);
 
+    styleButton (splResetButton);
+    splResetButton.setButtonText (strings::splResetButton);
+    splResetButton.onClick = [this] { ctx.engine.getSplAnalyzer().resetSpl(); };
+    addAndMakeVisible (splResetButton);
+
     // ---- SPL ----
     splTitle.setText (strings::splSection, juce::dontSendNotification);
     styleLabel (splTitle, 13.0f, false);
@@ -308,6 +313,8 @@ void RtaSplTab::refreshFromSettings()
                                        + juce::String (ctx.engine.getSplAnalyzer().getCalibrationOffsetDb(), 1)
                                        + " dB",
                                     juce::dontSendNotification);
+    // 「未校正」警告はオフセットが 0 のときだけ出す（校正済みなら消す）
+    uncalibratedLabel.setVisible (std::abs (ctx.engine.getSplAnalyzer().getCalibrationOffsetDb()) < 1.0e-9);
 }
 
 void RtaSplTab::applyAnalyzerConfig()
@@ -345,6 +352,13 @@ void RtaSplTab::timerTick()
 
     splValueLabel.setText (spl.hasSignal ? juce::String (spl.currentDb, 1) : "--",
                            juce::dontSendNotification);
+
+    // 励起の開始/停止ボタン文言はエンジンの実状態に同期させる（下部バーなど
+    // 他の経路で止められた場合に「停止」表示のまま残らないように）
+    const auto noiseButtonText = ctx.engine.isNoiseAudible() ? strings::stopNoiseButton
+                                                              : strings::startNoiseButton;
+    calibrationStartButton.setButtonText (noiseButtonText);
+    gainStartButton.setButtonText (noiseButtonText);
 
     leqLabel.setText (juce::String (u8"Leq  ") + strings::splLeq1min + ": " + juce::String (spl.leq1minDb, 1)
                           + "   " + strings::splLeq15min + ": " + juce::String (spl.leq15minDb, 1)
@@ -464,6 +478,7 @@ void RtaSplTab::applyCalibrationOffset()
 
     const auto offset = meterValue - spl.currentDb;
     analyzer.setCalibrationOffsetDb (offset);
+    uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
     ctx.settings.setValue (settingsOffsetKey, offset);
     ctx.settings.saveIfNeeded();
 
@@ -499,7 +514,7 @@ void RtaSplTab::updateGainAssist()
         return;
     }
 
-    if (peak > -6.0f)
+    if (peakDb > -6.0f)
     {
         gainMessageLabel.setText (strings::gainAssistLower + " / " + strings::gainAssistTooHot,
                                   juce::dontSendNotification);
@@ -508,7 +523,7 @@ void RtaSplTab::updateGainAssist()
     else if (rmsDb < -24.0f)
     {
         const auto delta = -21.0 - rmsDb;
-        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + " dB）",
+        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + u8" dB）",
                                   juce::dontSendNotification);
         gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
     }
@@ -581,7 +596,12 @@ void RtaSplTab::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 
     // ---- RTAバー ----
-    const auto rtaArea = getLocalBounds().toFloat().reduced (8.0f).removeFromTop (rtaGraphHeight);
+    // 描画領域は resized() の左カラム（設定行の下）と一致させる。全幅・最上段で
+    // 描くと右カラムのパネルや S/N ラベルの背面にバーが重なる
+    auto paintBounds = getLocalBounds().reduced (8);
+    auto leftColumn = paintBounds.removeFromLeft (paintBounds.getWidth() * 3 / 5);
+    leftColumn.removeFromTop (26 + 4); // 設定行 + 間隔
+    const auto rtaArea = leftColumn.removeFromTop (rtaGraphHeight).toFloat();
 
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (rtaArea, 6.0f);
@@ -677,11 +697,13 @@ void RtaSplTab::resized()
     avgTimeCombo.setBounds (configRow.removeFromLeft (70));
     configRow.removeFromLeft (8);
     peakHoldResetButton.setBounds (configRow.removeFromLeft (150));
+    configRow.removeFromLeft (8);
+    splResetButton.setBounds (configRow.removeFromLeft (110));
 
     graphColumn.removeFromTop (4);
-    juce::ignoreUnused (graphColumn); // グラフは paint で rtaGraphHeight を使って描く
+    graphColumn.removeFromTop (rtaGraphHeight); // グラフ描画領域（paint がここに描く）
 
-    // S/Nはグラフの下に描く（paint）ため、ラベルはここで置く
+    // S/Nはグラフの下に置く
     auto snArea = graphColumn;
     snTitle.setBounds (snArea.removeFromTop (18));
     snOverallLabel.setBounds (snArea.removeFromTop (20));

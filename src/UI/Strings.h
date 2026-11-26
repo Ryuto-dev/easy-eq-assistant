@@ -157,6 +157,7 @@ inline const juce::String compareNoSnapshots { u8"比較するスナップショ
 inline const juce::String rtaSection { u8"RTA" };
 inline const juce::String rtaBandsLabel { u8"バンド" };
 inline const juce::String rtaPeakHoldButton { u8"ピークホールド解除" };
+inline const juce::String splResetButton { u8"SPLリセット" };
 inline const juce::String rtaAvgTimeLabel { u8"平均時間" };
 inline const juce::String splSection { u8"SPL" };
 inline const juce::String splWeightingLabel { u8"重み付け" };
@@ -314,6 +315,8 @@ inline const juce::String venueSearchLabel { u8"検索" };
 inline const juce::String venueReportButton { u8"レポート書き出し (PNG)" };
 inline const juce::String venueSaveOk { u8"保存しました" };
 inline const juce::String venueSaveFailed { u8"保存に失敗しました" };
+inline const juce::String venueLoadOk { u8"読み込みました" };
+inline const juce::String venueLoadFailed { u8"読み込みに失敗しました" };
 inline const juce::String venueSnapshotMemo { u8"スナップショットのメモ" };
 
 // ---- 書き出し ----
