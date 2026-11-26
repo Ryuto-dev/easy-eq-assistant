@@ -97,7 +97,7 @@ private:
     std::vector<double> bandEdgesLo, bandEdgesHi;
     std::vector<double> bandEnergy;      // 線形エネルギー（指数平均）
     std::vector<double> bandPeak;        // ピークホールド（線形）
-    double sineRefPowerDb = 0.0;         // フルスケール正弦波のbinパワー（dB）。dBFS正規化用
+    double sineRefPowerDb = 0.0;         // フルスケール正弦波の全正周波数パワー（dBFS基準）
     RtaFrame rtaOut;
 
     // SPL

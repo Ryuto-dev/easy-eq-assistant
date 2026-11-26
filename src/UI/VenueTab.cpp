@@ -108,9 +108,16 @@ VenueTab::VenueTab (UiContext& context)
         venue.name = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H:%M");
         venue.date = juce::Time::getCurrentTime();
         venue.temperatureC = ctx.state.airTemperatureC.load();
-        ctx.project.venues().push_back (venue);
+        auto& venues = ctx.project.venues();
+        venues.push_back (venue);
+        const auto newIndex = (int) venues.size() - 1;
+        ctx.project.setCurrentVenueIndex (newIndex);
+        selectedVenueIndex = newIndex;
         ctx.state.snapshotVersion.fetch_add (1);
         refreshVenueList();
+        loadSelectedVenueFields();
+        micPointList.updateContent();
+        sessionList.updateContent();
     };
     addAndMakeVisible (newVenueButton);
 
@@ -245,21 +252,31 @@ void VenueTab::refreshVenueList()
 {
     const auto query = searchEditor.getText();
     const auto matches = ctx.project.findVenues (query);
-    const auto& venues = ctx.project.venues();
-
-    juce::Array<int> visibleVenues;
-
-    for (const auto index : matches)
-    {
-        // 表示中の会場だけを行として扱うため、行番号→実インデックスの対応を作る
-        visibleVenues.add (index);
-    }
 
     venueIndices.clear();
 
     for (const auto index : matches)
         venueIndices.push_back (index);
+
+    selectedVenueIndex = ctx.project.getCurrentVenueIndex();
     venueList.updateContent();
+
+    int selectedRow = -1;
+
+    for (int row = 0; row < (int) venueIndices.size(); ++row)
+    {
+        if (venueIndices[(size_t) row] == selectedVenueIndex)
+        {
+            selectedRow = row;
+            break;
+        }
+    }
+
+    if (selectedRow >= 0)
+        venueList.selectRow (selectedRow, true);
+    else
+        venueList.deselectAllRows();
+
     micPointList.updateContent();
     sessionList.updateContent();
 }

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "Core/Acoustics.h"
 
 namespace
@@ -59,12 +61,20 @@ TEST (Acoustics, SamplesAndMsConversion)
     EXPECT_NEAR (back, ms, 1.0e-9);
 }
 
-TEST (Acoustics, AirAbsorptionAt1kHz)
+TEST (Acoustics, AirAbsorptionMatchesIso9613ReferenceValues)
 {
-    // 1 kHz, 20℃, 50% RH で約 0.001 dB/m 程度（ISO 9613-1 近似）
-    const auto abs = airAbsorptionDbPerMetre (1000.0, 50.0, 20.0);
-    EXPECT_GT (abs, 0.0);
-    EXPECT_LT (abs, 0.01); // 1 kHz ではごく小さい
+    // ISO 9613-1:1993, 20 ℃ / 50 % RH, standard pressure.
+    struct Reference { double frequency; double absorption; };
+    constexpr Reference references[] {
+        { 1000.0, 0.0046647 },
+        { 4000.0, 0.0296655 },
+        { 8000.0, 0.1052909 },
+        { 16000.0, 0.3645410 }
+    };
+
+    for (const auto& reference : references)
+        EXPECT_NEAR (airAbsorptionDbPerMetre (reference.frequency, 50.0, 20.0),
+                     reference.absorption, 1.0e-6);
 }
 
 TEST (Acoustics, AirAbsorptionIncreasesWithFrequency)
@@ -72,6 +82,26 @@ TEST (Acoustics, AirAbsorptionIncreasesWithFrequency)
     const auto abs1k = airAbsorptionDbPerMetre (1000.0, 50.0, 20.0);
     const auto abs8k = airAbsorptionDbPerMetre (8000.0, 50.0, 20.0);
     EXPECT_GT (abs8k, abs1k); // 高域ほど吸収大
+}
+
+TEST (Acoustics, AirAbsorptionHasExpectedTemperatureAndHumidityDirection)
+{
+    EXPECT_GT (airAbsorptionDbPerMetre (4000.0, 50.0, 10.0),
+               airAbsorptionDbPerMetre (4000.0, 50.0, 20.0));
+    EXPECT_GT (airAbsorptionDbPerMetre (4000.0, 50.0, 20.0),
+               airAbsorptionDbPerMetre (4000.0, 50.0, 30.0));
+    EXPECT_GT (airAbsorptionDbPerMetre (4000.0, 20.0, 20.0),
+               airAbsorptionDbPerMetre (4000.0, 90.0, 20.0));
+}
+
+TEST (Acoustics, AirAbsorptionRejectsInvalidInputs)
+{
+    EXPECT_EQ (airAbsorptionDbPerMetre (0.0, 50.0, 20.0), 0.0);
+    EXPECT_EQ (airAbsorptionDbPerMetre (-1.0, 50.0, 20.0), 0.0);
+    EXPECT_EQ (airAbsorptionDbPerMetre (1000.0, -1.0, 20.0), 0.0);
+    EXPECT_EQ (airAbsorptionDbPerMetre (1000.0, 101.0, 20.0), 0.0);
+    EXPECT_EQ (airAbsorptionDbPerMetre (1000.0, 50.0, -273.15), 0.0);
+    EXPECT_EQ (airAbsorptionDbPerMetre (std::numeric_limits<double>::infinity(), 50.0, 20.0), 0.0);
 }
 
 TEST (Acoustics, TotalAttenuationIncludesGeometricAndAbsorption)

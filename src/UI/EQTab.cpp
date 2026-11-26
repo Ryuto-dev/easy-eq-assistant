@@ -197,11 +197,13 @@ EQTab::EQTab (UiContext& context)
     exportCsvButton.setButtonText (strings::eqExportCsv);
     exportCsvButton.onClick = [this] { exportCsv(); };
     addAndMakeVisible (exportCsvButton);
+    exportCsvButton.setEnabled (! ctx.state.proposedBands.empty());
 
     styleButton (exportTextButton);
     exportTextButton.setButtonText (strings::eqExportText);
     exportTextButton.onClick = [this] { exportText(); };
     addAndMakeVisible (exportTextButton);
+    exportTextButton.setEnabled (! ctx.state.proposedBands.empty());
 
     buildTargetPoints();
 }
@@ -295,7 +297,13 @@ void EQTab::runProposal()
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
     if (frame.averages == 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            strings::eqSection,
+            juce::String (u8"測定結果がありません。測定してから EQ 案を作成してください。"),
+            strings::okButton, this, nullptr);
         return;
+    }
 
     // システム補正が有効なら補正後のカーブに対してEQ案を作る（仕様 6.1）
     if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))
@@ -405,6 +413,10 @@ void EQTab::runProposal()
         bandList.deselectAllRows();
         selectedLabel.setText ({}, juce::dontSendNotification);
     }
+
+    const auto canExport = ! ctx.state.proposedBands.empty();
+    exportCsvButton.setEnabled (canExport);
+    exportTextButton.setEnabled (canExport);
 }
 
 void EQTab::updatePrediction()
@@ -550,6 +562,15 @@ void EQTab::loadTargetCsv()
 
 void EQTab::exportCsv()
 {
+    if (ctx.state.proposedBands.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            strings::eqSection,
+            juce::String (u8"先に EQ 案を作成してください。"),
+            strings::okButton, this, nullptr);
+        return;
+    }
+
     auto chooser = std::make_shared<juce::FileChooser> ("eq_proposal.csv",
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.csv");
@@ -571,6 +592,15 @@ void EQTab::exportCsv()
 
 void EQTab::exportText()
 {
+    if (ctx.state.proposedBands.empty())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            strings::eqSection,
+            juce::String (u8"先に EQ 案を作成してください。"),
+            strings::okButton, this, nullptr);
+        return;
+    }
+
     auto chooser = std::make_shared<juce::FileChooser> ("eq_proposal.txt",
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
                                                         "*.txt");

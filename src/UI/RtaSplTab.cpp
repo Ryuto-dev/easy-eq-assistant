@@ -455,9 +455,15 @@ void RtaSplTab::timerTick()
                                             juce::dontSendNotification);
             eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (calibrationMeterValue, 1)
                              + " app=" + juce::String (spl.currentDb, 1) + " offset=" + juce::String (offset, 2));
+            calibrationOffsetPending = false;
         }
-
-        calibrationOffsetPending = false;
+        else if (juce::Time::getCurrentTime() > calibrationDeadline)
+        {
+            calibrationOffsetPending = false;
+            calibrationOffsetLabel.setText (
+                juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
+                juce::dontSendNotification);
+        }
     }
 
     repaint();
@@ -479,11 +485,16 @@ void RtaSplTab::stopNoiseFloorMeasurement()
 
 void RtaSplTab::applyCalibrationOffset()
 {
-    // 比較校正: アプリの表示（dB(A) Fast）と騒音計の読みの差を1つのオフセットとして保存（仕様 3.4）
+    // 比較校正: マイク入力の表示（dB(A) Fast）と騒音計の読みの差を保存する。
+    // アプリ内信号だけでなく、校正器や外部音源の入力でも校正できる（仕様 3.4）。
     const auto meterValue = calibrationMeterEditor.getText().getDoubleValue();
 
-    if (meterValue < 30.0 || meterValue > 140.0)
+    if (! std::isfinite (meterValue) || meterValue < 30.0 || meterValue > 140.0)
+    {
+        calibrationOffsetLabel.setText (juce::String (u8"騒音計の値は 30〜140 dB で入力してください"),
+                                        juce::dontSendNotification);
         return;
+    }
 
     auto& analyzer = ctx.engine.getSplAnalyzer();
 
@@ -501,6 +512,9 @@ void RtaSplTab::applyCalibrationOffset()
     // 実際のオフセット計算は次の timerTick で行う
     calibrationOffsetPending = true;
     calibrationMeterValue = meterValue;
+    calibrationDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
+    calibrationOffsetLabel.setText (juce::String (u8"A/Fast の新しい測定値を取得しています…"),
+                                    juce::dontSendNotification);
 }
 
 void RtaSplTab::updateGainAssist()

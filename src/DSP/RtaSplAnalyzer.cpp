@@ -80,18 +80,19 @@ void RtaSplAnalyzer::configure (double newSampleRate, int newBandsPerOctave, dou
         fft = std::make_unique<juce::dsp::FFT> (fftOrder);
         window.assign ((size_t) fftSize, 0.0f);
 
-        double windowSum = 0.0;
+        double windowPower = 0.0;
 
         for (int i = 0; i < fftSize; ++i)
         {
             window[(size_t) i] = 0.5f
                                * (1.0f - std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) fftSize));
-            windowSum += window[(size_t) i];
+            windowPower += (double) window[(size_t) i] * window[(size_t) i];
         }
 
-        // フルスケール正弦波（振幅1）がそのbinで 0 dB になる基準パワー:
-        // 非正規化DFTでは |X| = W/2（Wは窓の総和）なので、|X|^2 = (W/2)^2 を引く
-        sineRefPowerDb = 20.0 * std::log10 (std::max (windowSum * 0.5, 1.0e-9));
+        // SPL/RTA は正の周波数binのパワーを全帯域で合算するため、同じ規約で
+        // フルスケール正弦波の基準を作る（非正規化DFT、DC/Nyquistを除く）。
+        // Parseval より、正弦波の正周波数側の総和は N * sum(window^2) / 4。
+        sineRefPowerDb = 10.0 * std::log10 (std::max (fftSize * windowPower * 0.25, 1.0e-30));
 
         assembly.assign ((size_t) fftSize, 0.0f);
         assemblyPos = 0;
@@ -228,23 +229,23 @@ void RtaSplAnalyzer::processFrame()
     // ---- RTAバンド ----
     for (size_t b = 0; b < bandCenters.size(); ++b)
     {
-        // bin「中心」が帯域内に入るかで割り当てる（帯域が bin 幅より狭い低域でも
-        // 少なくとも1つの bin が担当するようにする）
-        auto kLo = (int) std::floor (bandEdgesLo[b] / binWidth + 0.5);
-        auto kHi = (int) std::floor (bandEdgesHi[b] / binWidth + 0.5);
-        kLo = std::max (kLo, 1);
-        kHi = std::min (kHi, halfBins - 1);
-
-        if (kHi < kLo)
-        {
-            // 帯域が bin 幅より狭い: 中心に最も近い bin 1本だけで代表させる
-            kLo = kHi = juce::jlimit (1, halfBins - 1, (int) std::floor (bandCenters[b] / binWidth + 0.5));
-        }
-
         double energy = 0.0;
 
-        for (int k = kLo; k <= kHi; ++k)
-            energy += binPower[(size_t) k];
+        // 各binを中心 ± binWidth/2 の区間とみなし、帯域との重なりだけを按分する。
+        // 隣接帯域は共有境界の片側ずつを受け取るため、境界binを二重計上しない。
+        const auto firstBin = juce::jlimit (1, halfBins - 1,
+                                            (int) std::floor (bandEdgesLo[b] / binWidth - 0.5));
+        const auto lastBin = juce::jlimit (1, halfBins - 1,
+                                           (int) std::ceil (bandEdgesHi[b] / binWidth + 0.5));
+
+        for (int k = firstBin; k <= lastBin; ++k)
+        {
+            const auto binLo = ((double) k - 0.5) * binWidth;
+            const auto binHi = ((double) k + 0.5) * binWidth;
+            const auto overlap = std::max (0.0, std::min (bandEdgesHi[b], binHi)
+                                                - std::max (bandEdgesLo[b], binLo)) / binWidth;
+            energy += binPower[(size_t) k] * overlap;
+        }
 
         bandEnergy[b] += (energy - bandEnergy[b]) * rtaAlpha;
         bandPeak[b] = std::max (bandPeak[b], energy);

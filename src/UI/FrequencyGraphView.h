@@ -46,6 +46,8 @@ public:
 
     /** plotArea の幅を返す（キャッシュ計算用） */
     int getPlotWidthForCache() const noexcept { return juce::jmax (2, (int) plotArea().getWidth()); }
+    double getViewMinForCache() const noexcept { return axis.viewMin; }
+    double getViewMaxForCache() const noexcept { return axis.viewMax; }
 
     /** オーバーレイを差し替える（version が変わったときだけ再計算する） */
     void setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom);
@@ -99,7 +101,8 @@ private:
 
     int smoothingDenom = 6;
     int lastWidth = -1;
-    bool dataDirty = true;   // 測定データ変更で smoothToLogGrid 再計算が必要
+    bool livePointsAreCached = false; // ライブ曲線をタブ側timerのキャッシュから受け取る
+    bool dataDirty = true;   // 直接計算モードで測定データ変更時に smoothToLogGrid 再計算
     bool viewDirty = false;  // ズーム/パンで再描画のみ必要
     int hoverColumn = -1;
 

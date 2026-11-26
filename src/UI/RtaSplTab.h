@@ -74,6 +74,7 @@ private:
     // 校正オフセット計算用（重み付け切替後のリセット待ち）
     bool calibrationOffsetPending = false;
     double calibrationMeterValue = 0.0;
+    juce::Time calibrationDeadline;
 };
 
 } // namespace eeq::ui

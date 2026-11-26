@@ -15,7 +15,7 @@ namespace eeq::acoustics
     return 331.3 + 0.606 * airTemperatureCelsius;
 }
 
-/** 湿度補正付き音速 [m/s]。ISO 9613-1 近似: c = c0 * sqrt(1 + 0.001 * h / 100)
+/** 湿度補正付き音速 [m/s]。経験的な近似で、ISO 9613-1 の吸収式とは別の計算。
     h は相対湿度 [%]。通常は 0.1% 程度の影響しかないが、長距離では無視できない。 */
 [[nodiscard]] inline double speedOfSoundMetresPerSecond (double airTemperatureCelsius, double humidityPercent) noexcept
 {
@@ -59,35 +59,43 @@ namespace eeq::acoustics
     return samples * 1000.0 / sampleRate;
 }
 
-/** 空気吸収による減衰 [dB/m]。簡易近似式（室内・短距離向け、ISO 9613-1 風）。
+/** 空気吸収による減衰 [dB/m]。ISO 9613-1:1993 Annex A（標準気圧）による。
     frequency: 周波数 [Hz], humidity: 相対湿度 [%], temperature: 気温 [℃]
-    有効範囲: 50 Hz〜10 kHz, 10〜100% RH, 15〜30 ℃。範囲外では近似値。
-    注: 精密測定用ではない。長距離・高精度用途ではフル実装が必要。 */
+    相対湿度は 0〜100% とし、周波数は正の有限値、絶対温度は 0 K より大きい値を受け付ける。
+    入力が物理的に無効または計算結果が有限でない場合は 0 を返す。 */
 [[nodiscard]] inline double airAbsorptionDbPerMetre (double frequencyHz, double humidityPercent, double temperatureCelsius) noexcept
 {
-    if (frequencyHz <= 0.0 || humidityPercent <= 0.0)
+    if (! std::isfinite (frequencyHz) || ! std::isfinite (humidityPercent)
+        || ! std::isfinite (temperatureCelsius) || frequencyHz <= 0.0
+        || humidityPercent < 0.0 || humidityPercent > 100.0
+        || temperatureCelsius <= -273.15)
         return 0.0;
 
-    const auto f = frequencyHz / 1000.0; // kHz
-    const auto h = std::clamp (humidityPercent, 10.0, 100.0);
-    const auto t = std::clamp (temperatureCelsius, 15.0, 30.0);
+    // ISO 9613-1: pressure is fixed at the reference pressure (p_a / p_r = 1).
+    // The saturation-pressure equation uses the triple point; the relaxation
+    // and attenuation equations use the separate 20 °C reference temperature.
+    constexpr auto referenceTemperature = 293.15;
+    constexpr auto triplePointTemperature = 273.16;
+    constexpr auto pressureRatio = 1.0;
+    const auto T = temperatureCelsius + 273.15;
+    const auto h = humidityPercent * std::pow (10.0, -6.8346 * std::pow (triplePointTemperature / T, 1.261) + 4.6151)
+                 / pressureRatio;
+    const auto f2 = frequencyHz * frequencyHz;
 
-    // 実用的な簡易近似（ISO 9613-1 Annex A の曲線フィット）
-    // α [dB/m] ≈ f^2 * (a + b * h) / (f^2 + c) の形で近似
-    // 20℃, 50% RH を基準にした係数
-    const auto f2 = f * f;
+    if (! std::isfinite (T) || ! std::isfinite (h) || ! std::isfinite (f2))
+        return 0.0;
 
-    // 温度補正係数（20℃基準）
-    const auto tempFactor = std::pow (t / 20.0, 0.5); // 概ね平方根則
+    const auto frO = pressureRatio * (24.0 + 4.04e4 * h * (0.02 + h) / (0.391 + h));
+    const auto temperatureRatio = T / referenceTemperature;
+    const auto frN = pressureRatio * std::pow (temperatureRatio, -0.5)
+                   * (9.0 + 280.0 * h * std::exp (-4.17 * (std::pow (temperatureRatio, -1.0 / 3.0) - 1.0)));
+    const auto t1 = 1.84e-11 * pressureRatio * std::pow (temperatureRatio, 0.5);
+    const auto t2 = std::pow (temperatureRatio, -2.5)
+                  * (0.01275 * std::exp (-2239.1 / T) / (frO + f2 / frO)
+                   + 0.1068 * std::exp (-3352.0 / T) / (frN + f2 / frN));
+    const auto absorption = 8.686 * f2 * (t1 + t2);
 
-    // 湿度補正（低湿度で吸収大、高湿度で吸収小）
-    const auto humFactor = 1.0 + 0.02 * (50.0 - h) / 50.0;
-
-    // 周波数依存性（低域は f^2 比例、高域で飽和）
-    // 1kHz で約 0.001 dB/m, 8kHz で約 0.03 dB/m 程度（20℃, 50% RH）
-    const auto baseAbsorption = 0.0001 * f2 / (1.0 + 0.001 * f2) * tempFactor * humFactor;
-
-    return std::max (0.0, baseAbsorption);
+    return std::isfinite (absorption) && absorption >= 0.0 ? absorption : 0.0;
 }
 
 /** 距離と空気吸収を考慮したレベル減衰 [dB]。

@@ -187,6 +187,10 @@ if(EASYEQ_BUILD_TESTS)
         src/DSP/RtaSplAnalyzer.cpp
     )
     target_include_directories(EasyEQTests PRIVATE src)
+    target_compile_definitions(EasyEQTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+    )
     target_link_libraries(EasyEQTests PRIVATE
         gtest_main
         juce::juce_dsp
