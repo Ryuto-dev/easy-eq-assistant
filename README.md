@@ -1,6 +1,7 @@
 # Easy EQ assistant
 
 PA・音響調整用の伝達関数測定ソフト（個人用）。詳細は `Easy EQ assistant 仕様書.md` を参照。
+進捗・残タスク・トラブルシュート記録は `docs/PROGRESS.md`。
 
 - 言語 / FW: C++20 + JUCE 8（`libs/JUCE` は git submodule で固定）
 - ビルド: CMake（macOS はユニバーサルバイナリ arm64 + x86_64、macOS 12 以降）
