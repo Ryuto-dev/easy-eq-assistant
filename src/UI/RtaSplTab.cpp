@@ -461,7 +461,7 @@ void RtaSplTab::timerTick()
         {
             calibrationOffsetPending = false;
             calibrationOffsetLabel.setText (
-                juce::String (u8"校正信号を入力で検出できません。再生・入力ゲイン・接続を確認してください。"),
+                juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
                 juce::dontSendNotification);
         }
     }
@@ -485,21 +485,14 @@ void RtaSplTab::stopNoiseFloorMeasurement()
 
 void RtaSplTab::applyCalibrationOffset()
 {
-    // 比較校正: アプリの表示（dB(A) Fast）と騒音計の読みの差を1つのオフセットとして保存（仕様 3.4）
+    // 比較校正: マイク入力の表示（dB(A) Fast）と騒音計の読みの差を保存する。
+    // アプリ内信号だけでなく、校正器や外部音源の入力でも校正できる（仕様 3.4）。
     const auto meterValue = calibrationMeterEditor.getText().getDoubleValue();
 
     if (! std::isfinite (meterValue) || meterValue < 30.0 || meterValue > 140.0)
     {
         calibrationOffsetLabel.setText (juce::String (u8"騒音計の値は 30〜140 dB で入力してください"),
                                         juce::dontSendNotification);
-        return;
-    }
-
-    if (! ctx.engine.isNoiseAudible())
-    {
-        calibrationOffsetLabel.setText (
-            juce::String (u8"校正信号が出ていません。「開始」で信号を再生してから適用してください。"),
-            juce::dontSendNotification);
         return;
     }
 

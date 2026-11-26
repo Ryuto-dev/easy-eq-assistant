@@ -132,10 +132,12 @@ DelayIrTab::DelayIrTab (UiContext& context)
         const auto ms = text.getDoubleValue();
         const auto sampleRate = ctx.engine.getCurrentSampleRate();
 
-        if (text.isEmpty() || ! std::isfinite (ms) || sampleRate <= 0.0)
+        if (text.isEmpty() || ! std::isfinite (ms) || ms < 0.0
+            || ! std::isfinite (sampleRate) || sampleRate <= 0.0)
         {
-            manualWarnLabel.setText (text.isEmpty() || ! std::isfinite (ms)
-                                         ? juce::String (u8"遅延 (ms) を入力してください")
+            const auto invalidDelay = text.isEmpty() || ! std::isfinite (ms) || ms < 0.0;
+            manualWarnLabel.setText (invalidDelay
+                                         ? juce::String (u8"遅延 (ms) は 0 以上の数値を入力してください")
                                          : juce::String (u8"有効なサンプルレートがありません"),
                                      juce::dontSendNotification);
             return;

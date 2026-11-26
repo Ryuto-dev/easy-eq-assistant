@@ -197,13 +197,13 @@ EQTab::EQTab (UiContext& context)
     exportCsvButton.setButtonText (strings::eqExportCsv);
     exportCsvButton.onClick = [this] { exportCsv(); };
     addAndMakeVisible (exportCsvButton);
-    exportCsvButton.setEnabled (false);
+    exportCsvButton.setEnabled (! ctx.state.proposedBands.empty());
 
     styleButton (exportTextButton);
     exportTextButton.setButtonText (strings::eqExportText);
     exportTextButton.onClick = [this] { exportText(); };
     addAndMakeVisible (exportTextButton);
-    exportTextButton.setEnabled (false);
+    exportTextButton.setEnabled (! ctx.state.proposedBands.empty());
 
     buildTargetPoints();
 }
@@ -562,7 +562,7 @@ void EQTab::loadTargetCsv()
 
 void EQTab::exportCsv()
 {
-    if (! hasResult || ctx.state.proposedBands.empty())
+    if (ctx.state.proposedBands.empty())
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::eqSection,
@@ -592,7 +592,7 @@ void EQTab::exportCsv()
 
 void EQTab::exportText()
 {
-    if (! hasResult || ctx.state.proposedBands.empty())
+    if (ctx.state.proposedBands.empty())
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::eqSection,

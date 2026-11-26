@@ -177,7 +177,7 @@ inline const juce::String calibrationOffsetLabel { u8"オフセット" };
 inline const juce::String calibrationNoiseMeterLabel { u8"騒音計の値 (dB)" };
 inline const juce::String calibrationApplyButton { u8"オフセットを保存" };
 inline const juce::String calibrationClearButton { u8"校正をリセット" };
-inline const juce::String calibrationComparatorGuide { u8"手持ちの騒音計と比較する方法: 1. 比較校正の信号を出す 2. マイクと騒音計を同じ位置に置く 3. 騒音計の値（dB(A) Fast）を入力する" };
+inline const juce::String calibrationComparatorGuide { u8"手持ちの騒音計と比較する方法: 1. アプリの校正信号または安定した外部音源を鳴らす 2. マイクと騒音計を同じ位置に置く 3. 騒音計の値（dB(A) Fast）を入力する" };
 inline const juce::String calibrationCalibratorGuide { u8"校正器を使う方法: 校正器（94/114 dB）をマイクに装着し、その値を入力する" };
 inline const juce::String calibrationSignalLabel { u8"校正信号" };
 inline const juce::String calibrationSignalBandNoise { u8"1kHz帯域ピンクノイズ" };

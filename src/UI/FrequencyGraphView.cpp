@@ -30,8 +30,10 @@ void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int
     current = frame;
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
+    const auto switchedFromCached = livePointsAreCached;
+    livePointsAreCached = false;
 
-    if (changed || smoothingOctDenom != smoothingDenom)
+    if (changed || smoothingOctDenom != smoothingDenom || switchedFromCached)
     {
         smoothingDenom = smoothingOctDenom;
         dataDirty = true;  // データ変更で再計算必要
@@ -49,6 +51,7 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
     // dataDirty=false にする（columns は既にキャッシュから埋まっている）
     // viewDirty は維持（ズーム/パンの再描画用）
 
+    livePointsAreCached = true;
     current = frame;
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
@@ -206,7 +209,8 @@ void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const ju
         if (axis.zoom (event.position.x, plot, wheel.deltaY))
         {
             viewDirty = true;
-            dataDirty = true;
+            if (! livePointsAreCached)
+                dataDirty = true;
             lastOverlayVersion = -1;
         }
     }
@@ -230,7 +234,8 @@ void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
         if (axis.pan (event.position.x - dragStart.x, plot))
         {
             viewDirty = true;
-            dataDirty = true;
+            if (! livePointsAreCached)
+                dataDirty = true;
             lastOverlayVersion = -1;
         }
     }
@@ -254,15 +259,16 @@ void FrequencyGraphView::mouseDoubleClick (const juce::MouseEvent&)
     axis.resetView();
     ampAuto = true;
     viewDirty = true;
-    dataDirty = true;
+    if (! livePointsAreCached)
+        dataDirty = true;
     lastOverlayVersion = -1;
     repaint();
 }
 
 void FrequencyGraphView::paint (juce::Graphics& g)
 {
-    // データ変更時のみ smoothToLogGrid 再計算
-    if (dataDirty || getWidth() != lastWidth)
+    // キャッシュ済みライブ曲線はタブ側timerで再計算し、直接計算モードのみここで更新する。
+    if (! livePointsAreCached && (dataDirty || getWidth() != lastWidth))
         rebuildLive();
 
     // ビュー変更（ズーム/パン）時は rebuildLive() 呼ばず、既存 columns を新しい axis で描画
