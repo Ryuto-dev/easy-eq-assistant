@@ -14,6 +14,8 @@ FrequencyGraphView::FrequencyGraphView()
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
     axis.limitMin = freqLimitMin;
     axis.limitMax = freqLimitMax;
+    dataDirty = true;
+    viewDirty = false;
 }
 
 void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
@@ -32,7 +34,7 @@ void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int
     if (changed || smoothingOctDenom != smoothingDenom)
     {
         smoothingDenom = smoothingOctDenom;
-        dirty = true;
+        dataDirty = true;  // データ変更で再計算必要
         lastOverlayVersion = -1;
     }
 
@@ -44,8 +46,8 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
                                              double delaySamples, bool rawPhase)
 {
     // 軽量版: 事前計算済み points を columns へコピーするだけ（smoothToLogGrid は呼ばない）
-    // dirty が true（ズーム/パンで設定）なら維持し、paint() で再計算させる
-    const bool wasDirty = dirty;
+    // dataDirty=false にする（columns は既にキャッシュから埋まっている）
+    // viewDirty は維持（ズーム/パンの再描画用）
 
     current = frame;
     appliedDelaySamples = delaySamples;
@@ -65,8 +67,8 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
         columns[i].coherence = points[i].coherence;
     }
 
-    // ズーム/パンで立てた dirty を消さない（paint で再計算して反映させる）
-    dirty = wasDirty;
+    dataDirty = false;  // columns はキャッシュから埋まっているので再計算不要
+    // viewDirty は維持（ズーム/パンの再描画用）
     repaint();
 }
 
@@ -76,7 +78,7 @@ void FrequencyGraphView::setOverlays (const std::vector<OverlaySource>& sources,
     overlayVersion = version;
     smoothingDenom = smoothingOctDenom;
     lastOverlayVersion = -1;
-    dirty = true;
+    dataDirty = true;  // オーバーレイ変更もデータ再計算が必要
     repaint();
 }
 
@@ -98,7 +100,7 @@ juce::Rectangle<float> FrequencyGraphView::lowerArea (const juce::Rectangle<floa
 
 void FrequencyGraphView::rebuildLive()
 {
-    dirty = false;
+    dataDirty = false;
     lastWidth = getWidth();
     columns.clear();
 
@@ -202,7 +204,7 @@ void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const ju
     else if (wheel.deltaY != 0.0f && plot.contains (event.position))
     {
         if (axis.zoom (event.position.x, plot, wheel.deltaY))
-            dirty = true;
+            viewDirty = true;
     }
 
     repaint();
@@ -222,7 +224,7 @@ void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
     if (std::abs (event.position.x - dragStart.x) > std::abs (event.position.y - dragStart.y))
     {
         if (axis.pan (event.position.x - dragStart.x, plot))
-            dirty = true;
+            viewDirty = true;
     }
     else if (! ampAuto)
     {
@@ -243,14 +245,18 @@ void FrequencyGraphView::mouseDoubleClick (const juce::MouseEvent&)
 {
     axis.resetView();
     ampAuto = true;
-    dirty = true;
+    viewDirty = true;
     repaint();
 }
 
 void FrequencyGraphView::paint (juce::Graphics& g)
 {
-    if (dirty || getWidth() != lastWidth)
+    // データ変更時のみ smoothToLogGrid 再計算
+    if (dataDirty || getWidth() != lastWidth)
         rebuildLive();
+
+    // ビュー変更（ズーム/パン）時は rebuildLive() 呼ばず、既存 columns を新しい axis で描画
+    // viewDirty は再描画だけで済む
 
     if (lastOverlayVersion != overlayVersion || (int) overlayColumns.size() != (int) overlaySources.size())
         rebuildOverlays();

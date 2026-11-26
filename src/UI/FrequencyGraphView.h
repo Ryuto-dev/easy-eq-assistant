@@ -99,7 +99,8 @@ private:
 
     int smoothingDenom = 6;
     int lastWidth = -1;
-    bool dirty = true;
+    bool dataDirty = true;   // 測定データ変更で smoothToLogGrid 再計算が必要
+    bool viewDirty = false;  // ズーム/パンで再描画のみ必要
     int hoverColumn = -1;
 
     // ドラッグ開始位置（パン用）
