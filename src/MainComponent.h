@@ -84,6 +84,7 @@ private:
     uint32_t lastSeenGeneration = 0;
     bool errorDialogOpen = false;
     bool wizardShown = false;
+    juce::Time lastAutoSave; // 定期オートセーブ用（issue #38）
 
     static constexpr int topBarHeight = 104;
     static constexpr int bottomBarHeight = 64;

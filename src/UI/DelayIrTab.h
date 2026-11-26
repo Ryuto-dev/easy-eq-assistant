@@ -63,6 +63,7 @@ private:
     // IRのキャッシュ
     std::unique_ptr<eeq::dsp::ImpulseResponse> cachedIr;
     int cachedIrAverages = -1;
+    juce::Time irRebuildAllowed; // IR再構築のスロットル用（issue #37）
     int cachedIrWidth = -1;
     int cachedIrFftSize = 0;
     double cachedIrSampleRate = 0.0;

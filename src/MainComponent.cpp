@@ -147,6 +147,8 @@ MainComponent::MainComponent()
     }
 
     startTimerHz (15); // 15fps UI更新で十分滑らか（重い計算はtimerTickでキャッシュ済み）
+
+    lastAutoSave = juce::Time::getCurrentTime();
 }
 
 MainComponent::~MainComponent()
@@ -201,20 +203,39 @@ void MainComponent::resized()
 
 void MainComponent::timerCallback()
 {
+    // 定期オートセーブ（issue #38）: 60秒ごとに last_project.eea へ書く。
+    // クラッシュ・強制終了・電源断でも直近60秒以内の状態が残る。
+    // 書き込みはアトミック（ProjectStore::saveToFile）なので、
+    // 途中で落ちても既存ファイルは壊れない
+    if ((juce::Time::getCurrentTime() - lastAutoSave).inSeconds() >= 60)
+    {
+        lastAutoSave = juce::Time::getCurrentTime();
+        saveProjectIfPossible();
+    }
+
     topBar.timerTick();
     bottomBar.update();
 
     // 測定設定のスムージングをタブへ橋渡しする（仕様 3.1: 計算値は保持、表示のみ適用）
     uiState.smoothingDenom = measurementPanel.getSmoothingOctaveDenominator();
 
-    // 解析結果（約30fps: 仕様 2. の (3)）
-    transferTab.timerTick();
-    delayTab.timerTick();
-    rtaSplTab.timerTick();
-    eqTab.timerTick();
+    // 解析結果（約30fps: 仕様 2. の (3)）。
+    // 非表示タブは重い再計算（IR再構築・スムージング等）を止める（issue #37）:
+    // 再表示後の最初のティックで自然に最新化される。ただし実行中のリミットテストは
+    // 進行・自動停止を保つため常時回す。venueTab は軽いので常時
+    const auto uiShowing = isShowing();
+    const auto liveMode = liveOverlay.isVisible();
+    const auto currentTab = tabs.getCurrentTabIndex();
+
+    if (uiShowing && ! liveMode && currentTab == 0) transferTab.timerTick();
+    if (uiShowing && ! liveMode && currentTab == 1) delayTab.timerTick();
+    if (uiShowing && ! liveMode && currentTab == 2) rtaSplTab.timerTick();
+    if (uiShowing && ! liveMode && currentTab == 3) eqTab.timerTick();
     limitTab.timerTick();
     venueTab.timerTick();
-    liveOverlay.timerTick();
+
+    if (liveMode)
+        liveOverlay.timerTick();
 
     measurementPanel.setAverageCountDisplay (engine.getMeasurement().getAverages());
 

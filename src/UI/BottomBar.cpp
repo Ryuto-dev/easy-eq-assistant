@@ -119,9 +119,10 @@ void BottomBar::applyExcitationSource (int comboId)
         case 2:
         {
             // ログスイープ（既定 10 秒。長さは IR・遅延タブで変えられる。仕様 3.2: 2〜30秒）
+            // ピーク1.0で生成する（issue #29）。レベル設定はオーディオスレッドが
+            // 実効RMS基準で一括して掛けるので、ここで焼き込まない
             const auto sampleRate = engine.getCurrentSampleRate();
-            auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0,
-                                                                (float) juce::Decibels::decibelsToGain (engine.getNoiseLevelDb()));
+            auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0, 1.0f);
             engine.setSweep (std::move (sweep));
             break;
         }

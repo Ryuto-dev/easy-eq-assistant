@@ -296,10 +296,8 @@ void RtaSplAnalyzer::resetPeakHold()
     rtaOut.peakHoldDb.assign (rtaOut.peakHoldDb.size(), -300.0f);
 }
 
-void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
+void RtaSplAnalyzer::copySplUnlocked (SplSnapshot& out) const
 {
-    const juce::ScopedLock sl (lock);
-
     out.sessionSeconds = sessionSeconds;
     out.hasSignal = hasSignal;
     out.currentDb = -300.0;
@@ -340,6 +338,20 @@ void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
                          + calibrationOffsetDb;
 
     out.peakDb = 20.0 * std::log10 (std::max (peakSample, 1.0e-9)) + calibrationOffsetDb;
+}
+
+void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
+{
+    const juce::ScopedLock sl (lock);
+    copySplUnlocked (out);
+}
+
+void RtaSplAnalyzer::copyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const
+{
+    // RTAとSPLを1回のロックで取る（issue #37）。同一時点の値が取れるという副次効果もある
+    const juce::ScopedLock sl (lock);
+    rtaFrameOut = rtaOut;
+    copySplUnlocked (splOut);
 }
 
 void RtaSplAnalyzer::resetSpl()

@@ -232,6 +232,28 @@ LimitTestTab::~LimitTestTab()
     // テスト中に閉じられたら必ず止める（安全設計: 仕様 3.7）
     if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning)
         ctx.engine.stopExcitation();
+
+    restoreCeilingAfterTest();
+}
+
+void LimitTestTab::overrideCeilingForTest()
+{
+    if (! ceilingOverridden)
+    {
+        ceilingBeforeTestDb = ctx.engine.getOutputCeilingDb();
+        ceilingOverridden = true;
+    }
+}
+
+void LimitTestTab::restoreCeilingAfterTest()
+{
+    if (ceilingOverridden)
+    {
+        ctx.engine.setOutputCeilingDb (ceilingBeforeTestDb);
+        ceilingOverridden = false;
+        eeq::log::write ("limit test: output ceiling restored to "
+                         + juce::String (ceilingBeforeTestDb, 1) + " dBFS");
+    }
 }
 
 double LimitTestTab::currentSplFast()
@@ -252,8 +274,10 @@ void LimitTestTab::startStepTest()
         return;
     }
 
-    // 安全設計（仕様 3.7）: 出力の上限（dBFS）を測定前に必ず設定する
+    // 安全設計（仕様 3.7）: 出力の上限（dBFS）を測定前に必ず設定する。
+    // テスト終了時に元の上限へ戻せるよう、テスト前の値を保存しておく（issue #29）
     const auto ceiling = ceilingEditor.getText().getDoubleValue();
+    overrideCeilingForTest();
     ctx.engine.setOutputCeilingDb ((float) ceiling);
     ctx.settings.setValue (settingsCeilingKey, ceiling);
     ctx.settings.saveIfNeeded();
@@ -281,6 +305,7 @@ void LimitTestTab::stopTest (bool automatic)
     thermalRunning = false;
     ctx.engine.stopExcitation();
     ctx.engine.getMeasurement().stopMeasurement();
+    restoreCeilingAfterTest();
     startButton.setButtonText (strings::limitStartButton);
     thdButton.setButtonText (strings::limitThdButton);
     thermalButton.setButtonText (strings::limitThermalButton);
@@ -298,10 +323,10 @@ void LimitTestTab::startThdTest()
         return;
 
     // 対数スイープを鳴らしてIRから高調波を分離する（仕様 3.7）
+    // ピーク1.0で生成（issue #29: レベルはオーディオスレッドがRMS基準で掛ける）
     thdLevel = ctx.engine.getNoiseLevelDb();
     const auto sampleRate = ctx.engine.getCurrentSampleRate();
-    auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0,
-                                                        (float) juce::Decibels::decibelsToGain (thdLevel));
+    auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0, 1.0f);
     ctx.engine.setSweep (std::move (sweep));
     ctx.engine.startExcitation();
     ctx.engine.getMeasurement().startMeasurement();
@@ -322,6 +347,7 @@ void LimitTestTab::startThermalTest()
         return;
 
     const auto ceiling = ceilingEditor.getText().getDoubleValue();
+    overrideCeilingForTest();
     ctx.engine.setOutputCeilingDb ((float) ceiling);
     thermalLevel = ctx.engine.getNoiseLevelDb();
     thermalRunning = true;

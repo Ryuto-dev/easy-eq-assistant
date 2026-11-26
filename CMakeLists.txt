@@ -178,6 +178,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/EQProposerTests.cpp
         tests/RtaSplTests.cpp
         tests/UtilitiesTests.cpp
+        tests/AudioTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
         src/DSP/TransferFunctionAccumulator.cpp
@@ -194,6 +195,9 @@ if(EASYEQ_BUILD_TESTS)
     target_link_libraries(EasyEQTests PRIVATE
         gtest_main
         juce::juce_dsp
+        # Core/JuceModules.h 経由でGUIモジュールの静的初期化子も参照されるためリンクする
+        juce::juce_graphics
+        juce::juce_gui_basics
     )
 
     include(GoogleTest)
