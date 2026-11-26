@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <vector>
+#include <memory>
 
 namespace eeq::dsp
 {
@@ -35,6 +36,11 @@ public:
                     juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod);
 
     void copyLatestResult (SpectrumFrame& resultOut) const;
+    
+    /** 解析スレッドが完了したフレームを取得する（ロックフリー: ポインタのみアトミックに交換）。
+        まだフレームがなければ nullptr を返す。呼び出し側は所有権を得る。 */
+    std::shared_ptr<const SpectrumFrame> consumeLatestFrame();
+    
     int getAverages() const;
 
     /** RTA/SPL解析器を登録する（解析スレッドへ常時入力を流す。nullで停止） */
@@ -68,6 +74,10 @@ private:
     std::vector<float> captureRef, captureMeas;
     int capturePos = 0;
     int captureFilled = 0;
+
+    // 完了フレームのロックフリー公開（解析スレッド→UIスレッド）
+    mutable juce::CriticalSection framePublishLock;
+    std::shared_ptr<const SpectrumFrame> publishedFrame;
 };
 
 } // namespace eeq::dsp

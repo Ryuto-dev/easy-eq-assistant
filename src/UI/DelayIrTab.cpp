@@ -332,9 +332,9 @@ DelayIrTab::~DelayIrTab() = default; // SystemListModel の完全型が必要（
 void DelayIrTab::timerTick()
 {
     // IRの再構築が必要か（平均数・幅・FFTサイズが変わったら）
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
-    rebuildIrIfDirty();
+    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    if (framePtr)
+        rebuildIrIfDirty (*framePtr);
 
     // ---- 温度変化による遅延のずれ予測（仕様 3.8）----
     // 遅延を適用したときの気温を基準に、現在の気温でのずれを計算する
@@ -405,10 +405,14 @@ void DelayIrTab::timerTick()
     // ループバック校正の鮮度（仕様 6.1: 接続・レート・ゲインが変わったら促す）
     if (ctx.correction.isActive())
     {
-        const auto stale = ! ctx.correction.matches (frame);
-        loopbackStatusLabel.setColour (juce::Label::textColourId,
-                                       stale ? theme::get (theme::ColourId::warn)
-                                             : theme::get (theme::ColourId::textDim));
+        auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+        if (framePtr)
+        {
+            const auto stale = ! ctx.correction.matches (*framePtr);
+            loopbackStatusLabel.setColour (juce::Label::textColourId,
+                                           stale ? theme::get (theme::ColourId::warn)
+                                                 : theme::get (theme::ColourId::textDim));
+        }
     }
 }
 
@@ -541,11 +545,8 @@ void DelayIrTab::paint (juce::Graphics& g)
     }
 }
 
-void DelayIrTab::rebuildIrIfDirty()
+void DelayIrTab::rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame)
 {
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
-
     const auto width = juce::jmax (100, getWidth() - 100);
 
     // サンプルレートも含めてキャッシュの鍵にする（レートが変わると時間軸がずれる）

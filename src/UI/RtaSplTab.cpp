@@ -552,8 +552,11 @@ void RtaSplTab::updateSnHint()
     bool lowSnr = false;
     bool lowCoherence = false;
 
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
+    // ロックフリーでフレーム取得（コヒーレンスのみ参照）
+    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    if (! framePtr)
+        return;
+    const eeq::dsp::SpectrumFrame& frame = *framePtr;
 
     for (size_t i = 0; i < rtaCenters.size() && i < floorLevels.size() && i < floorCenters.size(); ++i)
     {

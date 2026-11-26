@@ -524,8 +524,10 @@ void LimitTestTab::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 
     // コヒーレンス低下の併記（仕様 3.7: 落ち始める帯域とレベル）
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
+    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    if (! framePtr)
+        return;
+    const eeq::dsp::SpectrumFrame& frame = *framePtr;
 
     if (frame.averages > 0 && ! frame.coherence.empty())
     {
