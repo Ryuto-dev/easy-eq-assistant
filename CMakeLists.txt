@@ -179,6 +179,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/RtaSplTests.cpp
         tests/UtilitiesTests.cpp
         tests/AudioTests.cpp
+        tests/ThdTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
         src/DSP/TransferFunctionAccumulator.cpp

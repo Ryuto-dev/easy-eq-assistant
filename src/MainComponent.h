@@ -59,6 +59,19 @@ private:
     };
 
     AppPropertiesStorage appPropertiesStorage;
+
+    // テーマモードを他のメンバーより先に確定させる（各ウィジェットの構築時に
+    // theme::get で色が焼き込まれるため。issue #9）
+    struct ThemeModeInitializer
+    {
+        ThemeModeInitializer (juce::PropertiesFile* settings)
+        {
+            const auto saved = settings->getIntValue ("themeMode", (int) eeq::ui::theme::Mode::dark);
+            eeq::ui::theme::setMode ((eeq::ui::theme::Mode) juce::jlimit (0, 1, saved));
+        }
+    };
+
+    ThemeModeInitializer themeModeInit { appPropertiesStorage.properties.getUserSettings() };
     eeq::audio::AudioEngine engine;
     eeq::core::ProjectStore project;
     eeq::core::SystemCorrection correction;

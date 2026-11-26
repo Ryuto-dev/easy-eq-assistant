@@ -3,6 +3,7 @@
 #include "../Core/Log.h"
 #include "../Core/Utilities.h"
 #include "../DSP/SweepGenerator.h"
+#include "../DSP/ThdAnalyzer.h"
 #include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"
@@ -449,59 +450,53 @@ void LimitTestTab::timerTick()
         thdButton.setButtonText (strings::limitThdButton);
         updateControlState();
 
-        // IRから高調波を分離する（Farina法。仕様 3.7）
-        eeq::dsp::SpectrumFrame frame;
-        ctx.engine.getMeasurement().copyLatestResult (frame);
+        // 録音したスイープを逆フィルタでデコンボリューションし、高調波を分離する
+        //（Farina法。issue #30: Welch平均のH1からは高調波は原理的に分離できない）
+        std::vector<float> recordedRef, recordedMeas;
+        const auto sampleRate = ctx.engine.getCurrentSampleRate();
+        const auto captureSamples = (int) std::llround (11.5 * std::max (8000.0, sampleRate));
+        ctx.engine.getMeasurement().copyRecentSamplesExact (captureSamples, recordedRef, recordedMeas);
 
-        if (frame.averages > 0)
+        float refPeak = 0.0f;
+
+        for (const auto sample : recordedRef)
+            refPeak = std::max (refPeak, std::abs (sample));
+
+        if (refPeak < 1.0e-4f)
         {
-            const auto ir = eeq::dsp::buildImpulseResponse (frame);
-            const auto sampleRate = ir.sampleRate;
-            const auto sweepSeconds = 10.0;
-            const auto peak = ir.peakTimeSamples;
-
-            auto windowRms = [&] (double centerSample, double widthMs)
-            {
-                const auto width = widthMs * sampleRate / 1000.0;
-                double sum = 0.0;
-                int count = 0;
-
-                for (int i = (int) (centerSample - width); i <= (int) (centerSample + width); ++i)
-                {
-                    if (i < 0 || i >= (int) ir.samples.size())
-                        continue;
-
-                    sum += (double) ir.samples[(size_t) i] * (double) ir.samples[(size_t) i];
-                    ++count;
-                }
-
-                return count > 0 ? std::sqrt (sum / count) : 0.0;
-            };
-
-            const auto fundamental = windowRms (peak, 1.0);
-            double harmonicPower = 0.0;
-            juce::String harmonicText;
-
-            for (int k = 2; k <= 5; ++k)
-            {
-                // 対数スイープの k 次高調波は t·ln(k)/ln(f2/f1) だけ早く現れる
-                const auto arrival = eeq::dsp::LogSweepGenerator::harmonicArrivalSeconds (sweepSeconds, 20.0, 20000.0, k);
-                const auto harmonicPeak = peak - arrival * sampleRate;
-                const auto rms = windowRms (harmonicPeak, 1.0);
-                harmonicPower += rms * rms;
-
-                const auto percent = fundamental > 0.0 ? 100.0 * rms / fundamental : 0.0;
-                harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ") + juce::String (percent, 2) + "%";
-            }
-
-            const auto thd = fundamental > 0.0 ? 100.0 * std::sqrt (harmonicPower) / fundamental : 0.0;
-            thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + " dBFS   THD: "
-                                  + juce::String (thd, 2) + "%   (" + harmonicText + ")",
+            thdLabel.setText (juce::String (u8"基準信号（Ref）が録音できていません。内部参照またはRef入力の割り当てを確認してください"),
                               juce::dontSendNotification);
+            eeq::log::write ("limit test: THD FAILED (reference not captured)");
+        }
+        else
+        {
+            const auto result = eeq::dsp::analyzeThdFromSweepRecording (recordedRef, recordedMeas,
+                                                                        sampleRate, 10.0, 20.0, 20000.0);
 
-            // 歪みが急に増えるレベルも上限の目安に加える（仕様 3.7）。ここでは表示まで
-            eeq::log::write (juce::String ("limit test: THD=") + juce::String (thd, 3) + "% at "
-                             + juce::String (thdLevel, 1) + " dBFS");
+            if (! result.valid)
+            {
+                thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1)
+                                      + juce::String (u8" dBFS   ") + result.failureReason,
+                                  juce::dontSendNotification);
+                eeq::log::write ("limit test: THD FAILED: " + result.failureReason);
+            }
+            else
+            {
+                juce::String harmonicText;
+
+                for (int k = 2; k <= 5; ++k)
+                    harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ")
+                                  + juce::String (result.harmonicPercent[(size_t) (k - 2)], 2) + "%";
+
+                thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1)
+                                      + " dBFS   THD: " + juce::String (result.thdPercent, 2) + "%   ("
+                                      + harmonicText + ")",
+                                  juce::dontSendNotification);
+
+                // 歪みが急に増えるレベルも上限の目安に加える（仕様 3.7）。ここでは表示まで
+                eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)
+                                 + "% at " + juce::String (thdLevel, 1) + " dBFS");
+            }
         }
     }
 

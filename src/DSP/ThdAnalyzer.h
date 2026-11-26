@@ -88,7 +88,19 @@ struct ThdResult
         fft.perform (in.data(), measSpec.data(), false);
     }
 
-    // d = IFFT( Y·conj(X) / (|X|² + ε) )
+    // d = IFFT( Y·conj(X) / (|X|² + ε·max|X|²) )。
+    // 対数スイープのスペクトルは 1/f で落ちるため、無正則化の逆フィルタは
+    // 高域で 1/|X|² の増幅になり、高調波成分が巨大な偽ピークとして現れる
+    //（実測: 無正則化で THD が 700% 超）。ε は最大電力比で与え、
+    // 励起が十分にある帯域だけを逆フィルタする
+    double maxPower = 0.0;
+
+    for (size_t i = 0; i < n; ++i)
+        maxPower = std::max (maxPower, (double) refSpec[i].real() * refSpec[i].real()
+                                            + (double) refSpec[i].imag() * refSpec[i].imag());
+
+    const auto regularisation = 1.0e-3 * maxPower + 1.0e-12;
+
     std::vector<std::complex<float>> deconv ((size_t) n);
 
     for (size_t i = 0; i < n; ++i)
@@ -96,7 +108,7 @@ struct ThdResult
         const auto x = std::complex<double> (refSpec[i]);
         const auto y = std::complex<double> (measSpec[i]);
         const auto power = x.real() * x.real() + x.imag() * x.imag();
-        const auto d = y * std::conj (x) / (power + 1.0e-12);
+        const auto d = y * std::conj (x) / (power + regularisation);
         deconv[i] = { (float) d.real(), (float) d.imag() };
     }
 

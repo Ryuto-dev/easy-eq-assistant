@@ -36,6 +36,11 @@ MainComponent::MainComponent()
     {
         theme::toggle();
         applyThemeToComponents();
+
+        // テーマ選択を保存する（issue #9: 再起動後もライト/ダークを維持）
+        auto* settings = appPropertiesStorage.properties.getUserSettings();
+        settings->setValue ("themeMode", (int) theme::mode());
+        settings->saveIfNeeded();
     };
 
     measurementPanel.setSettings (appPropertiesStorage.properties.getUserSettings());
