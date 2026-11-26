@@ -110,6 +110,12 @@ public:
         owner.setExciteTarget (rowNumber);
     }
 
+    void selectedRowsChanged (int) override
+    {
+        // 選択が変わったら名前/出力chの編集欄へ反映する（issue #15）
+        owner.refreshSystemEditors();
+    }
+
 private:
     DelayIrTab& owner;
 };
@@ -141,6 +147,10 @@ DelayIrTab::DelayIrTab (UiContext& context)
     clearButton.onClick = [this] { clearDelay(); };
     addAndMakeVisible (clearButton);
 
+    // GCC-PHAT を既定で有効にする（issue #34）: 振幅相関だと低域のエネルギーが支配し、
+    // ピンクノイズでの到達時間がサブ〜ウーファー帯で決まってしまう。
+    // PHAT はスペクトルを白色化するため、帯域依存の偏りがなくなる
+    phatToggle.setToggleState (true, juce::dontSendNotification);
     phatToggle.setButtonText (strings::delayPhatToggle);
     styleToggle (phatToggle);
     addAndMakeVisible (phatToggle);
@@ -328,12 +338,26 @@ DelayIrTab::DelayIrTab (UiContext& context)
         const int paletteCount = 6;
         eeq::core::SpeakerSystemInfo system;
         system.name = juce::String (u8"系統") + juce::String (systems.size() + 1);
-        system.outputChannel = 0;
+
+        // 未使用の最小出力chを割り当てる（issue #15: すべて ch0 固定だと個別測定が成立しない）
+        uint64_t used = 0;
+
+        for (const auto& existing : systems)
+            used |= (uint64_t) 1 << juce::jlimit (0, 63, existing.outputChannel);
+
+        int freeChannel = 0;
+
+        while (freeChannel < 64 && (used & ((uint64_t) 1 << freeChannel)) != 0)
+            ++freeChannel;
+
+        system.outputChannel = freeChannel;
         system.colour = theme::get ((theme::ColourId) ((int) theme::ColourId::snapshotPalette1
                                                      + systems.size() % paletteCount));
         systems.push_back (system);
         saveSystemsToVenue();
         rebuildSystemList();
+        systemList.selectRow ((int) systems.size() - 1);
+        refreshSystemEditors();
     };
     addAndMakeVisible (systemsAddButton);
 
@@ -363,6 +387,51 @@ DelayIrTab::DelayIrTab (UiContext& context)
     systemList.setColour (juce::ListBox::backgroundColourId, theme::get (theme::ColourId::panelBackground));
     systemList.setRowHeight (22);
     addAndMakeVisible (systemList);
+
+    // ---- 系統の編集（名前・出力ch。issue #15）----
+    styleTextEditor (systemNameEditor);
+    systemNameEditor.setTextToShowWhenEmpty (juce::String (u8"系統名"),
+                                             theme::get (theme::ColourId::textDim));
+    systemNameEditor.onTextChange = [this]
+    {
+        const auto row = systemList.getSelectedRow();
+        auto& systems = ctx.project.currentVenue().systems;
+
+        if (row >= 0 && row < (int) systems.size())
+        {
+            const auto newName = systemNameEditor.getText().trim();
+
+            if (newName.isNotEmpty() && newName != systems[(size_t) row].name)
+            {
+                systems[(size_t) row].name = newName;
+                saveSystemsToVenue();
+                systemList.updateContent();
+            }
+        }
+    };
+    addAndMakeVisible (systemNameEditor);
+
+    styleCombo (systemChannelCombo);
+    systemChannelCombo.onChange = [this]
+    {
+        const auto row = systemList.getSelectedRow();
+        auto& systems = ctx.project.currentVenue().systems;
+        const auto channel = systemChannelCombo.getSelectedId() - 1;
+
+        if (row >= 0 && row < (int) systems.size() && channel >= 0
+            && channel != systems[(size_t) row].outputChannel)
+        {
+            systems[(size_t) row].outputChannel = channel;
+            saveSystemsToVenue();
+            systemList.updateContent();
+
+            // 測定対象がこの系統だった場合はルーティングも張り直す
+            if (exciteTarget == row)
+                ctx.engine.setOutputRoutingMask ((uint64_t) 1 << channel);
+        }
+    };
+    addAndMakeVisible (systemChannelCombo);
+    refreshChannelComboChoices();
 
     // ---- 系統比較（3.3.1 / 3.3.3 / 3.3.5）----
     compareTitle.setText (strings::compareSection, juce::dontSendNotification);
@@ -416,6 +485,10 @@ DelayIrTab::~DelayIrTab() = default; // SystemListModel の完全型が必要（
 
 void DelayIrTab::timerTick()
 {
+    // デバイスが開き直されたら出力chの選択肢を作り直す（issue #15）
+    if (ctx.engine.getDeviceGeneration() != seenDeviceGenerationForChannels)
+        refreshChannelComboChoices();
+
     // ループバック校正の自動進行（issue #17/#31）: 平均が溜まったら検証して保存、
     // 期限を過ぎたら理由を出して止める
     if (loopbackRanging)
@@ -867,6 +940,49 @@ void DelayIrTab::rebuildSystemList()
     systemList.updateContent();
 }
 
+void DelayIrTab::refreshChannelComboChoices()
+{
+    // 開かれている出力chから選択肢を作る（issue #15）
+    juce::Array<int> indices;
+    juce::StringArray names;
+    ctx.engine.getOpenedOutputChannels (indices, names);
+
+    const auto currentId = systemChannelCombo.getSelectedId();
+    systemChannelCombo.clear (juce::dontSendNotification);
+
+    for (int i = 0; i < indices.size(); ++i)
+        systemChannelCombo.addItem (names[i], indices[i] + 1);
+
+    if (currentId > 0)
+        systemChannelCombo.setSelectedId (currentId, juce::dontSendNotification);
+
+    seenDeviceGenerationForChannels = ctx.engine.getDeviceGeneration();
+}
+
+void DelayIrTab::refreshSystemEditors()
+{
+    const auto row = systemList.getSelectedRow();
+    auto& systems = ctx.project.currentVenue().systems;
+
+    const auto enabled = row >= 0 && row < (int) systems.size();
+    systemNameEditor.setEnabled (enabled);
+    systemChannelCombo.setEnabled (enabled);
+
+    if (! enabled)
+    {
+        systemNameEditor.setText ({}, juce::dontSendNotification);
+        return;
+    }
+
+    systemNameEditor.setText (systems[(size_t) row].name, juce::dontSendNotification);
+
+    if (systemChannelCombo.getNumItems() == 0)
+        refreshChannelComboChoices();
+
+    systemChannelCombo.setSelectedId (systems[(size_t) row].outputChannel + 1,
+                                      juce::dontSendNotification);
+}
+
 void DelayIrTab::setExciteTarget (int index)
 {
     exciteTarget = index;
@@ -1103,24 +1219,33 @@ void DelayIrTab::resized()
     // 右: ループバック / 系統 / 比較
     auto loopback = right.removeFromTop (86);
     loopbackTitle.setBounds (loopback.removeFromTop (18));
+    // 右端から固定幅で確保して潰れを防ぐ（issue #28）
     auto loopbackRow = loopback.removeFromTop (26);
-    loopbackMeasureButton.setBounds (loopbackRow.removeFromLeft (170));
-    loopbackRow.removeFromLeft (6);
-    loopbackClearButton.setBounds (loopbackRow.removeFromLeft (90));
-    loopbackRow.removeFromLeft (12);
-    loopbackEnableToggle.setBounds (loopbackRow.removeFromLeft (120));
+    loopbackEnableToggle.setBounds (loopbackRow.removeFromRight (120));
+    loopbackRow.removeFromRight (12);
+    loopbackClearButton.setBounds (loopbackRow.removeFromRight (90));
+    loopbackRow.removeFromRight (6);
+    loopbackMeasureButton.setBounds (loopbackRow);
     loopbackStatusLabel.setBounds (loopback);
 
-    auto systems = right.removeFromTop (150);
+    auto systems = right.removeFromTop (178);
     systemsTitle.setBounds (systems.removeFromTop (18));
     systemsHint.setBounds (systems.removeFromTop (14));
     auto systemsButtons = systems.removeFromTop (26);
-    systemsAllButton.setBounds (systemsButtons.removeFromLeft (110));
-    systemsButtons.removeFromLeft (6);
-    systemsAddButton.setBounds (systemsButtons.removeFromLeft (100));
-    systemsButtons.removeFromLeft (6);
-    systemsRemoveButton.setBounds (systemsButtons.removeFromLeft (56));
+    systemsRemoveButton.setBounds (systemsButtons.removeFromRight (56));
+    systemsButtons.removeFromRight (6);
+    systemsAddButton.setBounds (systemsButtons.removeFromRight (100));
+    systemsButtons.removeFromRight (6);
+    systemsAllButton.setBounds (systemsButtons.removeFromRight (110));
     systems.removeFromTop (4);
+
+    // 系統名と出力chの編集行（issue #15）。chコンボは右端に固定で確保する
+    auto systemEditRow = systems.removeFromTop (24);
+    systemChannelCombo.setBounds (systemEditRow.removeFromRight (90));
+    systemEditRow.removeFromRight (4);
+    systemNameEditor.setBounds (systemEditRow);
+
+    systems.removeFromTop (2);
     systemList.setBounds (systems);
 
     auto compare = right;

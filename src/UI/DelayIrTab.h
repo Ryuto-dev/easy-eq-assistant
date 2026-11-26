@@ -107,6 +107,12 @@ private:
     juce::Label systemsTitle, systemsHint;
     juce::TextButton systemsAddButton, systemsRemoveButton, systemsAllButton;
     juce::ListBox systemList { {}, nullptr };
+    juce::TextEditor systemNameEditor;    // 選択中の系統名を編集（issue #15）
+    juce::ComboBox systemChannelCombo;    // 選択中の系統の出力chを編集（issue #15）
+    uint32_t seenDeviceGenerationForChannels = 0;
+
+    void refreshSystemEditors();
+    void refreshChannelComboChoices();
 
     // ---- 系統比較 ----
     juce::Label compareTitle, compareARowLabel, compareBRowLabel;
