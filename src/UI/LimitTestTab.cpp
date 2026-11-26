@@ -138,8 +138,7 @@ LimitTestTab::LimitTestTab (UiContext& context)
     addAndMakeVisible (safetyTitle);
 
     warnLabel.setText (strings::limitWarnMessage, juce::dontSendNotification);
-    warnLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::danger));
-    warnLabel.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
+    styleLabelWithColour (warnLabel, theme::ColourId::danger, 12.5f, true);
     addAndMakeVisible (warnLabel);
 
     styleToggle (acknowledgeToggle);
@@ -220,8 +219,7 @@ LimitTestTab::LimitTestTab (UiContext& context)
     coherenceNoteLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     addAndMakeVisible (coherenceNoteLabel);
 
-    suggestionLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
-    suggestionLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    styleLabelWithColour (suggestionLabel, theme::ColourId::warn, 14.0f, true);
     addAndMakeVisible (suggestionLabel);
 
     addAndMakeVisible (stepGraph);

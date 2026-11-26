@@ -345,6 +345,15 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
 
 juce::String ProjectStore::saveToFile (const juce::File& file) const
 {
+    return saveVenuesToFile (venues_, currentVenueIndex, file);
+}
+
+juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
+                                             const juce::File& file)
+{
+    // 静的版（issue #58）: 会場データのコピーを受け取り、JSON化と書き込みを行う。
+    // 呼び出し側（自動保存のワーカースレッド）はメッセージスレッドで取ったコピーを渡すので、
+    // UI スレッドをブロックせずに保存できる
     juce::DynamicObject* root = new juce::DynamicObject();
     juce::var object (root);
 
@@ -353,11 +362,11 @@ juce::String ProjectStore::saveToFile (const juce::File& file) const
 
     juce::Array<juce::var> venueArray;
 
-    for (const auto& venue : venues_)
+    for (const auto& venue : venues)
         venueArray.add (venueToVar (venue));
 
     root->setProperty ("venues", venueArray);
-    root->setProperty ("currentVenueIndex", currentVenueIndex);
+    root->setProperty ("currentVenueIndex", currentIndex);
 
     if (! file.getParentDirectory().exists())
         file.getParentDirectory().createDirectory();

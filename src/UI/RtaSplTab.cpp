@@ -94,8 +94,7 @@ RtaSplTab::RtaSplTab (UiContext& context)
     addAndMakeVisible (timeConstantCombo);
 
     uncalibratedLabel.setText (strings::splUncalibrated, juce::dontSendNotification);
-    uncalibratedLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
-    uncalibratedLabel.setFont (juce::Font (juce::FontOptions (11.0f)));
+    styleLabelWithColour (uncalibratedLabel, theme::ColourId::warn, 11.0f);
     addAndMakeVisible (uncalibratedLabel);
 
     // ---- S/N（仕様 3.5.1）----
@@ -337,9 +336,10 @@ void RtaSplTab::timerTick()
     if (std::abs (ctx.engine.getCurrentSampleRate() - configuredSampleRate) > 0.5)
         applyAnalyzerConfig();
 
-    // RTA表示の上端: 未校正時は 0 dBFS（フルスケール）を天井に、校正済みなら SPL スケールに合わせる
+    // RTA表示の上端（issue #49）: 校正オフセットは「0 dBFS が何 dB SPL か」なので、
+    // 校正後の上端は offset そのもの（94 を足すと 94 dB 分高くなり全バーが見えなくなる）
     const auto offset = analyzer.getCalibrationOffsetDb();
-    splTopDb = (std::abs (offset) < 1.0e-9) ? 0.0f : (float) (94.0 + offset); // 未校正: 0 dBFS、校正済み: 94 dB SPL 基準
+    splTopDb = eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (offset);
 
     // RTAとSPLを1回のロックで取得する（issue #37）
     eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
@@ -437,35 +437,53 @@ void RtaSplTab::timerTick()
     updateGainAssist();
 
     // 校正オフセット計算（重み付け切替後のリセット完了待ち）
-    if (calibrationOffsetPending)
-    {
-        eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-        ctx.engine.getSplAnalyzer().copySpl (spl);
-
-        if (spl.hasSignal)
-        {
-            const auto offset = calibrationMeterValue - spl.currentDb;
-            ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (offset);
-            uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
-            ctx.settings.setValue (settingsOffsetKey, offset);
-            ctx.settings.saveIfNeeded();
-
-            calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
-                                            juce::dontSendNotification);
-            eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (calibrationMeterValue, 1)
-                             + " app=" + juce::String (spl.currentDb, 1) + " offset=" + juce::String (offset, 2));
-            calibrationOffsetPending = false;
-        }
-        else if (juce::Time::getCurrentTime() > calibrationDeadline)
-        {
-            calibrationOffsetPending = false;
-            calibrationOffsetLabel.setText (
-                juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
-                juce::dontSendNotification);
-        }
-    }
+    processCalibrationPending();
 
     repaint();
+}
+
+void RtaSplTab::processCalibrationPending()
+{
+    // 校正待ちの進行（issue #55: タブ非表示でも MainComponent から呼ばれる）。
+    // オフセットの計算は「既存オフセットを外した生の値」を基準にする（issue #48:
+    // 表示値はすでにオフセット込みのため、そのまま差を取ると 2 回目で 0 に戻る）
+    if (! calibrationOffsetPending)
+        return;
+
+    auto& analyzer = ctx.engine.getSplAnalyzer();
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copySpl (spl);
+
+    if (spl.hasSignal)
+    {
+        const auto previousOffset = analyzer.getCalibrationOffsetDb();
+        const auto offset = eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (
+            calibrationMeterValue, spl.currentDb, previousOffset);
+        analyzer.setCalibrationOffsetDb (offset);
+        uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
+        ctx.settings.setValue (settingsOffsetKey, offset);
+        ctx.settings.saveIfNeeded();
+
+        calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
+                                        juce::dontSendNotification);
+        eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (calibrationMeterValue, 1)
+                         + " app=" + juce::String (spl.currentDb, 1) + " (previous offset "
+                         + juce::String (previousOffset, 2) + ") offset=" + juce::String (offset, 2));
+        calibrationOffsetPending = false;
+    }
+    else if (juce::Time::getCurrentTime() > calibrationDeadline)
+    {
+        calibrationOffsetPending = false;
+        calibrationOffsetLabel.setText (
+            juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
+            juce::dontSendNotification);
+    }
+}
+
+void RtaSplTab::timerTickBackground()
+{
+    // 非表示タブ用の軽量ティック（issue #55）: 校正オフセット待ちの進行だけを行う
+    processCalibrationPending();
 }
 
 void RtaSplTab::startNoiseFloorMeasurement()

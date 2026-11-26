@@ -44,8 +44,7 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
     setOpaque (true);
 
     exitButton.setButtonText (strings::liveExitButton);
-    exitButton.setColour (juce::TextButton::buttonColourId, theme::get (theme::ColourId::danger));
-    exitButton.setColour (juce::TextButton::textColourOffId, theme::get (theme::ColourId::text));
+    styleDangerButton (exitButton);
     exitButton.onLongPress = [this]
     {
         if (onHideRequested != nullptr)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <memory>
+
 #include "Core/JuceModules.h"
 
 #include "Audio/AudioEngine.h"
@@ -98,6 +101,8 @@ private:
     bool errorDialogOpen = false;
     bool wizardShown = false;
     juce::Time lastAutoSave; // 定期オートセーブ用（issue #38）
+    std::shared_ptr<std::atomic_bool> saveInFlight
+        { std::make_shared<std::atomic_bool> (false) }; // 保存の二重実行防止（issue #58）
 
     static constexpr int topBarHeight = 104;
     static constexpr int bottomBarHeight = 64;

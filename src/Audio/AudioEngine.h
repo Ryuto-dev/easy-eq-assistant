@@ -140,6 +140,52 @@ public:
     { outputCeilingDb.store (ceilingDb, std::memory_order_relaxed); }
     float getOutputCeilingDb() const noexcept { return outputCeilingDb.load (std::memory_order_relaxed); }
 
+    /** ユニットRMSピンクノイズの実測クレスト（ピーク/RMS）。テストで 12〜16 dB に固定。
+        「RMS = 設定値」なので、設定が ceiling − この値 を超えると生成器出力が
+        天井でクリップする（issue #52）。UI のレベル上限はこれで決める */
+    static constexpr float excitationCrestDb = 14.3f;
+
+    /** 励起ソースごとの RMS 正規化係数（issue #51）。
+        「設定レベル = dBFS RMS（0 dBFS = 実効値 1.0）」に全ソースを揃えるための係数。
+        ピンクノイズ: 生成器が RMS 1.0。スイープ/1kHzトーン: ピーク1.0・実効0.7071 の
+        正弦系なので √2。WAV: ピーク正規化（= dBFS ピーク基準）。
+        1kHz帯域ノイズ: フィルタ通過後の実測 RMS 0.314（tests/AudioTests.cpp が検証） */
+    [[nodiscard]] static float rmsNormaliseFor (ExcitationSource source) noexcept
+    {
+        switch (source)
+        {
+            case ExcitationSource::sweep:
+            case ExcitationSource::tone1k:
+                return 1.41421356f;
+            case ExcitationSource::bandNoise1k:
+                return 3.18f;
+            case ExcitationSource::wavFile:
+            case ExcitationSource::pinkNoise:
+            case ExcitationSource::external:
+            default:
+                return 1.0f;
+        }
+    }
+
+    /** フェード包絡の純粋関数（issue #53 のテスト用）。
+        stateInt: 0=idle, 1=fadeIn, 2=running, 3=fadeOut。
+        startEnvelope はフェード開始時点の包絡値（フェードイン中の停止で
+        フルレベルへ跳ねないように、現在値からフェードアウトを始める） */
+    [[nodiscard]] static float fadeEnvelopeAt (int stateInt, int position, int length,
+                                               float startEnvelope) noexcept
+    {
+        const auto fraction = juce::jlimit (0.0f, 1.0f,
+                                            (float) position / (float) juce::jmax (1, length));
+
+        switch (stateInt)
+        {
+            case 1:  return startEnvelope + (1.0f - startEnvelope) * fraction; // fadeIn
+            case 2:  return 1.0f;                                              // running
+            case 3:  return startEnvelope * (1.0f - fraction);                 // fadeOut
+            default: return 0.0f;                                              // idle
+        }
+    }
+
     /** 緊急停止（Esc。仕様 6.3）: 出力をフェードアウトし、測定も止める */
     void emergencyStop() noexcept;
 
@@ -206,16 +252,19 @@ private:
     std::atomic<int> fadePosition { 0 };
     std::atomic<int> fadeInLength { 1 };
     std::atomic<int> fadeOutLength { 1 };
+    // フェード開始時点の包絡（issue #53: フェードイン中に停止しても現在のレベルから
+    // フェードアウトする。running からの停止は 1.0）
+    std::atomic<float> fadeStartEnvelope { 0.0f };
 
     std::atomic<ExcitationSource> excitationSource { ExcitationSource::pinkNoise };
     std::atomic<float> outputCeilingDb { 0.0f };
 
-    // スイープ/WAVのバッファ（issue #33: RT安全方針）。
+    // スイープ/WAVのバッファ（issue #33: RT安全方針 / #54: 3世代ローテーション）。
     // オーディオスレッドは atomic な生ポインタを acquire 読みするだけで、
     // ロック・shared_ptrコピー・解放は一切しない。解放はメッセージスレッドだが、
-    // オーディオスレッドがまだ参照している可能性があるため直前の世代を1つ保持する
-    //（2世代ローテーション。差し替え直後の1ブロックまでは旧バッファが生きる）
-    std::shared_ptr<const std::vector<float>> ownedBuffers[2]; // メッセージスレッドだけが触る
+    // オーディオスレッドがまだ参照している可能性があるため直前の2世代を保持する
+    //（3世代ローテーション: 1ブロック内に2回差し替わっても旧バッファが生きる）
+    std::shared_ptr<const std::vector<float>> ownedBuffers[3]; // メッセージスレッドだけが触る
     std::atomic<const std::vector<float>*> activeBufferPtr { nullptr };
     std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
     std::atomic<bool> excitationFinished { false };

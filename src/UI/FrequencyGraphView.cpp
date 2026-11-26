@@ -373,6 +373,8 @@ void FrequencyGraphView::paint (juce::Graphics& g)
 
         juce::Path dimPath, brightPath;
         bool inDim = false, inBright = false;
+        float prevDimValue = 0.0f, prevBrightValue = 0.0f;
+        bool haveDimValue = false, haveBrightValue = false;
 
         const auto count = (int) curveColumns.size();
 
@@ -384,6 +386,7 @@ void FrequencyGraphView::paint (juce::Graphics& g)
             if (! std::isfinite (value))
             {
                 inDim = inBright = false;
+                haveDimValue = haveBrightValue = false;
                 continue;
             }
 
@@ -391,9 +394,15 @@ void FrequencyGraphView::paint (juce::Graphics& g)
             const auto y = yOf (value);
             const bool bright = isBright (column);
 
+            // 不連続の検出（issue #56）: 位相カーブは ±180° の折り返しで値が
+            // 約360°ジャンプする。そのまま lineTo すると縦線だらけになるため、
+            // 前の点との差が 180° を超えたら新しいサブパスを開始する。
+            // 振幅（dB）やコヒーレンスではこの大きさのジャンプは起きない
             if (bright && brightRunsOnly)
             {
-                if (! inBright)
+                const auto wraps = haveBrightValue && std::abs (value - prevBrightValue) > 180.0f;
+
+                if (! inBright || wraps)
                 {
                     brightPath.startNewSubPath (x, y);
                     inBright = true;
@@ -401,11 +410,15 @@ void FrequencyGraphView::paint (juce::Graphics& g)
                 else
                     brightPath.lineTo (x, y);
 
+                prevBrightValue = value;
+                haveBrightValue = true;
                 inDim = false;
             }
             else
             {
-                if (! inDim)
+                const auto wraps = haveDimValue && std::abs (value - prevDimValue) > 180.0f;
+
+                if (! inDim || wraps)
                 {
                     dimPath.startNewSubPath (x, y);
                     inDim = true;
@@ -413,6 +426,8 @@ void FrequencyGraphView::paint (juce::Graphics& g)
                 else
                     dimPath.lineTo (x, y);
 
+                prevDimValue = value;
+                haveDimValue = true;
                 inBright = false;
             }
         }

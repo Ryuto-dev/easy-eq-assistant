@@ -93,7 +93,10 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     addAndMakeVisible (levelTitle);
 
     styleSlider (levelSlider);
-    levelSlider.setRange (-60.0, 0.0, 0.5);
+    // 上限は「クリップしない最大 RMS」: ピンクノイズのクレスト（約 14.3 dB）ぶんの
+    // 余裕を残す（issue #52）。これを超えると生成器の出力が天井でクリップし、
+    // 測定そのものが歪むため、スライダーで入れられないようにする
+    levelSlider.setRange (-60.0, (double) -eeq::audio::AudioEngine::excitationCrestDb, 0.5);
     levelSlider.setValue (engine.getNoiseLevelDb(), juce::dontSendNotification);
     levelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, 24);
     levelSlider.setTextValueSuffix (" dBFS");

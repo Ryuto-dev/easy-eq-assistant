@@ -181,16 +181,43 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     engine.saveSettings();
-    saveProjectIfPossible();
+    // 最終保存は同期的に行う（自動保存がワーカースレッドのまま終了すると、
+    // 終了処理に書き込みが殺されて失われる可能性があるため）
+    {
+        const auto error = project.saveToFile (eeq::core::ProjectStore::defaultProjectFile());
+
+        if (error.isNotEmpty())
+            eeq::log::write ("project save FAILED: " + error);
+    }
     appPropertiesStorage.properties.getUserSettings()->saveIfNeeded();
 }
 
 void MainComponent::saveProjectIfPossible()
 {
-    const auto error = project.saveToFile (eeq::core::ProjectStore::defaultProjectFile());
+    // 自動保存はワーカースレッドへ移す（issue #58）: スナップショットが増えると
+    // JSON化が数百 ms になり、60秒ごとのタイマーで UI が固まるため。
+    // メッセージスレッドではデータのコピーだけを行い（数 ms）、JSON 化と書き込みを
+    // 別スレッドで行う。inFlight フラグは shared_ptr で持ち、保存中にコンポーネントが
+    // 破棄されてもフラグの開放が安全に行われるようにする
+    if (saveInFlight->exchange (true))
+        return;
 
-    if (error.isNotEmpty())
-        eeq::log::write ("project auto-save FAILED: " + error);
+    auto venues = project.venues(); // 深いコピー（メッセージスレッドで安全に取る）
+    const auto currentIndex = project.getCurrentVenueIndex();
+    const auto file = eeq::core::ProjectStore::defaultProjectFile();
+    auto inFlight = saveInFlight;
+
+    juce::Thread::launch ([inFlight, venues = std::move (venues), currentIndex, file]
+    {
+        const auto error = eeq::core::ProjectStore::saveVenuesToFile (venues, currentIndex, file);
+
+        if (error.isNotEmpty())
+            eeq::log::write ("project auto-save FAILED: " + error);
+
+        // 次の保存を許可する（メッセージループが生きていれば非同期に戻す）。
+        // 終了処理でメッセージループが止まっていても、atomic なので安全
+        juce::MessageManager::callAsync ([inFlight] { inFlight->store (false); });
+    });
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -201,9 +228,17 @@ void MainComponent::paint (juce::Graphics& g)
 
 void MainComponent::applyThemeToComponents()
 {
-    tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    // 生成時に各ウィジェットへ焼き込まれた色を、現在のテーマで塗り直す（issue #9/#50）
+    eeq::ui::restyleTree (this);
 
-    // 全タブを再描画する（色は theme::get を都度参照する実装なので、これだけで追従する）
+    tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    getLookAndFeel().setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
+
+    // addTab 時に焼き込んだタブ背景色も張り直す
+    for (int i = 0; i < tabs.getNumTabs(); ++i)
+        tabs.setTabBackgroundColour (i, theme::get (theme::ColourId::windowBackground));
+
+    // 全タブを再描画する
     for (int i = 0; i < tabs.getNumTabs(); ++i)
         if (auto* component = tabs.getTabContentComponent (i))
             component->repaint();
@@ -255,7 +290,9 @@ void MainComponent::timerCallback()
 
     if (uiShowing && ! liveMode && currentTab == 0) transferTab.timerTick();
     if (uiShowing && ! liveMode && currentTab == 1) delayTab.timerTick();
+    else delayTab.timerTickBackground(); // ループバック測定の進行は非表示でも止めない（issue #55）
     if (uiShowing && ! liveMode && currentTab == 2) rtaSplTab.timerTick();
+    else rtaSplTab.timerTickBackground(); // SPL校正待ちの進行も同様（issue #55）
     if (uiShowing && ! liveMode && currentTab == 3) eqTab.timerTick();
     limitTab.timerTick();
     venueTab.timerTick();
@@ -288,6 +325,9 @@ void MainComponent::timerCallback()
 
     if (engine.consumeDeviceError (deviceError))
     {
+        // デバイスエラーの記録と測定停止はここ（メッセージスレッド）で行う（issue #57）
+        eeq::log::write ("audio device error: " + deviceError + " (noise and measurement stopped)");
+        engine.getMeasurement().stopMeasurement();
         showError (deviceError.isNotEmpty()
                        ? eeq::strings::deviceErrorMessage + "\n\n" + deviceError
                        : eeq::strings::deviceErrorMessage);

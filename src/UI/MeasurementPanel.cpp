@@ -1,26 +1,11 @@
 #include "MeasurementPanel.h"
 
+#include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"
 
 namespace eeq::ui
 {
-namespace
-{
-void styleCombo (juce::ComboBox& combo)
-{
-    combo.setColour (juce::ComboBox::backgroundColourId, theme::get (theme::ColourId::control));
-    combo.setColour (juce::ComboBox::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    combo.setColour (juce::ComboBox::textColourId, theme::get (theme::ColourId::text));
-    combo.setColour (juce::ComboBox::arrowColourId, theme::get (theme::ColourId::textDim));
-}
-
-void styleLabel (juce::Label& label)
-{
-    label.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
-    label.setFont (juce::Font (juce::FontOptions (12.0f)));
-}
-} // namespace
 
 MeasurementPanel::MeasurementPanel()
 {

@@ -235,13 +235,12 @@ void AudioEngine::clearClipLatches() noexcept
 
 void AudioEngine::startExcitation() noexcept
 {
-    eeq::log::write ("excitation: start requested");
+    // ログは呼び出し側（UI）が取る（issue #57: エンジンの public メソッドを RT 安全に保つ）
     noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
 void AudioEngine::stopExcitation() noexcept
 {
-    eeq::log::write ("excitation: stop requested");
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
 }
 
@@ -260,9 +259,11 @@ bool AudioEngine::isExcitationAudible() const noexcept
 
 void AudioEngine::publishExcitationBuffer (std::vector<float> samples)
 {
-    // 旧バッファを ownedBuffers[1] へ退避してから差し替える（issue #33）。
+    // 旧バッファを2世代まで退避してから差し替える（issue #33 / #54）。
     // オーディオスレッドが activeBufferPtr を読んでいる最中に旧バッファが解放される
-    // ことがないよう、直前の世代を次の差し替えまで保持する
+    // ことがないよう、直前の2世代を保持する（1ブロック内に2回 publish されても
+    // オーディオスレッドが読んでいる世代が生存する）
+    ownedBuffers[2] = std::move (ownedBuffers[1]);
     ownedBuffers[1] = std::move (ownedBuffers[0]);
     ownedBuffers[0] = std::make_shared<const std::vector<float>> (std::move (samples));
     activeBufferPtr.store (ownedBuffers[0].get(), std::memory_order_release);
@@ -432,6 +433,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     const auto level = juce::Decibels::decibelsToGain (noiseLevelDb.load (std::memory_order_relaxed));
     const auto source = excitationSource.load (std::memory_order_relaxed);
+    const auto rmsNormalise = rmsNormaliseFor (source); // issue #51: 全ソースで RMS を設定値に揃える
     const auto routingMask = outputMask.load (std::memory_order_relaxed);
     auto state = noiseState.load (std::memory_order_relaxed);
     auto position = fadePosition.load (std::memory_order_relaxed);
@@ -458,12 +460,27 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         bandNoiseCoeffsRate = sr;
     }
 
-    // UIからの開始/停止コマンドをブロックの先頭で反映する（状態はオーディオスレッドが所有する）
+    // UIからの開始/停止コマンドをブロックの先頭で反映する（状態はオーディオスレッドが所有する）。
+    // フェードは「開始時点の包絡」を引き継ぐ（issue #53: フェードイン中の停止で
+    // 0.2 → 1.0 のようにフルレベルへ跳ねてからフェードアウトするのを防ぐ）
     switch (noiseCommand.exchange (NoiseCommand::none, std::memory_order_relaxed))
     {
         case NoiseCommand::start:
             if (state == NoiseState::idle || state == NoiseState::fadeOut)
             {
+                if (state == NoiseState::fadeOut)
+                {
+                    // フェードアウト途中からの再開: 現在の包絡からフェードインを続ける
+                    const auto length = juce::jmax (1, fadeOutLength.load (std::memory_order_relaxed));
+                    fadeStartEnvelope.store (
+                        fadeEnvelopeAt (3, position, length, fadeStartEnvelope.load (std::memory_order_relaxed)),
+                        std::memory_order_relaxed);
+                }
+                else
+                {
+                    fadeStartEnvelope.store (0.0f, std::memory_order_relaxed);
+                }
+
                 state = NoiseState::fadeIn;
                 position = 0;
                 playPos = 0;
@@ -474,6 +491,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         case NoiseCommand::stop:
             if (state == NoiseState::running || state == NoiseState::fadeIn)
             {
+                if (state == NoiseState::fadeIn)
+                {
+                    const auto length = juce::jmax (1, fadeInLength.load (std::memory_order_relaxed));
+                    fadeStartEnvelope.store (
+                        fadeEnvelopeAt (1, position, length, fadeStartEnvelope.load (std::memory_order_relaxed)),
+                        std::memory_order_relaxed);
+                }
+                else
+                {
+                    fadeStartEnvelope.store (1.0f, std::memory_order_relaxed);
+                }
+
                 state = NoiseState::fadeOut;
                 position = 0;
             }
@@ -499,14 +528,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // フェード包絡（0..1）。レベル設定はブロック先頭の level、ソースごとの正規化は
-        // 下の分岐で行い、最後に一括して掛ける（issue #29: レベル定義の統一）
+        // フェード包絡（0..1）。レベル設定はブロック先頭の level、ソースごとの RMS 正規化は
+        // ブロック先頭の rmsNormalise、最後に一括して掛ける（issue #29/#51: レベル定義の統一）
         float envelope = 0.0f;
 
         if (state == NoiseState::fadeIn)
         {
             const auto length = juce::jmax (1, fadeInLength.load (std::memory_order_relaxed));
-            envelope = (float) position / (float) length;
+            envelope = fadeEnvelopeAt (1, position, length, fadeStartEnvelope.load (std::memory_order_relaxed));
 
             if (++position >= length)
             {
@@ -521,7 +550,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         else if (state == NoiseState::fadeOut)
         {
             const auto length = juce::jmax (1, fadeOutLength.load (std::memory_order_relaxed));
-            envelope = 1.0f - (float) position / (float) length;
+            envelope = fadeEnvelopeAt (3, position, length, fadeStartEnvelope.load (std::memory_order_relaxed));
 
             if (++position >= length)
             {
@@ -531,26 +560,25 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             }
         }
 
-        // 励起信号ソースを選ぶ（仕様 3.2）
+        // 励起信号ソースを選ぶ（仕様 3.2）。各 case は「素の波形」を出し、
+        // RMS への正規化は最後の sample 計算で rmsNormalise として一括して掛ける
         float sourceSample = 0.0f;
 
         switch (source)
         {
             case ExcitationSource::pinkNoise:
-                // 生成器が実効RMS≈1.0に正規化済み → 設定値=「dBFS RMS」
+                // 生成器が実効RMS≈1.0に正規化済み
                 sourceSample = noise.nextSample();
                 break;
 
             case ExcitationSource::sweep:
             case ExcitationSource::wavFile:
             {
-                // スイープ: ピーク1.0で生成されているので 1/√2 を掛けて実効RMS基準に揃える
-                // WAV: 読み込み時にピーク1.0へ正規化済み → 設定値=「dBFS ピーク」
-                const auto normalise = source == ExcitationSource::sweep ? 0.70710678f : 1.0f;
-
+                // スイープ: ピーク1.0で生成（実効RMS 0.7071）。WAV: ピーク1.0へ正規化済み。
+                // RMS/ピーク基準の違いは rmsNormaliseFor が吸収する
                 if (activeSweep != nullptr && playPos < (int) activeSweep->size())
                 {
-                    sourceSample = (*activeSweep)[(size_t) playPos] * normalise;
+                    sourceSample = (*activeSweep)[(size_t) playPos];
                     ++playPos;
                 }
                 else if (state == NoiseState::running)
@@ -570,19 +598,19 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             case ExcitationSource::tone1k:
             {
                 // SPL校正用の1kHzトーン（安定した読み取り用。仕様 3.4）
-                // 1/√2 を掛けて正弦波の実効RMSを設定値に揃える
                 tonePhase += 2.0 * juce::MathConstants<double>::pi * 1000.0 / std::max (8000.0, currentSampleRate.load());
 
                 if (tonePhase > 2.0 * juce::MathConstants<double>::pi)
                     tonePhase -= 2.0 * juce::MathConstants<double>::pi;
 
-                sourceSample = (float) std::sin (tonePhase) * 0.70710678f;
+                sourceSample = (float) std::sin (tonePhase);
                 break;
             }
 
             case ExcitationSource::bandNoise1k:
             {
-                // 比較校正の既定信号: 1kHz中心の帯域制限ピンクノイズ（仕様 3.4）
+                // 比較校正の既定信号: 1kHz中心の帯域制限ピンクノイズ（仕様 3.4）。
+                // 生の出力（実測 RMS≈0.314）を出し、RMS 揃えは rmsNormaliseFor が行う
                 const auto pink = noise.nextSample();
                 const auto b0 = bandNoiseCoeffs[0], b2 = bandNoiseCoeffs[2];
                 const auto a1 = bandNoiseCoeffs[3], a2 = bandNoiseCoeffs[4];
@@ -594,18 +622,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 bandNoiseY2 = bandNoiseY1;
                 bandNoiseY1 = out;
 
-                // 校正オフセットは表示側で決めるため絶対値は問題にならない。
-                // 持ち上げ過ぎると ±1.0 のクランプで校正信号自身が歪むため、
-                // 0.6 倍に留める（出力 RMS ≈ 0.19、ピーク ≈ 0.86 でクリップなし。
-                // 入力は RMS≈1.0 に正規化されたピンクノイズ。バンドパス出力の
-                // 実測: RMS 0.314 / ピーク 1.44）
-                sourceSample = (float) juce::jlimit (-1.0, 1.0, out * 0.6);
+                sourceSample = (float) out;
                 break;
             }
         }
 
-        // 出力のハード上限（仕様 3.7 の安全設計）。包絡とレベルを掛けた最終値に適用する
-        const auto sample = juce::jlimit (-ceilingGain, ceilingGain, sourceSample * envelope * level);
+        // 出力のハード上限（仕様 3.7 の安全設計）。包絡・RMS正規化・レベルを掛けた最終値に適用する
+        const auto sample = juce::jlimit (-ceilingGain, ceilingGain,
+                                          sourceSample * rmsNormalise * envelope * level);
 
         outPeak = juce::jmax (outPeak, std::abs (sample));
         outSumSquares += (double) sample * (double) sample;
@@ -736,16 +760,21 @@ void AudioEngine::audioDeviceStopped() {}
 
 void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 {
-    stopNoise();
-    measurement.stopMeasurement();
-
-    eeq::log::write ("audio device error: " + errorMessage + " (noise and measurement stopped)");
+    // 任意のスレッド（オーディオ側含む）から呼ばれ得るため、ここではフラグを立てる
+    // だけにする（issue #57: エラー処理でのファイルI/O・ロックを撤去）。
+    // ログ出力と測定の停止は consumeDeviceError() を呼ぶメッセージスレッド側で行う
+    noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
+    measurement.stopMeasurement(); // atomic フラグのみで RT 安全
 
     {
-        const juce::ScopedLock lock (errorMutex);
-        pendingErrorMessage = errorMessage;
+        // ロックを長時間持っているスレッドがある場合に備えて TryLock。
+        // 取得できなければメッセージは欠落するが、音声スレッドを待たせないことを優先する
+        const juce::ScopedTryLock lock (errorMutex);
+
+        if (lock.isLocked())
+            pendingErrorMessage = errorMessage;
     }
-    hasPendingError.store (true, std::memory_order_relaxed);
+    hasPendingError.store (true, std::memory_order_release);
 }
 
 //==============================================================================

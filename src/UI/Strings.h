@@ -32,7 +32,7 @@ inline const juce::String outputLevelLabel { u8"出力レベル" };
 // ダイアログ・状態表示
 inline const juce::String overLimitTitle { u8"出力レベルの確認" };
 inline const juce::String overLimitMessage
-    { u8"−20 dBFS を超える出力は、聴覚や機器に負担をかける可能性があります。このレベルで使用しますか？" };
+    { u8"−20 dBFS を超える出力は、聴覚や機器に負担をかける可能性があります。このレベルで使用しますか？（ピンクノイズは実効値に対してピークが約 14 dB 大きいため、出力レベルの上限はクリップしない値に制限されています）" };
 inline const juce::String overLimitOk { u8"このレベルで使用" };
 inline const juce::String overLimitCancel { u8"−20 dBFS に戻す" };
 inline const juce::String deviceErrorTitle { u8"オーディオデバイスのエラー" };
