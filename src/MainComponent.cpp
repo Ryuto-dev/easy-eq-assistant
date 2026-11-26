@@ -91,6 +91,27 @@ MainComponent::MainComponent()
         }
     }
 
+    // ループバック補正（システム補正）を復元する（issue #21）。
+    // fftSize/サンプルレートが現在と違う場合は matches() が適用を止めるので安全
+    {
+        const auto* settings = appPropertiesStorage.properties.getUserSettings();
+        const auto saved = settings->getValue ("loopbackCorrection");
+
+        if (saved.isNotEmpty())
+        {
+            if (context.correction.fromVar (juce::JSON::parse (saved)))
+            {
+                eeq::log::write (juce::String ("loopback correction restored (measured on device: ")
+                                     + settings->getValue ("loopbackDevice") + ")");
+                delayTab.refreshLoopbackStatus();
+            }
+            else
+            {
+                eeq::log::write ("loopback correction restore FAILED (saved data was invalid)");
+            }
+        }
+    }
+
     // マイク許可（TCC）。**デバイスを開く前に**許可を確定させる:
     // CoreAudioの入力オープンと許可要求が重なると、この環境ではTCCが
     // ダイアログを出さずに自動拒否する（probe.app では正常にダイアログが出ることを確認済み）

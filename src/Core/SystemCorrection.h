@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../DSP/TransferFunctionAccumulator.h"
+#include "ProjectStore.h"
 
 #include <juce_core/juce_core.h>
 
@@ -37,6 +38,42 @@ public:
     bool isActive() const noexcept { return active.load (std::memory_order_relaxed); }
     double getRoundtripDelaySamples() const noexcept { return delaySamples.load (std::memory_order_relaxed); }
     juce::Time getMeasuredAt() const { return measuredAt; }
+
+    /** アプリ設定へ保存するためのシリアライズ（issue #21: 再起動でも補正を残す） */
+    [[nodiscard]] juce::var toVar() const
+    {
+        juce::DynamicObject* o = new juce::DynamicObject();
+        juce::var object (o);
+
+        const juce::ScopedLock sl (lock);
+        o->setProperty ("delaySamples", delaySamples.load (std::memory_order_relaxed));
+        o->setProperty ("measuredAt", (juce::int64) measuredAt.toMilliseconds());
+        o->setProperty ("frame", ProjectStore::spectrumFrameToVar (frame));
+
+        return object;
+    }
+
+    /** 保存した補正を復元する。壊れたデータや空のフレームは false（補正なしのまま） */
+    bool fromVar (const juce::var& v)
+    {
+        auto* o = v.getDynamicObject();
+
+        if (o == nullptr)
+            return false;
+
+        auto restored = ProjectStore::spectrumFrameFromVar (o->getProperty ("frame"));
+
+        // frameFromVar は壊れた入力に対して fftSize=0 の空フレームを返す
+        if (restored.fftSize < 256)
+            return false;
+
+        setCorrection (restored, (double) o->getProperty ("delaySamples"));
+
+        if (const auto ms = (juce::int64) o->getProperty ("measuredAt"); ms != 0)
+            measuredAt = juce::Time (ms);
+
+        return true;
+    }
 
     /** ループバックの FFTサイズ/サンプルレートが現在の測定と一致しているか。
         変わっていたら再測定を促す（仕様 6.1） */

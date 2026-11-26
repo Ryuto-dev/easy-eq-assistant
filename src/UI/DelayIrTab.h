@@ -30,6 +30,9 @@ public:
     /** 下部バーの「遅延測定」から呼ぶ。相互相関で遅延を検出して表示する */
     void runDelayMeasurement();
 
+    /** ループバック補正の状態表示を最新化する（起動時の復元後にMainComponentから呼ぶ） */
+    void refreshLoopbackStatus() { updateLoopbackUi(); }
+
 private:
     // ---- 遅延 ----
     void updateDelayReadout();
@@ -42,6 +45,7 @@ private:
 
     // ---- ループバック校正 ----
     void measureLoopback();
+    void finishLoopbackMeasurement();
     void updateLoopbackUi();
 
     // ---- 系統 ----
@@ -75,6 +79,10 @@ private:
     int exciteTarget = -1;
     int compareVersionSeen = -1;
     int irGraphHeight = 180;
+
+    // ループバック校正の自動進行（issue #17/#31）
+    bool loopbackRanging = false;
+    juce::Time loopbackDeadline;
 
     // ---- 遅延パネル ----
     juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel;

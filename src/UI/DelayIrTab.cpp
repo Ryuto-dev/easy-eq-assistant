@@ -14,6 +14,57 @@ namespace eeq::ui
 namespace
 {
 constexpr double defaultTemperatureC = 20.0;
+
+/** ループバック測定の妥当性検証（issue #31）。不合格の理由を返す（空文字なら合格）。
+    ケーブル直結の電気系統は「無音でなく・高コヒーレンス・平坦」であることを使って、
+    部屋の測定結果を誤って補正として保存することを防ぐ */
+juce::String validateLoopbackFrame (const eeq::dsp::SpectrumFrame& frame)
+{
+    if (frame.fftSize < 256 || frame.averages < 16)
+        return juce::String (u8"平均が不足しています（16回以上の平均が必要です）");
+
+    // 無音でないこと: Meas 入力の実効パワーが -60 dBFS を超える bin がある
+    float bestMeas = -300.0f;
+
+    for (const auto power : frame.measPowerDb)
+        bestMeas = std::max (bestMeas, power);
+
+    if (bestMeas < -60.0f)
+        return juce::String (u8"入力に信号がありません（出力→入力の接続と、入力chの割り当てを確認してください）");
+
+    // 100 Hz〜10 kHz の bin について、コヒーレンス ≥ 0.95 が 80% 以上、
+    // 振幅が ±3 dB 以内（=範囲6 dB以内）であること
+    const auto binWidth = frame.sampleRate / (double) frame.fftSize;
+    const auto kLo = juce::jlimit (1, (int) frame.transfer.size() - 1, (int) std::ceil (100.0 / binWidth));
+    const auto kHi = juce::jlimit (1, (int) frame.transfer.size() - 1, (int) std::floor (10000.0 / binWidth));
+
+    if (kHi <= kLo)
+        return juce::String (u8"FFTサイズに対して検証帯域が取れません");
+
+    int coherentCount = 0, totalCount = 0;
+    auto minDb = 1.0e30f;
+    auto maxDb = -1.0e30f;
+
+    for (int k = kLo; k <= kHi; ++k)
+    {
+        ++totalCount;
+
+        if (frame.coherence[(size_t) k] >= 0.95f)
+            ++coherentCount;
+
+        minDb = std::min (minDb, frame.magnitudeDb[(size_t) k]);
+        maxDb = std::max (maxDb, frame.magnitudeDb[(size_t) k]);
+    }
+
+    if (totalCount == 0 || (double) coherentCount / (double) totalCount < 0.8)
+        return juce::String (u8"ループバックになっていません（マイク入力に部屋の音が入っています。通常測定を止めてから押してください）");
+
+    if (maxDb - minDb > 6.0f)
+        return juce::String (u8"周波数特性が平坦ではありません（±3 dB以内が必要です。現在の差: ")
+             + juce::String (maxDb - minDb, 1) + juce::String (u8" dB）");
+
+    return {};
+}
 } // namespace
 
 // 系統リストのモデル
@@ -242,6 +293,8 @@ DelayIrTab::DelayIrTab (UiContext& context)
     loopbackClearButton.onClick = [this]
     {
         ctx.correction.clear();
+        ctx.settings.setValue ("loopbackCorrection", juce::var());
+        ctx.settings.saveIfNeeded();
         updateLoopbackUi();
     };
     addAndMakeVisible (loopbackClearButton);
@@ -363,6 +416,32 @@ DelayIrTab::~DelayIrTab() = default; // SystemListModel の完全型が必要（
 
 void DelayIrTab::timerTick()
 {
+    // ループバック校正の自動進行（issue #17/#31）: 平均が溜まったら検証して保存、
+    // 期限を過ぎたら理由を出して止める
+    if (loopbackRanging)
+    {
+        eeq::dsp::SpectrumFrame rangingFrame;
+        ctx.engine.getMeasurement().copyLatestResult (rangingFrame);
+
+        if (rangingFrame.averages >= 16)
+        {
+            finishLoopbackMeasurement();
+        }
+        else if (juce::Time::getCurrentTime() > loopbackDeadline)
+        {
+            loopbackRanging = false;
+            loopbackMeasureButton.setEnabled (true);
+            loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
+            ctx.engine.stopExcitation();
+            ctx.engine.getMeasurement().stopMeasurement();
+            loopbackStatusLabel.setText (
+                juce::String (u8"測定できませんでした（入力に信号が届いていません。出力→入力の接続と入力chの割り当てを確認してください）"),
+                juce::dontSendNotification);
+            eeq::log::write ("loopback: deadline reached with averages="
+                             + juce::String (rangingFrame.averages));
+        }
+    }
+
     // IRの再構築が必要か（平均数・幅・FFTサイズが変わったら）
     auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
     if (framePtr)
@@ -701,42 +780,69 @@ void DelayIrTab::refreshDistanceFromManualDelay()
 
 void DelayIrTab::measureLoopback()
 {
-    // 出力→入力のループバック測定（仕様 6.1）。
-    // 測定が走っていなければ開始し、十分な平均数（既定 16）が溜まったら校正を保存する
+    // 出力→入力のループバック測定（仕様 6.1）。1回のクリックで
+    // 「励起開始 → 測定開始 → 平均が溜まるまで待つ → 検証して保存 → 停止」を自動で行う
+    //（issue #17: 押しても何も起きないをなくす。issue #31: 誤った保存を防ぐ）
+    if (loopbackRanging)
+        return; // 進行中は無視（ボタンは「測定中…」になり無効化されている）
+
     auto& measurement = ctx.engine.getMeasurement();
 
-    if (! measurement.isMeasuring())
-    {
-        measurement.startMeasurement();
-        ctx.engine.startExcitation(); // ピンクノイズも開始
-        loopbackMeasureButton.setButtonText (strings::loopbackMeasuring);
-        return;
-    }
+    // ループバック専用の測定としてやり直す。通常測定の平均を使わないので、
+    // 測定中の部屋の応答を誤って保存することがない
+    measurement.resetAverages();
+    measurement.startMeasurement();
+    ctx.engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::pinkNoise);
+    ctx.engine.startExcitation();
 
-    // 既に測定中なら現在の結果で校正を保存
+    loopbackRanging = true;
+    loopbackDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (12.0);
+    loopbackMeasureButton.setEnabled (false);
+    loopbackMeasureButton.setButtonText (strings::loopbackMeasuring);
+    loopbackStatusLabel.setText (juce::String (u8"ループバックを測定中です（出力→入力をケーブルで接続してください）"),
+                                 juce::dontSendNotification);
+    eeq::log::write ("loopback: measurement started (waiting for averages)");
+}
+
+void DelayIrTab::finishLoopbackMeasurement()
+{
+    loopbackRanging = false;
+    loopbackMeasureButton.setEnabled (true);
+    loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
+
+    auto& measurement = ctx.engine.getMeasurement();
+    measurement.stopMeasurement();
+    ctx.engine.stopExcitation();
+
     eeq::dsp::SpectrumFrame frame;
     measurement.copyLatestResult (frame);
 
-    if (frame.averages < 16) // 最低平均数
+    const auto error = validateLoopbackFrame (frame);
+
+    if (error.isNotEmpty())
     {
-        eeq::log::write (juce::String ("loopback: waiting for averages (") + juce::String (frame.averages) + "/16)");
+        // 検証に落ちたものは保存しない（issue #31: 誤った補正で以降の全測定を汚染しない）
+        loopbackStatusLabel.setText (error, juce::dontSendNotification);
+        loopbackStatusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::danger));
+        eeq::log::write ("loopback: validation FAILED: " + error);
         return;
     }
 
-    // 往復遅延も検出して保存する（後の測定で差し引ける）
     const auto estimate = measurement.estimateCurrentDelay (false);
-
-    measurement.copyLatestResult (frame); // 最新フレームを再取得
     ctx.correction.setCorrection (frame, estimate.valid ? estimate.delaySamples : 0.0);
+
+    // 補正をアプリ設定へ保存する（issue #21: 再起動で消えない）。
+    // どの配線・レートで測ったかも一緒に残す。fftSize/レートが変わった場合は
+    // matches() が自動で適用を止める（要再測定）
+    ctx.settings.setValue ("loopbackCorrection", juce::JSON::toString (ctx.correction.toVar()));
+    ctx.settings.setValue ("loopbackDevice", ctx.engine.getSelectedInputDeviceName()
+                                                + " / " + ctx.engine.getSelectedOutputDeviceName());
+    ctx.settings.setValue ("loopbackRate", frame.sampleRate);
+    ctx.settings.saveIfNeeded();
+
     eeq::log::write (juce::String ("loopback correction measured: delay=")
-                     + juce::String (estimate.valid ? estimate.delaySamples : 0.0, 2) + " samples, averages="
+                     + juce::String (ctx.correction.getRoundtripDelaySamples(), 2) + " samples, averages="
                      + juce::String (frame.averages));
-
-    // 測定停止
-    measurement.stopMeasurement();
-    ctx.engine.stopExcitation();
-    loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
-
     updateLoopbackUi();
 }
 
