@@ -8,7 +8,6 @@
 
 #include <atomic>
 #include <vector>
-#include <memory>
 
 namespace eeq::dsp
 {
@@ -37,9 +36,9 @@ public:
 
     void copyLatestResult (SpectrumFrame& resultOut) const;
     
-    /** 解析スレッドが完了したフレームを取得する（ロックフリー: ポインタのみアトミックに交換）。
-        まだフレームがなければ nullptr を返す。呼び出し側は所有権を得る。 */
-    std::shared_ptr<const SpectrumFrame> consumeLatestFrame();
+    /** 解析スレッドが完了した最新フレームを取得する（非破壊的ピーク）。
+        まだフレームがなければ nullptr を返す。複数タブが同時に読める。 */
+    std::shared_ptr<const SpectrumFrame> getLatestFrame() const;
     
     int getAverages() const;
 
@@ -75,7 +74,7 @@ private:
     int capturePos = 0;
     int captureFilled = 0;
 
-    // 完了フレームのロックフリー公開（解析スレッド→UIスレッド）
+    // 完了フレームの公開（解析スレッド→UIスレッド、複数購読可・非破壊的）
     mutable juce::CriticalSection framePublishLock;
     std::shared_ptr<const SpectrumFrame> publishedFrame;
 };

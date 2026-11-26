@@ -44,7 +44,7 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
     setOpaque (true);
 
     exitButton.setButtonText (strings::liveExitButton);
-    exitButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff8c3a3a));
+    exitButton.setColour (juce::TextButton::buttonColourId, theme::get (theme::ColourId::danger));
     exitButton.setColour (juce::TextButton::textColourOffId, theme::get (theme::ColourId::text));
     exitButton.onLongPress = [this]
     {
@@ -191,7 +191,7 @@ void LiveModeOverlay::timerTick()
 
 void LiveModeOverlay::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff0c0d10));
+    g.fillAll (theme::get (theme::ColourId::windowBackground));
 
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
     engine.getSplAnalyzer().copySpl (spl);

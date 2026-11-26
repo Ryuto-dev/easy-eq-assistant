@@ -553,7 +553,7 @@ void RtaSplTab::updateSnHint()
     bool lowCoherence = false;
 
     // ロックフリーでフレーム取得（コヒーレンスのみ参照）
-    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
     if (! framePtr)
         return;
     const eeq::dsp::SpectrumFrame& frame = *framePtr;

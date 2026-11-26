@@ -9,15 +9,15 @@ namespace
 {
 void styleCombo (juce::ComboBox& combo)
 {
-    combo.setColour (juce::ComboBox::backgroundColourId, juce::Colour (0xff26282e));
-    combo.setColour (juce::ComboBox::outlineColourId, juce::Colour (0xff34373f));
-    combo.setColour (juce::ComboBox::textColourId, juce::Colour (0xffe4e6ea));
-    combo.setColour (juce::ComboBox::arrowColourId, juce::Colour (0xff8a9099));
+    combo.setColour (juce::ComboBox::backgroundColourId, theme::get (theme::ColourId::control));
+    combo.setColour (juce::ComboBox::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    combo.setColour (juce::ComboBox::textColourId, theme::get (theme::ColourId::text));
+    combo.setColour (juce::ComboBox::arrowColourId, theme::get (theme::ColourId::textDim));
 }
 
 void styleLabel (juce::Label& label)
 {
-    label.setColour (juce::Label::textColourId, juce::Colour (0xff9aa0a8));
+    label.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     label.setFont (juce::Font (juce::FontOptions (12.0f)));
 }
 } // namespace
@@ -26,7 +26,7 @@ MeasurementPanel::MeasurementPanel()
 {
     titleLabel.setText (strings::measurementPanelTitle, juce::dontSendNotification);
     titleLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-    titleLabel.setColour (juce::Label::textColourId, juce::Colour (0xffc9cdd4));
+    titleLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
     addAndMakeVisible (titleLabel);
 
     for (auto* label : { &fftLabel, &windowLabel, &avgModeLabel, &avgCountLabel, &smoothingLabel })
@@ -36,7 +36,6 @@ MeasurementPanel::MeasurementPanel()
     }
 
     fftLabel.setText (strings::fftSizeLabel, juce::dontSendNotification);
-    fftCombo.addItem ("8192", 1);
     fftCombo.addItem ("8192", 1);
     fftCombo.addItem ("16384", 2);
     fftCombo.addItem ("32768", 3);
@@ -67,14 +66,14 @@ MeasurementPanel::MeasurementPanel()
     avgCountSlider.setRange (1.0, 256.0, 1.0);
     avgCountSlider.setValue (16.0, juce::dontSendNotification); // 既定 16（応答重視）
     avgCountSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
-    avgCountSlider.setColour (juce::Slider::backgroundColourId, juce::Colour (0xff26282e));
-    avgCountSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff3fc9d2));
-    avgCountSlider.setColour (juce::Slider::thumbColourId, juce::Colour (0xffdfe2e6));
-    avgCountSlider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe4e6ea));
-    avgCountSlider.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff26282e));
-    avgCountSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff34373f));
+    avgCountSlider.setColour (juce::Slider::backgroundColourId, theme::get (theme::ColourId::control));
+    avgCountSlider.setColour (juce::Slider::trackColourId, theme::get (theme::ColourId::accent));
+    avgCountSlider.setColour (juce::Slider::thumbColourId, theme::get (theme::ColourId::text));
+    avgCountSlider.setColour (juce::Slider::textBoxTextColourId, theme::get (theme::ColourId::text));
+    avgCountSlider.setColour (juce::Slider::textBoxBackgroundColourId, theme::get (theme::ColourId::control));
+    avgCountSlider.setColour (juce::Slider::textBoxOutlineColourId, theme::get (theme::ColourId::controlOutline));
 
-    averagesDisplay.setColour (juce::Label::textColourId, juce::Colour (0xff777d86));
+    averagesDisplay.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     averagesDisplay.setFont (juce::Font (juce::FontOptions (11.5f)));
     averagesDisplay.setText (juce::String (u8"平均: 0 回"), juce::dontSendNotification);
 

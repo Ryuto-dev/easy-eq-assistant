@@ -171,12 +171,14 @@ void BottomBar::update()
     const auto audible = engine.isNoiseAudible();
     noiseButton.setButtonText (audible ? strings::stopNoiseButton : strings::startNoiseButton);
     noiseButton.setColour (juce::TextButton::buttonColourId,
-                           audible ? juce::Colour (0xff8c3a3a) : juce::Colour (0xff2e5a63));
+                           audible ? theme::get (theme::ColourId::danger)
+                                   : theme::get (theme::ColourId::buttonOn));
 
     const auto measuring = engine.getMeasurement().isMeasuring();
     measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
     measurementButton.setColour (juce::TextButton::buttonColourId,
-                                 measuring ? juce::Colour (0xff8c3a3a) : juce::Colour (0xff2e5a63));
+                                 measuring ? theme::get (theme::ColourId::danger)
+                                           : theme::get (theme::ColourId::buttonOn));
 
     // 出力レベルは他タブ（リミットテスト等）からも変更されるため、ドラッグ中に
     // なければエンジンの現在値へ同期する

@@ -168,11 +168,23 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 void TransferFunctionTab::timerTick()
 {
     // ロックフリーで最新フレームを取得（UIスレッドでブロックしない）
-    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
-    if (! framePtr)
-        return; // まだフレームが完成していない
+    auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
 
-    eeq::dsp::SpectrumFrame frame = *framePtr; // コピー（システム補正で書き換えるため）
+    // フレームがなければキャッシュされた最後のフレームを使う（測定停止中でもオーバーレイを表示するため）
+    eeq::dsp::SpectrumFrame frame;
+
+    if (framePtr)
+    {
+        frame = *framePtr; // コピー（システム補正で書き換えるため）
+    }
+    else if (cachedFrameValid)
+    {
+        frame = cachedFrame; // 測定停止中はキャッシュを使う
+    }
+    else
+    {
+        return; // まだ一度もフレームが来ていない
+    }
 
     // システム補正（ループバック校正。仕様 6.1）: 有効ならインターフェース自身の応答を差し引く
     if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))

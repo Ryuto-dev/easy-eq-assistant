@@ -44,6 +44,9 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
                                              double delaySamples, bool rawPhase)
 {
     // 軽量版: 事前計算済み points を columns へコピーするだけ（smoothToLogGrid は呼ばない）
+    // dirty が true（ズーム/パンで設定）なら維持し、paint() で再計算させる
+    const bool wasDirty = dirty;
+
     current = frame;
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
@@ -62,7 +65,8 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
         columns[i].coherence = points[i].coherence;
     }
 
-    dirty = false; // 再計算不要
+    // ズーム/パンで立てた dirty を消さない（paint で再計算して反映させる）
+    dirty = wasDirty;
     repaint();
 }
 

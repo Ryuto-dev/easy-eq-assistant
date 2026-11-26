@@ -546,6 +546,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             case ExcitationSource::sweep:
             case ExcitationSource::wavFile:
             {
+                // スイープ/WAV は生成時にレベルが焼き込まれているため、ゲインは 1.0（フェードのみ適用）
+                gain = 1.0f;
+
                 if (activeSweep != nullptr && playPos < (int) activeSweep->size())
                 {
                     sourceSample = (*activeSweep)[(size_t) playPos];

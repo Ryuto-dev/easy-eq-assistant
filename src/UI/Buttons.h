@@ -20,12 +20,12 @@ inline void styleButton (juce::TextButton& button, juce::Colour onColour = juce:
 
 inline void styleDangerButton (juce::TextButton& button)
 {
-    styleButton (button, juce::Colour (0xff8c3a3a));
+    styleButton (button, theme::get (theme::ColourId::danger));
 }
 
 inline void styleAccentButton (juce::TextButton& button)
 {
-    styleButton (button, juce::Colour (0xff2e5a63));
+    styleButton (button, theme::get (theme::ColourId::buttonOn));
 }
 
 inline void styleCombo (juce::ComboBox& combo)

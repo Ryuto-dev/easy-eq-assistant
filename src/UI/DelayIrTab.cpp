@@ -332,7 +332,7 @@ DelayIrTab::~DelayIrTab() = default; // SystemListModel の完全型が必要（
 void DelayIrTab::timerTick()
 {
     // IRの再構築が必要か（平均数・幅・FFTサイズが変わったら）
-    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
     if (framePtr)
         rebuildIrIfDirty (*framePtr);
 
@@ -405,7 +405,7 @@ void DelayIrTab::timerTick()
     // ループバック校正の鮮度（仕様 6.1: 接続・レート・ゲインが変わったら促す）
     if (ctx.correction.isActive())
     {
-        auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+        auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
         if (framePtr)
         {
             const auto stale = ! ctx.correction.matches (*framePtr);

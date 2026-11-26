@@ -1,5 +1,7 @@
 #include "LevelMeter.h"
 
+#include "Theme.h"
+
 namespace eeq::ui
 {
 
@@ -47,12 +49,13 @@ void LevelMeter::paint (juce::Graphics& g)
 
     // ラベル
     g.setFont (juce::Font (juce::FontOptions (12.0f)));
-    g.setColour (clipping ? juce::Colour (0xffe05a5a) : juce::Colour (0xff9aa0a8));
+    g.setColour (clipping ? eeq::ui::theme::get (eeq::ui::theme::ColourId::danger)
+                           : eeq::ui::theme::get (eeq::ui::theme::ColourId::textDim));
     g.drawText (label, bounds.removeFromTop (13), juce::Justification::centredLeft);
 
     // バー本体
     const auto bar = bounds.removeFromTop (11).toFloat();
-    g.setColour (juce::Colour (0xff232529));
+    g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::panelBackground));
     g.fillRoundedRectangle (bar, 3.0f);
 
     const auto mapDb = [] (float db)
@@ -60,14 +63,15 @@ void LevelMeter::paint (juce::Graphics& g)
 
     const auto rmsWidth = bar.getWidth() * mapDb (rmsDb);
 
-    g.setColour (clipping ? juce::Colour (0xffd24b4b) : juce::Colour (0xff3fc9d2));
+    g.setColour (clipping ? eeq::ui::theme::get (eeq::ui::theme::ColourId::danger)
+                           : eeq::ui::theme::get (eeq::ui::theme::ColourId::accent));
     g.fillRoundedRectangle (bar.withWidth (juce::jmax (rmsWidth, 0.0f)), 3.0f);
 
     // ピークマーカー
     if (peakDb > -59.0f)
     {
         const auto x = bar.getX() + bar.getWidth() * mapDb (peakDb);
-        g.setColour (juce::Colours::white.withAlpha (0.9f));
+        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::text).withAlpha (0.9f));
         g.fillRect (x - 1.0f, bar.getY(), 2.0f, bar.getHeight());
     }
 
@@ -75,7 +79,7 @@ void LevelMeter::paint (juce::Graphics& g)
     if (holdDb > -59.0f)
     {
         const auto x = bar.getX() + bar.getWidth() * mapDb (holdDb);
-        g.setColour (juce::Colours::white.withAlpha (0.4f));
+        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::text).withAlpha (0.4f));
         g.fillRect (x - 0.5f, bar.getY(), 1.0f, bar.getHeight());
     }
 
@@ -83,7 +87,7 @@ void LevelMeter::paint (juce::Graphics& g)
     if (clipping)
     {
         g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-        g.setColour (juce::Colour (0xffe05a5a));
+        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::danger));
         g.drawText ("CLIP", bar, juce::Justification::centredRight);
     }
 }

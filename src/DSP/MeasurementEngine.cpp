@@ -3,6 +3,7 @@
 #include "RtaSplAnalyzer.h"
 
 #include <algorithm>
+#include <memory>
 
 namespace eeq::dsp
 {
@@ -52,12 +53,10 @@ void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
     accumulator.copyResult (resultOut);
 }
 
-std::shared_ptr<const SpectrumFrame> MeasurementEngine::consumeLatestFrame()
+std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestFrame() const
 {
     const juce::ScopedLock sl (framePublishLock);
-    auto frame = publishedFrame;
-    publishedFrame.reset();
-    return frame;
+    return publishedFrame;
 }
 
 int MeasurementEngine::getAverages() const
@@ -147,7 +146,7 @@ void MeasurementEngine::run()
             if (measuring.load (std::memory_order_relaxed))
                 framesDone = accumulator.feedSamples (readRef.data(), readMeas.data(), got);
 
-            // フレームが完了したら結果を公開（UIスレッドへロックフリーで渡す）
+            // フレームが完了したら結果を公開（UIスレッドへ、複数購読可・非破壊的）
             if (framesDone > 0)
             {
                 auto frame = std::make_shared<const SpectrumFrame>();
