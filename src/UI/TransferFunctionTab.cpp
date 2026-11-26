@@ -449,6 +449,18 @@ void TransferFunctionTab::showSaveSnapshotDialog()
                 return;
             }
 
+            // 画面と同じ補正を適用してから保存する（issue #32）:
+            // 表示・EQ案・保存データの3つが同じものを指すようにする。
+            // 補正済みであることも .eea に記録する
+            if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load()
+                && ctx.correction.matches (snapshot.frame))
+            {
+                eeq::dsp::SpectrumFrame corrected;
+                ctx.correction.apply (snapshot.frame, corrected, true);
+                snapshot.frame = corrected;
+                snapshot.correctionApplied = true;
+            }
+
             auto& snapshots = ctx.project.snapshots();
             snapshots.push_back (std::move (snapshot));
             ctx.state.snapshotVersion.fetch_add (1);

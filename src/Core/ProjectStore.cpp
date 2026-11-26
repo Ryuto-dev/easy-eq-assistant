@@ -187,6 +187,7 @@ juce::var ProjectStore::snapshotToVar (const Snapshot& snapshot)
     o->setProperty ("visible", snapshot.visible);
     o->setProperty ("isSelectedA", snapshot.isSelectedA);
     o->setProperty ("isSelectedB", snapshot.isSelectedB);
+    o->setProperty ("correctionApplied", snapshot.correctionApplied);
     o->setProperty ("frame", frameToVar (snapshot.frame));
 
     return object;
@@ -209,6 +210,7 @@ Snapshot ProjectStore::snapshotFromVar (const juce::var& v)
         snapshot.visible = getPropertyWithDefault (o, "visible", true);
         snapshot.isSelectedA = getPropertyWithDefault (o, "isSelectedA", false);
         snapshot.isSelectedB = getPropertyWithDefault (o, "isSelectedB", false);
+        snapshot.correctionApplied = getPropertyWithDefault (o, "correctionApplied", false);
         snapshot.frame = frameFromVar (o->getProperty ("frame"));
     }
 

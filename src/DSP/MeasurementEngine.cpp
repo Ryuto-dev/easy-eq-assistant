@@ -93,6 +93,32 @@ bool MeasurementEngine::copyRecentSamples (int numSamples, std::vector<float>& r
     return true;
 }
 
+bool MeasurementEngine::copyRecentSamplesExact (int numSamples, std::vector<float>& refOut,
+                                                 std::vector<float>& measOut) const
+{
+    // 2の冪に丸めない版（issue #30: スイープ全長+残響分をそのまま取る）
+    const juce::ScopedLock sl (captureLock);
+
+    const auto size = juce::jlimit (0, juce::jmin (captureCapacity, numSamples), captureFilled);
+
+    if (size <= 0)
+        return false;
+
+    refOut.assign ((size_t) size, 0.0f);
+    measOut.assign ((size_t) size, 0.0f);
+
+    const auto start = (capturePos - size + captureCapacity) % captureCapacity;
+
+    for (int i = 0; i < size; ++i)
+    {
+        const auto idx = (start + i) % captureCapacity;
+        refOut[(size_t) i] = captureRef[(size_t) idx];
+        measOut[(size_t) i] = captureMeas[(size_t) idx];
+    }
+
+    return true;
+}
+
 DelayEstimate MeasurementEngine::estimateCurrentDelay (bool usePhat, double minConfidence) const
 {
     std::vector<float> ref, meas;

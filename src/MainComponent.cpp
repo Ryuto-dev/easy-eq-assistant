@@ -36,6 +36,11 @@ MainComponent::MainComponent()
     {
         theme::toggle();
         applyThemeToComponents();
+
+        // テーマ選択を保存する（issue #9: 再起動後もライト/ダークを維持）
+        auto* settings = appPropertiesStorage.properties.getUserSettings();
+        settings->setValue ("themeMode", (int) theme::mode());
+        settings->saveIfNeeded();
     };
 
     measurementPanel.setSettings (appPropertiesStorage.properties.getUserSettings());
@@ -88,6 +93,27 @@ MainComponent::MainComponent()
             // タブ類に一覧の張り直しを促す（スナップショット等の生ポインタも入れ替わる）
             uiState.snapshotVersion.fetch_add (1);
             uiState.eqVersion.fetch_add (1);
+        }
+    }
+
+    // ループバック補正（システム補正）を復元する（issue #21）。
+    // fftSize/サンプルレートが現在と違う場合は matches() が適用を止めるので安全
+    {
+        const auto* settings = appPropertiesStorage.properties.getUserSettings();
+        const auto saved = settings->getValue ("loopbackCorrection");
+
+        if (saved.isNotEmpty())
+        {
+            if (context.correction.fromVar (juce::JSON::parse (saved)))
+            {
+                eeq::log::write (juce::String ("loopback correction restored (measured on device: ")
+                                     + settings->getValue ("loopbackDevice") + ")");
+                delayTab.refreshLoopbackStatus();
+            }
+            else
+            {
+                eeq::log::write ("loopback correction restore FAILED (saved data was invalid)");
+            }
         }
     }
 

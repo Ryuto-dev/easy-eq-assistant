@@ -24,6 +24,7 @@ struct Snapshot
     bool visible = true;       // グラフへの表示ON/OFF（仕様 5.2）
     bool isSelectedA = false;  // 差分（A−B）表示用の選択（仕様 5.2）
     bool isSelectedB = false;
+    bool correctionApplied = false; // システム補正済みのフレームか（issue #32）
 
     eeq::dsp::SpectrumFrame frame;
 };
@@ -92,6 +93,11 @@ public:
 
     /** 起動時の復元先（前回保存したプロジェクトの自動復元用） */
     static juce::File defaultProjectFile();
+
+    /** SpectrumFrame のJSONシリアライズ（SystemCorrection の保存など外部でも使う） */
+    static juce::var spectrumFrameToVar (const eeq::dsp::SpectrumFrame& frame) { return frameToVar (frame); }
+    /** SpectrumFrame のデシリアライズ。壊れたデータは fftSize=0 の空フレームを返す */
+    static eeq::dsp::SpectrumFrame spectrumFrameFromVar (const juce::var& v) { return frameFromVar (v); }
 
 private:
     static juce::var venueToVar (const Venue& venue);
