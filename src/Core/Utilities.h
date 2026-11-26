@@ -181,7 +181,7 @@ namespace eeq::util
     return std::clamp (value, minDb, maxDb);
 }
 
-/** BPM → 1拍の時間 [ms]（仕様 5.6: テンポ⇄時間）。beats で分音符を表す（1=4分, 2=8分...） */
+/** BPM → 指定した拍数の時間 [ms]（仕様 5.6: テンポ⇄時間）。beats は拍数（0.5=8分音符, 1=4分音符, 2=2分音符） */
 [[nodiscard]] inline constexpr double tempoToMilliseconds (double bpm, double beats = 1.0) noexcept
 {
     return bpm > 0.0 ? beats * 60000.0 / bpm : 0.0;

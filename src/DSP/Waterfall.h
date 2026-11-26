@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <deque>
 #include <vector>
 
@@ -15,7 +16,7 @@ public:
     void configure (int bandsPerOctave, double lengthSeconds, double minDb, double maxDb)
     {
         bandsPerOctave = juce::jlimit (6, 24, bandsPerOctave);
-        lengthSeconds = juce::jlimit (10.0, 600.0, lengthSeconds);
+        this->lengthSeconds = juce::jlimit (10.0, 600.0, lengthSeconds);
         this->minDb = minDb;
         this->maxDb = juce::jmax (minDb + 10.0, maxDb);
 
@@ -25,7 +26,7 @@ public:
             rows.clear();
         }
 
-        maxColumns = (int) juce::jlimit (60.0, 2000.0, lengthSeconds * 10.0); // 0.1秒間隔の上限
+        updateMaxColumns();
     }
 
     /** 表示する dB レンジ（色の対応。現在のレベルに合わせて随時更新できる） */
@@ -40,6 +41,14 @@ public:
     {
         if (bandLevelsDb.empty())
             return;
+
+        // 保持列数は「保持時間 ÷ 実際の列間隔」で決める。列間隔が変わったら
+        // 上限を再計算する（間隔を無視すると保持時間が設定の数倍になる）
+        if (columnSeconds > 0.0 && std::abs (columnSeconds - this->columnSeconds) > 1.0e-9)
+        {
+            this->columnSeconds = columnSeconds;
+            updateMaxColumns();
+        }
 
         rows.push_back (bandLevelsDb);
 
@@ -57,9 +66,15 @@ public:
     void clear() { rows.clear(); }
 
 private:
+    void updateMaxColumns()
+    {
+        maxColumns = (int) juce::jlimit (60.0, 2000.0, lengthSeconds / columnSeconds);
+    }
+
     std::deque<std::vector<float>> rows;
     int bandsPerOctave = 6;
     int maxColumns = 600;
+    double columnSeconds = 0.1;
     double lengthSeconds = 60.0;
     double minDb = -80.0;
     double maxDb = -20.0;

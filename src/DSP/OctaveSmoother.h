@@ -13,11 +13,11 @@ namespace eeq::dsp
 struct GridPoint
 {
     double freq = 0.0;
-    std::complex<double> h;   // 振幅（パワー平均）と位相（アンラップ平均）から再構成した複素H
+    std::complex<double> h;   // 振幅（パワー平均）と位相（円平均）から再構成した複素H
     float coherence = 0.0f;   // 帯域内の平均コヒーレンス
     int count = 0;            // 帯域に入った bin 数
     float magnitudeDb = -300.0f; // 帯域内のパワー平均振幅 (dB)。遅延があっても崩れない
-    float phaseDeg = 0.0f;       // 帯域内のアンラップ平均位相 (deg)
+    float phaseDeg = 0.0f;       // 帯域内の円平均位相 (deg, −180..180)
 };
 
 /** SpectrumFrame を対数グリッドへ再サンプルしつつ、1/(2·denom) オクターブ半幅の
@@ -26,8 +26,9 @@ struct GridPoint
     - 振幅は帯域内の「パワー平均」|H|² を平均する。遅延を含む測定では帯域内で位相が
       回転するため、複素平均すると振幅が打ち消されて崩れる（従来の実装の欠陥）。
       パワー平均なら遅延の有無に依存しない。
-    - 位相は帯域内の bin を順にアンラップしてから平均する。こちらも複素平均の位相消滅を避ける。
-      結果は連続的なアンラップ位相（表示側で −180..180 に折り返して見せる）。
+    - 位相は帯域内の bin を順にアンラップしてから sin/cos の円平均を取る。こちらも
+      複素平均の位相消滅を避ける。円平均のため、返る位相は −180..180 の範囲になる
+      （連続的なアンラップ位相ではないので、利用側で必要なら改めてアンラップすること）。
 
     Ref パワーがピークより floorDbBelowPeak 以上低い bin は H1 が不定のため除外する
     （計算値は呼び出し元が保持し、表示/提案にのみ使う。仕様 3.1）。
@@ -41,7 +42,9 @@ struct GridPoint
     points.resize ((size_t) juce::jmax (1, numPoints));
 
     if (frame.fftSize == 0 || frame.sampleRate <= 0.0 || frame.magnitudeDb.empty()
-        || frame.transfer.size() != frame.magnitudeDb.size())
+        || frame.transfer.size() != frame.magnitudeDb.size()
+        || frame.refPowerDb.size() != frame.magnitudeDb.size()
+        || frame.coherence.size() != frame.magnitudeDb.size())
         return points;
 
     const auto nBins = (int) frame.magnitudeDb.size();
