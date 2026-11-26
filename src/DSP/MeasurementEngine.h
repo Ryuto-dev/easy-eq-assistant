@@ -45,8 +45,9 @@ public:
         まだ溜まっていなければ false */
     bool copyRecentSamples (int numSamples, std::vector<float>& refOut, std::vector<float>& measOut) const;
 
-    /** 直近の入力から遅延を推定する（メッセージスレッドから呼ぶ。仕様 3.3） */
-    [[nodiscard]] DelayEstimate estimateCurrentDelay (bool usePhat) const;
+    /** 直近の入力から遅延を推定する（メッセージスレッドから呼ぶ。仕様 3.3）
+        minConfidence: 有効とみなす最小 confidence（既定 5.0） */
+    [[nodiscard]] DelayEstimate estimateCurrentDelay (bool usePhat, double minConfidence = 5.0) const;
 
     static constexpr int captureCapacity = 1 << 16; // 遅延推定用の直近バッファ（両ch合計で1MB）
 

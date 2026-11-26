@@ -109,3 +109,54 @@ TEST (DelayEstimator, SilenceIsInvalid)
 
     EXPECT_FALSE (result.valid);
 }
+
+TEST (DelayEstimator, PeakToSidelobeRatioReported)
+{
+    const auto count = 16384;
+    const auto reference = makeExcitation (count);
+    const auto meas = delayed (reference, 100.0, 0.001f, 99);
+
+    const auto result = eeq::dsp::estimateDelay (reference.data(), meas.data(), count, false);
+
+    EXPECT_TRUE (result.valid);
+    EXPECT_GT (result.peakToSidelobe, 10.0); // クリーンな信号ならサイドローブは十分低い
+}
+
+TEST (DelayEstimator, MinConfidenceThresholdWorks)
+{
+    // 純粋なノイズ同士では相関が低く、confidence が低くなる
+    const auto count = 4096;
+    std::mt19937 rng1 (1), rng2 (2);
+    std::uniform_real_distribution<float> dist (-1.0f, 1.0f);
+
+    std::vector<float> noise1 ((size_t) count), noise2 ((size_t) count);
+    for (size_t i = 0; i < (size_t) count; ++i)
+    {
+        noise1[i] = dist (rng1) * 0.1f;
+        noise2[i] = dist (rng2) * 0.1f;
+    }
+
+    // ノイズ同士の相関は低い（confidence ≈ 1）
+    const auto resultNoise = eeq::dsp::estimateDelay (noise1.data(), noise2.data(), count, false);
+
+    // 閾値 5.0 では invalid になる
+    EXPECT_FALSE (resultNoise.valid);
+
+    // 閾値 0.5 なら valid になる
+    const auto resultLowThresh = eeq::dsp::estimateDelay (noise1.data(), noise2.data(), count, false, 0.5);
+    EXPECT_TRUE (resultLowThresh.valid);
+}
+
+TEST (DelayEstimator, PhatImprovesPeakSharpness)
+{
+    const auto count = 16384;
+    const auto reference = makeExcitation (count);
+    const auto meas = delayed (reference, 200.0, 0.05f, 17);
+
+    const auto resultNormal = eeq::dsp::estimateDelay (reference.data(), meas.data(), count, false);
+    const auto resultPhat = eeq::dsp::estimateDelay (reference.data(), meas.data(), count, true);
+
+    EXPECT_TRUE (resultPhat.valid);
+    // PHAT はピークを鋭くするため peakToSidelobe が向上することが多い
+    EXPECT_GE (resultPhat.peakToSidelobe, resultNormal.peakToSidelobe * 0.8);
+}

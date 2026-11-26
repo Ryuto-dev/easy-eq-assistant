@@ -8,7 +8,8 @@
 namespace eeq::dsp
 {
 
-DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples, bool usePhat)
+DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples, bool usePhat,
+                             double minConfidence)
 {
     DelayEstimate result;
 
@@ -97,9 +98,11 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     // JUCE の実数逆FFTは 1/size 正規化済み（そのまま相互相関の値になる）
 
     // ピーク探索（循環相関なので負ラグは後半に現れる）
+    // ゼロラグ（i=0）を基準に、正遅延は前半、負遅延は後半に現れる
     int peakIndex = 0;
     float peakValue = 0.0f;
     double sumAbs = 0.0;
+    float maxSidelobe = 0.0f;
 
     for (int i = 0; i < size; ++i)
     {
@@ -111,6 +114,17 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
             peakValue = v;
             peakIndex = i;
         }
+    }
+
+    // 最大サイドローブ（ピークを除く最大値）を探す
+    for (int i = 0; i < size; ++i)
+    {
+        if (i == peakIndex)
+            continue;
+
+        const auto v = std::abs (measBuf[(size_t) i]);
+        if (v > maxSidelobe)
+            maxSidelobe = v;
     }
 
     if (peakValue <= 0.0f)
@@ -126,12 +140,19 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
 
     auto delaySamples = (double) peakIndex + (double) fractional;
 
+    // 負の遅延（Meas が進んでいる）へ折り返す
     if (delaySamples > (double) size / 2.0)
-        delaySamples -= (double) size; // 負の遅延（Meas が進んでいる）へ折り返す
+        delaySamples -= (double) size;
+
+    // 信頼度計算の改善: ピーク/平均 と ピーク/最大サイドローブの両方を考慮
+    const auto meanAbs = sumAbs / (double) size;
+    const auto confidenceRatio = meanAbs > 0.0 ? (double) peakValue / meanAbs : 0.0;
+    const auto sidelobeRatioDb = maxSidelobe > 0.0f ? 20.0 * std::log10 ((double) peakValue / maxSidelobe) : 60.0;
 
     result.delaySamples = delaySamples;
-    result.confidence = sumAbs > 0.0 ? (double) peakValue / (sumAbs / (double) size) : 0.0;
-    result.valid = result.confidence >= 5.0; // ノイズだけの相互相関（≈1前後）と区別する目安
+    result.confidence = confidenceRatio;
+    result.peakToSidelobe = sidelobeRatioDb;
+    result.valid = result.confidence >= minConfidence; // peakToSidelobe チェックは一旦無効化（サブサンプル遅延では拡がるため）
 
     return result;
 }

@@ -86,14 +86,14 @@ bool MeasurementEngine::copyRecentSamples (int numSamples, std::vector<float>& r
     return true;
 }
 
-DelayEstimate MeasurementEngine::estimateCurrentDelay (bool usePhat) const
+DelayEstimate MeasurementEngine::estimateCurrentDelay (bool usePhat, double minConfidence) const
 {
     std::vector<float> ref, meas;
 
     if (! copyRecentSamples (32768, ref, meas))
         return {};
 
-    return estimateDelay (ref.data(), meas.data(), (int) ref.size(), usePhat);
+    return estimateDelay (ref.data(), meas.data(), (int) ref.size(), usePhat, minConfidence);
 }
 
 void MeasurementEngine::appendCapture (const float* ref, const float* meas, int numSamples)
