@@ -3,6 +3,8 @@
 #include "Acoustics.h"
 
 #include <cmath>
+#include <string>
+#include <vector>
 
 // 計算ユーティリティ（仕様 5.6 の8ツール + 遅延換算）。
 // JUCE に依存しない純粋な計算なので、ユニットテストから直接使える。
@@ -217,7 +219,9 @@ namespace eeq::util
 }
 
 /** ゲイン [dB] → 線形振幅倍率 */
-[[nodiscard]] inline constexpr double dbToGain (double db) noexcept
+// constexpr にしない: std::pow は C++20 では constexpr でなく、
+// MSVC (14.44+) / clang(libc++) ともに定義時点でエラーになる（定数式では未使用）
+[[nodiscard]] inline double dbToGain (double db) noexcept
 {
     return std::pow (10.0, db / 20.0);
 }
@@ -229,7 +233,7 @@ namespace eeq::util
 }
 
 /** パワー [dB] → 線形パワー倍率 */
-[[nodiscard]] inline constexpr double dbToPower (double db) noexcept
+[[nodiscard]] inline double dbToPower (double db) noexcept
 {
     return std::pow (10.0, db / 10.0);
 }
