@@ -21,6 +21,9 @@ public:
     explicit RtaSplTab (UiContext& context);
 
     void timerTick();
+
+    /** 非表示タブ用の軽量ティック: 校正オフセット待ちの進行だけを行う（issue #55） */
+    void timerTickBackground();
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -29,6 +32,7 @@ private:
     void startNoiseFloorMeasurement();
     void stopNoiseFloorMeasurement();
     void applyCalibrationOffset();
+    void processCalibrationPending();
     void updateGainAssist();
     void updateSnHint();
     void refreshFromSettings();

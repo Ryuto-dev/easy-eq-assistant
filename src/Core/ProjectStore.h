@@ -91,6 +91,12 @@ public:
     [[nodiscard]] juce::String saveToFile (const juce::File& file) const;
     [[nodiscard]] juce::String loadFromFile (const juce::File& file);
 
+    /** 会場データのコピーをファイルへ保存する静的版（issue #58）。
+        自動保存をワーカースレッドで行うため、メッセージスレッドが取った
+        コピーを渡して UI スレッドをブロックしない */
+    [[nodiscard]] static juce::String saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
+                                                        const juce::File& file);
+
     /** 起動時の復元先（前回保存したプロジェクトの自動復元用） */
     static juce::File defaultProjectFile();
 

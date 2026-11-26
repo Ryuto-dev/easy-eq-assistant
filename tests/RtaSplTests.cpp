@@ -238,3 +238,26 @@ TEST (RtaSpl, WhiteNoiseBandsRiseThreeDbPerOctave)
     const auto slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
     EXPECT_NEAR (slope, 3.01, 0.8);
 }
+
+// issue #48: 比較校正は「既存オフセットを外した生の値」を基準に差を取る。
+// 2 回続けて校正しても同じオフセットになる（旧実装は 2 回目で 0 に戻った）
+TEST (RtaSpl, CalibrationOffsetCanBeAppliedTwice)
+{
+    // 1 回目: オフセット 0 のとき表示 = 生値
+    EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (94.0, -40.0, 0.0), 134.0, 1e-9);
+
+    // 2 回目: 表示はオフセット込み（-40 + 134 = 94）。同じ K が得られる
+    const auto displayed = -40.0 + 134.0;
+    EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (94.0, displayed, 134.0), 134.0, 1e-9);
+
+    // 値が変わった場合も差分が正しく取れる
+    EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (90.0, 96.0, 134.0), 128.0, 1e-9);
+}
+
+// issue #49: RTA スケールの上端は校正オフセットそのもの（94 を足さない）
+TEST (RtaSpl, RtaScaleTopUsesOffsetDirectly)
+{
+    EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (0.0), 0.0f);
+    EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (134.0), 134.0f);
+    EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (-6.0), -6.0f);
+}

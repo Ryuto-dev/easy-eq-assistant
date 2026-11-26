@@ -128,8 +128,7 @@ DelayIrTab::DelayIrTab (UiContext& context)
     styleLabel (delayTitle, 13.0f, false);
     addAndMakeVisible (delayTitle);
 
-    delayValueLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
-    delayValueLabel.setFont (juce::Font (juce::FontOptions (20.0f, juce::Font::bold)));
+    styleLabelWithColour (delayValueLabel, theme::ColourId::text, 20.0f, true);
     addAndMakeVisible (delayValueLabel);
 
     styleAccentButton (measureButton);
@@ -455,8 +454,7 @@ DelayIrTab::DelayIrTab (UiContext& context)
     compareResultLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
     addAndMakeVisible (compareResultLabel);
 
-    compareTowerLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::accent));
-    compareTowerLabel.setFont (juce::Font (juce::FontOptions (20.0f, juce::Font::bold)));
+    styleLabelWithColour (compareTowerLabel, theme::ColourId::accent, 20.0f, true);
     addAndMakeVisible (compareTowerLabel);
 
     comparePolarityLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
@@ -489,31 +487,8 @@ void DelayIrTab::timerTick()
     if (ctx.engine.getDeviceGeneration() != seenDeviceGenerationForChannels)
         refreshChannelComboChoices();
 
-    // ループバック校正の自動進行（issue #17/#31）: 平均が溜まったら検証して保存、
-    // 期限を過ぎたら理由を出して止める
-    if (loopbackRanging)
-    {
-        eeq::dsp::SpectrumFrame rangingFrame;
-        ctx.engine.getMeasurement().copyLatestResult (rangingFrame);
-
-        if (rangingFrame.averages >= 16)
-        {
-            finishLoopbackMeasurement();
-        }
-        else if (juce::Time::getCurrentTime() > loopbackDeadline)
-        {
-            loopbackRanging = false;
-            loopbackMeasureButton.setEnabled (true);
-            loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
-            ctx.engine.stopExcitation();
-            ctx.engine.getMeasurement().stopMeasurement();
-            loopbackStatusLabel.setText (
-                juce::String (u8"測定できませんでした（入力に信号が届いていません。出力→入力の接続と入力chの割り当てを確認してください）"),
-                juce::dontSendNotification);
-            eeq::log::write ("loopback: deadline reached with averages="
-                             + juce::String (rangingFrame.averages));
-        }
-    }
+    // ループバック校正の自動進行（issue #17/#31/#55）
+    processLoopbackRanging();
 
     // IRの再構築が必要か（平均数・幅・FFTサイズが変わったら）
     auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
@@ -933,6 +908,43 @@ void DelayIrTab::updateLoopbackUi()
                                      + juce::String (ctx.correction.getRoundtripDelaySamples(), 1)
                                      + " " + strings::delaySamplesUnit + juce::String (u8"） ") + strings::loopbackStaleWarning,
                                  juce::dontSendNotification);
+}
+
+void DelayIrTab::processLoopbackRanging()
+{
+    // ループバック校正の自動進行（issue #17/#31/#55）: 平均が溜まったら検証して保存、
+    // 期限を過ぎたら理由を出して止める。タブ非表示のときも MainComponent の
+    // timerTickBackground() 経由で必ず評価される（鳴りっぱなしを防ぐ）
+    if (! loopbackRanging)
+        return;
+
+    eeq::dsp::SpectrumFrame rangingFrame;
+    ctx.engine.getMeasurement().copyLatestResult (rangingFrame);
+
+    if (rangingFrame.averages >= 16)
+    {
+        finishLoopbackMeasurement();
+    }
+    else if (juce::Time::getCurrentTime() > loopbackDeadline)
+    {
+        loopbackRanging = false;
+        loopbackMeasureButton.setEnabled (true);
+        loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
+        ctx.engine.stopExcitation();
+        ctx.engine.getMeasurement().stopMeasurement();
+        loopbackStatusLabel.setText (
+            juce::String (u8"測定できませんでした（入力に信号が届いていません。出力→入力の接続と入力chの割り当てを確認してください）"),
+            juce::dontSendNotification);
+        eeq::log::write ("loopback: deadline reached with averages="
+                         + juce::String (rangingFrame.averages));
+    }
+}
+
+void DelayIrTab::timerTickBackground()
+{
+    // 非表示タブ用の軽量ティック（issue #55）: ループバック測定の進行・自動停止だけを行う。
+    // 励起を伴う処理がタブを離れたことで止まらず、ピンクノイズが鳴り続けることを防ぐ
+    processLoopbackRanging();
 }
 
 void DelayIrTab::rebuildSystemList()

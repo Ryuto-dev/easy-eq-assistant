@@ -68,6 +68,25 @@ public:
     [[nodiscard]] static double aWeightingDb (double frequency);
     [[nodiscard]] static double cWeightingDb (double frequency);
 
+    /** 比較校正のオフセットを求める（issue #48）。
+        displayedDb は「現在のオフセット込み」の表示値なので、いったん生の値に戻して
+        から差を取る。これがないと 2 回目の校正で offset_new = K − offset_old となり、
+        オフセットが 0 に戻ってしまう */
+    [[nodiscard]] static double calibrationOffsetFor (double meterReadingDb, double displayedDb,
+                                                      double currentOffsetDb) noexcept
+    {
+        return meterReadingDb - (displayedDb - currentOffsetDb);
+    }
+
+    /** RTA 表示スケールの上端 [dB]（issue #49）。
+        校正オフセットは「0 dBFS が何 dB SPL に相当するか」の値なので、校正後の
+        上端は offset そのもの。（94 dB はキャリブレータの値であって 0 dBFS の SPL
+        ではない。オフセットにはすでに含まれている） */
+    [[nodiscard]] static float rtaScaleTopDb (double calibrationOffsetDb) noexcept
+    {
+        return std::abs (calibrationOffsetDb) < 1.0e-9 ? 0.0f : (float) calibrationOffsetDb;
+    }
+
     static constexpr int fftOrder = 13; // 8192点。20Hz帯にも複数binが入る分解能
 
 private:

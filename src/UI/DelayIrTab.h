@@ -24,6 +24,10 @@ public:
     ~DelayIrTab() override;
 
     void timerTick();
+
+    /** 非表示タブ用の軽量ティック: ループバック測定の進行・自動停止だけを行う（issue #55） */
+    void timerTickBackground();
+
     void resized() override;
     void paint (juce::Graphics&) override;
 
@@ -46,6 +50,7 @@ private:
     // ---- ループバック校正 ----
     void measureLoopback();
     void finishLoopbackMeasurement();
+    void processLoopbackRanging();
     void updateLoopbackUi();
 
     // ---- 系統 ----

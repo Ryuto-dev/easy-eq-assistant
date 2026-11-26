@@ -1,31 +1,13 @@
 #include "TransferFunctionTab.h"
 
 #include "../Core/Exporters.h"
+#include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"
 
 namespace eeq::ui
 {
 
-namespace
-{
-void styleButton (juce::TextButton& button)
-{
-    button.setColour (juce::TextButton::buttonColourId, theme::get (theme::ColourId::buttonOff));
-    button.setColour (juce::TextButton::textColourOffId, theme::get (theme::ColourId::text));
-    button.setWantsKeyboardFocus (false);
-    button.setMouseClickGrabsKeyboardFocus (false);
-}
-
-void styleCombo (juce::ComboBox& combo)
-{
-    combo.setColour (juce::ComboBox::backgroundColourId, theme::get (theme::ColourId::control));
-    combo.setColour (juce::ComboBox::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    combo.setColour (juce::ComboBox::textColourId, theme::get (theme::ColourId::text));
-    combo.setColour (juce::ComboBox::arrowColourId, theme::get (theme::ColourId::textDim));
-    combo.setWantsKeyboardFocus (false);
-}
-} // namespace
 
 TransferFunctionTab::TransferFunctionTab (UiContext& context)
     : ctx (context)
