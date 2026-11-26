@@ -660,20 +660,40 @@ void DelayIrTab::refreshDistanceFromManualDelay()
 void DelayIrTab::measureLoopback()
 {
     // 出力→入力のループバック測定（仕様 6.1）。
-    // 現在の平均結果をインターフェース自身の伝達関数として保存する
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
+    // 測定が走っていなければ開始し、十分な平均数（既定 16）が溜まったら校正を保存する
+    auto& measurement = ctx.engine.getMeasurement();
 
-    if (frame.averages == 0)
+    if (! measurement.isMeasuring())
+    {
+        measurement.startMeasurement();
+        ctx.engine.startExcitation(); // ピンクノイズも開始
+        loopbackMeasureButton.setButtonText (strings::loopbackMeasuring);
         return;
+    }
+
+    // 既に測定中なら現在の結果で校正を保存
+    eeq::dsp::SpectrumFrame frame;
+    measurement.copyLatestResult (frame);
+
+    if (frame.averages < 16) // 最低平均数
+    {
+        eeq::log::write (juce::String ("loopback: waiting for averages (") + juce::String (frame.averages) + "/16)");
+        return;
+    }
 
     // 往復遅延も検出して保存する（後の測定で差し引ける）
-    const auto estimate = ctx.engine.getMeasurement().estimateCurrentDelay (false);
+    const auto estimate = measurement.estimateCurrentDelay (false);
 
+    measurement.copyLatestResult (frame); // 最新フレームを再取得
     ctx.correction.setCorrection (frame, estimate.valid ? estimate.delaySamples : 0.0);
     eeq::log::write (juce::String ("loopback correction measured: delay=")
                      + juce::String (estimate.valid ? estimate.delaySamples : 0.0, 2) + " samples, averages="
                      + juce::String (frame.averages));
+
+    // 測定停止
+    measurement.stopMeasurement();
+    ctx.engine.stopExcitation();
+    loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
 
     updateLoopbackUi();
 }

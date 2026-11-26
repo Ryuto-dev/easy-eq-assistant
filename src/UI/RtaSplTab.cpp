@@ -436,6 +436,30 @@ void RtaSplTab::timerTick()
 
     updateSnHint();
     updateGainAssist();
+
+    // 校正オフセット計算（重み付け切替後のリセット完了待ち）
+    if (calibrationOffsetPending)
+    {
+        eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+        ctx.engine.getSplAnalyzer().copySpl (spl);
+
+        if (spl.hasSignal)
+        {
+            const auto offset = calibrationMeterValue - spl.currentDb;
+            ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (offset);
+            uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
+            ctx.settings.setValue (settingsOffsetKey, offset);
+            ctx.settings.saveIfNeeded();
+
+            calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
+                                            juce::dontSendNotification);
+            eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (calibrationMeterValue, 1)
+                             + " app=" + juce::String (spl.currentDb, 1) + " offset=" + juce::String (offset, 2));
+        }
+
+        calibrationOffsetPending = false;
+    }
+
     repaint();
 }
 
@@ -466,27 +490,17 @@ void RtaSplTab::applyCalibrationOffset()
     // 比較校正中はアプリ側の表示も dB(A) Fast に合わせる（仕様 3.4）。設定にも保存する
     analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
     analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+    // 重み付け・時定数変更後は古い平均値をリセットしてから新しいフレームを待つ
+    analyzer.resetSpl();
     weightingCombo.setSelectedId (3, juce::dontSendNotification);
     timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
     ctx.settings.setValue (settingsWeightingKey, 3);
     ctx.settings.setValue (settingsTimeConstantKey, 1);
 
-    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    analyzer.copySpl (spl);
-
-    if (! spl.hasSignal)
-        return;
-
-    const auto offset = meterValue - spl.currentDb;
-    analyzer.setCalibrationOffsetDb (offset);
-    uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
-    ctx.settings.setValue (settingsOffsetKey, offset);
-    ctx.settings.saveIfNeeded();
-
-    calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
-                                    juce::dontSendNotification);
-    eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (meterValue, 1)
-                     + " app=" + juce::String (spl.currentDb, 1) + " offset=" + juce::String (offset, 2));
+    // 少し待ってから新しいフレームで値を取る（タイマーで再取得するためここでは返す）
+    // 実際のオフセット計算は次の timerTick で行う
+    calibrationOffsetPending = true;
+    calibrationMeterValue = meterValue;
 }
 
 void RtaSplTab::updateGainAssist()
