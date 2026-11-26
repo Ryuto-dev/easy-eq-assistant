@@ -39,6 +39,14 @@ public:
     void setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
                        double appliedDelaySamples, bool showRawPhase);
 
+    /** 軽量版: timerTick で事前計算済みの GridPoint を受け取る（paint では単に columns へコピー） */
+    void setLiveFrameCached (const std::vector<eeq::dsp::GridPoint>& points,
+                             const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
+                             double appliedDelaySamples, bool showRawPhase);
+
+    /** plotArea の幅を返す（キャッシュ計算用） */
+    int getPlotWidthForCache() const noexcept { return juce::jmax (2, (int) plotArea().getWidth()); }
+
     /** オーバーレイを差し替える（version が変わったときだけ再計算する） */
     void setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom);
 

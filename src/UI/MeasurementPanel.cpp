@@ -37,10 +37,11 @@ MeasurementPanel::MeasurementPanel()
 
     fftLabel.setText (strings::fftSizeLabel, juce::dontSendNotification);
     fftCombo.addItem ("8192", 1);
+    fftCombo.addItem ("8192", 1);
     fftCombo.addItem ("16384", 2);
     fftCombo.addItem ("32768", 3);
     fftCombo.addItem ("65536", 4);
-    fftCombo.setSelectedId (3, juce::dontSendNotification); // 既定 32768
+    fftCombo.setSelectedId (1, juce::dontSendNotification); // 既定 8192（応答重視）
 
     windowLabel.setText (strings::windowLabel, juce::dontSendNotification);
     windowCombo.addItem ("Hann", 1);
@@ -51,7 +52,7 @@ MeasurementPanel::MeasurementPanel()
     avgModeLabel.setText (strings::averagingModeLabel, juce::dontSendNotification);
     avgModeCombo.addItem (strings::averagingModeCumulative, 1);
     avgModeCombo.addItem (strings::averagingModeExponential, 2);
-    avgModeCombo.setSelectedId (1, juce::dontSendNotification); // 既定 累積平均
+    avgModeCombo.setSelectedId (2, juce::dontSendNotification); // 既定 指数平均（応答重視）
 
     smoothingLabel.setText (strings::smoothingLabel, juce::dontSendNotification);
     smoothingCombo.addItem (strings::noSmoothingItem, 1);
@@ -64,7 +65,7 @@ MeasurementPanel::MeasurementPanel()
 
     avgCountLabel.setText (strings::averagingCountLabel, juce::dontSendNotification);
     avgCountSlider.setRange (1.0, 256.0, 1.0);
-    avgCountSlider.setValue (64.0, juce::dontSendNotification);
+    avgCountSlider.setValue (16.0, juce::dontSendNotification); // 既定 16（応答重視）
     avgCountSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
     avgCountSlider.setColour (juce::Slider::backgroundColourId, juce::Colour (0xff26282e));
     avgCountSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff3fc9d2));
@@ -126,7 +127,8 @@ void MeasurementPanel::saveSettings()
 int MeasurementPanel::getFftSize() const noexcept
 {
     const auto id = fftCombo.getSelectedId();
-    return id >= 1 && id <= 4 ? fftSizes[id - 1] : 32768;
+    static const int fftSizes[] = { 8192, 16384, 32768, 65536 };
+    return (id >= 1 && id <= 4) ? fftSizes[id - 1] : 8192;
 }
 
 juce::dsp::WindowingFunction<float>::WindowingMethod MeasurementPanel::getWindowMethod() const noexcept

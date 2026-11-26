@@ -337,8 +337,9 @@ void RtaSplTab::timerTick()
     if (std::abs (ctx.engine.getCurrentSampleRate() - configuredSampleRate) > 0.5)
         applyAnalyzerConfig();
 
-    // RTA表示の上端は校正オフセットに追従させる
-    splTopDb = (float) (-10.0 + analyzer.getCalibrationOffsetDb());
+    // RTA表示の上端: 未校正時は 0 dBFS（フルスケール）を天井に、校正済みなら SPL スケールに合わせる
+    const auto offset = analyzer.getCalibrationOffsetDb();
+    splTopDb = (std::abs (offset) < 1.0e-9) ? 0.0f : (float) (94.0 + offset); // 未校正: 0 dBFS、校正済み: 94 dB SPL 基準
 
     eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
     analyzer.copyRta (frame);
@@ -523,7 +524,7 @@ void RtaSplTab::updateGainAssist()
     else if (rmsDb < -24.0f)
     {
         const auto delta = -21.0 - rmsDb;
-        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + u8" dB）",
+        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + juce::String (u8" dB）"),
                                   juce::dontSendNotification);
         gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
     }

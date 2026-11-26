@@ -689,7 +689,7 @@ void DelayIrTab::updateLoopbackUi()
     loopbackEnableToggle.setEnabled (true);
     loopbackStatusLabel.setText (juce::String (u8"測定済み（往復遅延 ")
                                      + juce::String (ctx.correction.getRoundtripDelaySamples(), 1)
-                                     + " " + strings::delaySamplesUnit + u8"） " + strings::loopbackStaleWarning,
+                                     + " " + strings::delaySamplesUnit + juce::String (u8"） ") + strings::loopbackStaleWarning,
                                  juce::dontSendNotification);
 }
 
@@ -763,30 +763,31 @@ void DelayIrTab::updateCompare()
     const auto proposedMs = arrivalDiffMs + fineMs;
 
     // 提案（どちらに遅延を入れるか）
+    // 到達を揃えるには「早い側」を遅らせる（遅い側に足すと差が拡大する）。仕様 3.3.1
     juce::String direction;
 
-    if (arrivalDiffSamples > 0.5)
-        direction = snapshotB.name; // Bが遅い→Bに遅延
-    else if (arrivalDiffSamples < -0.5)
+    if (arrivalDiffSamples > 0.5)        // B が遅い → A を遅らせる
         direction = snapshotA.name;
+    else if (arrivalDiffSamples < -0.5)  // B が早い → B を遅らせる
+        direction = snapshotB.name;
     else
-        direction = u8"（一致しています）";
+        direction = juce::String (u8"（一致しています）");
 
     compareResultLabel.setText (strings::compareArrivalDifference + ": "
                                     + juce::String (arrivalDiffMs, 2) + " ms / "
                                     + juce::String (arrivalDiffSamples, 1) + " samples / "
                                     + juce::String (arrivalDiffMetres, 2) + " m / "
                                     + juce::String (arrivalDiffMetres * 3.28084, 1) + " ft\n"
-                                    + strings::compareSuggestedDelay + ": " + direction + u8" に +"
+                                    + strings::compareSuggestedDelay + ": " + direction + juce::String (u8" に +")
                                     + juce::String (std::abs (proposedMs), 2) + " ms"
-                                    + (std::abs (fineMs) > 0.05 ? juce::String (u8"（微調整 +") + juce::String (fineMs, 1) + u8"ms）" : "")
+                                    + (std::abs (fineMs) > 0.05 ? juce::String (u8"（微調整 +") + juce::String (fineMs, 1) + juce::String (u8"ms）") : "")
                                     + "\n" + strings::compareMicPointNote,
                                 juce::dontSendNotification);
 
     // ディレイタワー用の大きな1行表示（仕様 3.3.1）
     compareTowerLabel.setText (juce::String (u8"ディレイタワー：") + direction
                                    + juce::String (u8" に +") + juce::String (std::abs (proposedMs), 1)
-                                   + u8" ms delay をかけてください",
+                                   + juce::String (u8" ms delay をかけてください"),
                                juce::dontSendNotification);
 
     // ---- 極性の提案（仕様 3.3.3）----
@@ -822,8 +823,8 @@ void DelayIrTab::updateCompare()
         if (bestBin > 0)
         {
             crossoverHz = (double) bestBin * binWidth;
-            compareCrossoverLabel.setText (strings::compareCrossover + u8": 約 "
-                                               + juce::String (crossoverHz, 0) + u8" Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）",
+            compareCrossoverLabel.setText (strings::compareCrossover + juce::String (u8": 約 ")
+                                               + juce::String (crossoverHz, 0) + juce::String (u8" Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）"),
                                            juce::dontSendNotification);
         }
         else
@@ -833,7 +834,7 @@ void DelayIrTab::updateCompare()
     }
     else
     {
-        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (crossoverHz, 0) + u8" Hz（会場メモの設定値）",
+        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (crossoverHz, 0) + juce::String (u8" Hz（会場メモの設定値）"),
                                        juce::dontSendNotification);
     }
 

@@ -179,8 +179,26 @@ void TransferFunctionTab::timerTick()
     }
 
     const auto smoothing = ctx.state.smoothingDenom;
-    graph.setLiveFrame (frame, smoothing, ctx.state.appliedDelaySamples.load(),
-                        ctx.state.showRawPhase.load());
+
+    // ---- 重いスムージング計算をここで実行（paintスレッド外）----
+    const bool frameChanged = ! cachedFrameValid
+                           || frame.averages != cachedFrame.averages
+                           || frame.fftSize != cachedFrame.fftSize
+                           || std::abs (frame.sampleRate - cachedFrame.sampleRate) > 0.5;
+
+    if (frameChanged || smoothing != cachedSmoothing)
+    {
+        const auto plotWidth = juce::jmax (2, graph.getPlotWidthForCache());
+        const auto effectiveMax = std::min (ctx.engine.getCurrentSampleRate() * 0.5, 20000.0);
+        cachedLivePoints = eeq::dsp::smoothToLogGrid (frame, smoothing, 20.0, effectiveMax, plotWidth);
+        cachedFrame = frame;
+        cachedFrameValid = true;
+        cachedSmoothing = smoothing;
+    }
+
+    // キャッシュ済みポイントをグラフへ渡す（setLiveFrameは軽量版）
+    graph.setLiveFrameCached (cachedLivePoints, frame, smoothing,
+                              ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
 
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion

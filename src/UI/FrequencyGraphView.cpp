@@ -19,6 +19,31 @@ FrequencyGraphView::FrequencyGraphView()
 void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
                                        double delaySamples, bool rawPhase)
 {
+    const bool changed = frame.averages != current.averages
+                      || frame.fftSize != current.fftSize
+                      || std::abs (frame.sampleRate - current.sampleRate) > 0.5
+                      || rawPhase != showRawPhase
+                      || delaySamples != appliedDelaySamples;
+
+    current = frame;
+    appliedDelaySamples = delaySamples;
+    showRawPhase = rawPhase;
+
+    if (changed || smoothingOctDenom != smoothingDenom)
+    {
+        smoothingDenom = smoothingOctDenom;
+        dirty = true;
+        lastOverlayVersion = -1;
+    }
+
+    repaint();
+}
+
+void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoint>& points,
+                                             const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
+                                             double delaySamples, bool rawPhase)
+{
+    // 軽量版: 事前計算済み points を columns へコピーするだけ（smoothToLogGrid は呼ばない）
     current = frame;
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
@@ -26,10 +51,18 @@ void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int
     if (smoothingOctDenom != smoothingDenom)
     {
         smoothingDenom = smoothingOctDenom;
-        dirty = true;
-        lastOverlayVersion = -1; // オーバーレイのスムージングも合わせ直す
+        lastOverlayVersion = -1;
     }
 
+    columns.resize (points.size());
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        columns[i].freq = points[i].freq;
+        columns[i].h = { (float) points[i].h.real(), (float) points[i].h.imag() };
+        columns[i].coherence = points[i].coherence;
+    }
+
+    dirty = false; // 再計算不要
     repaint();
 }
 
@@ -69,7 +102,7 @@ void FrequencyGraphView::rebuildLive()
         || current.magnitudeDb.empty() || current.transfer.size() != current.magnitudeDb.size())
         return;
 
-    const auto effectiveMax = std::min (axis.limitMax, current.sampleRate * 0.5);
+    const auto effectiveMax = std::min (axis.viewMax, current.sampleRate * 0.5);
     const auto points = eeq::dsp::smoothToLogGrid (current, smoothingDenom, axis.viewMin, effectiveMax,
                                                    juce::jmax (2, (int) plotArea().getWidth()));
 
@@ -89,8 +122,8 @@ void FrequencyGraphView::rebuildOverlays()
     overlayColumns.assign (overlaySources.size(), {});
 
     const auto width = juce::jmax (2, (int) plotArea().getWidth());
-    const auto effectiveMax = current.sampleRate > 0 ? std::min (axis.limitMax, current.sampleRate * 0.5)
-                                                     : axis.limitMax;
+    const auto effectiveMax = current.sampleRate > 0 ? std::min (axis.viewMax, current.sampleRate * 0.5)
+                                                     : axis.viewMax;
 
     for (size_t s = 0; s < overlaySources.size(); ++s)
     {
@@ -385,7 +418,8 @@ void FrequencyGraphView::paint (juce::Graphics& g)
 
         if (! showRawPhase && appliedDelaySamples != 0.0 && current.sampleRate > 0.0)
         {
-            const auto correction = -360.0 * column.freq * appliedDelaySamples / current.sampleRate;
+            // Meas が Ref より遅れるとき H = e^(-j2πfτ/fs)、位相を打ち消すには +360·f·τ/fs を足す
+            const auto correction = 360.0 * column.freq * appliedDelaySamples / current.sampleRate;
             deg += correction;
         }
 

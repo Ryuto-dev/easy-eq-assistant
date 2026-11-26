@@ -54,6 +54,11 @@ private:
     uint32_t lastSeenSnapshotVersion = 0;
     uint32_t lastSeenEqVersion = 0;
     juce::Rectangle<int> graphBounds;
+
+    // ---- キャッシュ: スムージング済みグリッドポイント（paintスレッド外で計算）----
+    std::vector<eeq::dsp::GridPoint> cachedLivePoints;
+    eeq::dsp::SpectrumFrame cachedFrame; // フレームの指紋（averages/fftSize/sampleRate等）で変化検出
+    bool cachedFrameValid = false;
 };
 
 } // namespace eeq::ui

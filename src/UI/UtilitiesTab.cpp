@@ -41,7 +41,7 @@ UtilitiesTab::UtilitiesTab (UiContext& context)
 
     // ---- 音速 ----
     setupLabel (temperatureTitle, strings::toolSpeedOfSound, true);
-    setupLabel (temperatureEditorLabel, strings::temperatureLabel + u8" (℃)");
+    setupLabel (temperatureEditorLabel, strings::temperatureLabel + juce::String (u8" (℃)"));
     setupEditor (temperatureEditor, "20");
     setupLabel (soundSpeedLabel, {});
     temperatureNoteLabel.setText (strings::temperatureManualNote, juce::dontSendNotification);

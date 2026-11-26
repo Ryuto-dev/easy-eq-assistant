@@ -234,17 +234,30 @@ void BottomBar::sliderValueChanged (juce::Slider* slider)
         return;
 
     const auto value = (float) levelSlider.getValue();
-    engine.setNoiseLevelDb (value);
+    const auto limit = eeq::audio::AudioEngine::outputLevelLimitDb;
 
-    if (value <= eeq::audio::AudioEngine::outputLevelLimitDb)
+    if (value <= limit)
     {
         overLimitConfirmed = false;
+        engine.setNoiseLevelDb (value);
         return;
     }
 
-    // ドラッグ中は確定時にまとめて確認する（テキストボックス入力は即確認）
-    if (! levelSlider.isMouseButtonDown())
-        confirmOverLimitIfNeeded();
+    // 上限超え：未承認ならエンジンへは適用せず、スライダー値だけ動かす
+    // ドラッグ中は limit でクランプした値を出しておく（音が出ないように）
+    if (! overLimitConfirmed)
+    {
+        if (levelSlider.isMouseButtonDown())
+            engine.setNoiseLevelDb (limit);
+        // テキスト入力等の即確認の場合は confirmOverLimitIfNeeded で処理
+        else
+            confirmOverLimitIfNeeded();
+    }
+    else
+    {
+        // 承認済みならそのまま適用
+        engine.setNoiseLevelDb (value);
+    }
 }
 
 void BottomBar::sliderDragEnded (juce::Slider* slider)
@@ -255,8 +268,10 @@ void BottomBar::sliderDragEnded (juce::Slider* slider)
 
 void BottomBar::confirmOverLimitIfNeeded()
 {
-    if ((float) levelSlider.getValue() <= eeq::audio::AudioEngine::outputLevelLimitDb
-        || overLimitConfirmed || dialogOpen)
+    const auto value = (float) levelSlider.getValue();
+    const auto limit = eeq::audio::AudioEngine::outputLevelLimitDb;
+
+    if (value <= limit || overLimitConfirmed || dialogOpen)
         return;
 
     dialogOpen = true;
@@ -265,7 +280,7 @@ void BottomBar::confirmOverLimitIfNeeded()
     juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
         strings::overLimitTitle, strings::overLimitMessage,
         strings::overLimitOk, strings::overLimitCancel, this,
-        juce::ModalCallbackFunction::create ([safeThis] (int result) mutable
+        juce::ModalCallbackFunction::create ([safeThis, value, limit] (int result) mutable
         {
             if (safeThis == nullptr)
                 return;
@@ -273,10 +288,16 @@ void BottomBar::confirmOverLimitIfNeeded()
             safeThis->dialogOpen = false;
 
             if (result == 0)
-                safeThis->levelSlider.setValue ((double) eeq::audio::AudioEngine::outputLevelLimitDb,
-                                                juce::sendNotificationSync);
+            {
+                // キャンセル：−20 dBFS に戻す
+                safeThis->levelSlider.setValue ((double) limit, juce::sendNotificationSync);
+            }
             else
+            {
+                // OK：承認フラグを立てて、エンジンへ適用
                 safeThis->overLimitConfirmed = true;
+                safeThis->engine.setNoiseLevelDb (value);
+            }
         }));
 }
 

@@ -295,7 +295,7 @@ void LimitTestTab::startThdTest()
 
     thdPhase = ThdPhase::playing;
     thdDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (11.5);
-    thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + u8" dBFS — " + strings::limitThdButton
+    thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + juce::String (u8" dBFS — ") + strings::limitThdButton
                           + juce::String (u8" 実行中…"),
                       juce::dontSendNotification);
 }
@@ -434,7 +434,7 @@ void LimitTestTab::timerTick()
                 harmonicPower += rms * rms;
 
                 const auto percent = fundamental > 0.0 ? 100.0 * rms / fundamental : 0.0;
-                harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + u8"次: " + juce::String (percent, 2) + "%";
+                harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ") + juce::String (percent, 2) + "%";
             }
 
             const auto thd = fundamental > 0.0 ? 100.0 * std::sqrt (harmonicPower) / fundamental : 0.0;
@@ -510,7 +510,7 @@ void LimitTestTab::updateSuggestion()
     {
         const auto headroomDb = 20.0 * std::log10 (maxVolts / thresholdVolts);
         extra = juce::String (u8"（スピーカー最大入力までの余裕: ") + juce::String (headroomDb, 1) + " dB = "
-              + juce::String (thresholdVolts, 2) + u8" Vrms / 最大 " + juce::String (maxVolts, 1) + u8" Vrms）";
+              + juce::String (thresholdVolts, 2) + juce::String (u8" Vrms / 最大 ") + juce::String (maxVolts, 1) + juce::String (u8" Vrms）");
     }
 
     suggestionLabel.setText (strings::limitSuggestion + ": " + juce::String (suggestedLimiterDbfs, 1) + " dBFS  /  "
@@ -550,7 +550,7 @@ void LimitTestTab::paint (juce::Graphics& g)
         if (worstCoherence < 0.8)
         {
             coherenceNoteLabel.setText (juce::String (u8"低域のコヒーレンス低下: 約 ")
-                                            + juce::String (worstFreq, 0) + u8" Hz で γ² "
+                                            + juce::String (worstFreq, 0) + juce::String (u8" Hz で γ² ")
                                             + juce::String (worstCoherence, 2)
                                             + juce::String (u8"（歪みの兆候の可能性）"),
                                         juce::dontSendNotification);
