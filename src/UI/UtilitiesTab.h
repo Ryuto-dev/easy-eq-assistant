@@ -43,6 +43,8 @@ private:
     // 距離減衰
     juce::Label attenuationTitle, attenFromLabel, attenToLabel, attenResultLabel;
     juce::TextEditor attenFromEditor, attenToEditor;
+    juce::Label attenFreqLabel, attenHumidityLabel;   // 空気吸収の入力（issue #36）
+    juce::TextEditor attenFreqEditor, attenHumidityEditor;
 
     // レベル換算
     juce::Label levelTitle, voltsLabel, levelResultLabel;

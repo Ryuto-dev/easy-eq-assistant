@@ -709,7 +709,34 @@ void RtaSplTab::paint (juce::Graphics& g)
         const auto x = plotArea.getX() + ((float) i + 0.5f) * barWidth;
         g.drawText (text, (int) x - 22, (int) plotArea.getBottom() + 2, 44, 12, juce::Justification::centred);
     }
+    // dB目盛りと水平グリッド（issue #27）: 上端 splTopDb から 10 dB 刻み。
+    // 未校正（0 dBFS 基準）と校正後（94 dB SPL 基準）のどちらのスケールかラベルで明示する
+    g.setFont (juce::Font (juce::FontOptions (9.5f)));
+
+    for (auto db = splTopDb; db >= splTopDb - rangeDb; db -= 10.0f)
+    {
+        const auto y = plotArea.getBottom ()
+                     - (db - (splTopDb - rangeDb)) / rangeDb * plotArea.getHeight ();
+
+        if (y < plotArea.getY () - 0.5f || y > plotArea.getBottom () + 0.5f)
+            continue;
+
+        const auto isTop = std::abs (db - splTopDb) < 0.01f;
+        g.setColour (theme::get (theme::ColourId::grid).withAlpha (isTop ? 0.9f : 0.45f));
+        g.drawLine (plotArea.getX (), y, plotArea.getRight (), y, isTop ? 1.2f : 1.0f);
+
+        g.setColour (theme::get (theme::ColourId::gridText));
+        g.drawText (juce::String (db, 0), (int) plotArea.getX () - 34, (int) y - 6, 30, 12,
+                    juce::Justification::centredRight);
+    }
+
+    g.setColour (theme::get (theme::ColourId::gridText));
+    g.drawText (std::abs (splTopDb) < 0.01f ? juce::String (u8"dBFS（未校正）")
+                                            : juce::String (u8"dB SPL（校正済み）"),
+                (int) plotArea.getX () - 40, (int) plotArea.getY () - 18, 150, 12,
+                juce::Justification::centredLeft);
 }
+
 
 void RtaSplTab::resized()
 {
@@ -720,16 +747,17 @@ void RtaSplTab::resized()
     auto rightColumn = bounds;
 
     // 左: RTA設定行 + グラフ + S/N
+    // リセット系ボタンは右端から固定幅で確保し、最小幅でも潰れないようにする（issue #28）
     auto configRow = graphColumn.removeFromTop (26);
-    bandsTitle.setBounds (configRow.removeFromLeft (50));
-    bandsCombo.setBounds (configRow.removeFromLeft (90));
-    configRow.removeFromLeft (8);
-    avgTimeTitle.setBounds (configRow.removeFromLeft (70));
-    avgTimeCombo.setBounds (configRow.removeFromLeft (70));
-    configRow.removeFromLeft (8);
-    peakHoldResetButton.setBounds (configRow.removeFromLeft (150));
-    configRow.removeFromLeft (8);
-    splResetButton.setBounds (configRow.removeFromLeft (110));
+    splResetButton.setBounds (configRow.removeFromRight (110));
+    configRow.removeFromRight (8);
+    peakHoldResetButton.setBounds (configRow.removeFromRight (150));
+    configRow.removeFromRight (8);
+    avgTimeCombo.setBounds (configRow.removeFromRight (70));
+    avgTimeTitle.setBounds (configRow.removeFromRight (70));
+    configRow.removeFromRight (8);
+    bandsCombo.setBounds (configRow.removeFromRight (90));
+    bandsTitle.setBounds (configRow);
 
     graphColumn.removeFromTop (4);
     graphColumn.removeFromTop (rtaGraphHeight); // グラフ描画領域（paint がここに描く）
@@ -782,6 +810,6 @@ void RtaSplTab::resized()
     gainMessageLabel.setBounds (gainPanel.removeFromTop (22));
     gainMetersLabel.setBounds (gainPanel.removeFromTop (18));
     gainProceedLabel.setBounds (gainPanel);
-}
 
+}
 } // namespace eeq::ui

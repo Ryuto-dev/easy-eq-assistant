@@ -535,13 +535,15 @@ void VenueTab::resized()
     micPointList.setBounds (right.removeFromTop (110));
     right.removeFromTop (4);
     auto micRow = right.removeFromTop (24);
-    micPointNameEditor.setBounds (micRow.removeFromLeft (100));
+    micPointNameEditor.setBounds (micRow.removeFromLeft (juce::jmax (70, micRow.getWidth() / 4)));
     micRow.removeFromLeft (4);
-    micPointDescEditor.setBounds (micRow.removeFromLeft (130));
+    micPointDescEditor.setBounds (micRow.removeFromLeft (juce::jmax (80, micRow.getWidth() / 3)));
     micRow.removeFromLeft (4);
-    micPointAddButton.setBounds (micRow.removeFromLeft (60));
-    micRow.removeFromLeft (4);
-    micPointRemoveButton.setBounds (micRow.removeFromLeft (60));
+
+    // ボタンは右端から固定幅で確保し、最小幅でも潰れないようにする（issue #28）
+    micPointRemoveButton.setBounds (micRow.removeFromRight (60));
+    micRow.removeFromRight (4);
+    micPointAddButton.setBounds (micRow.removeFromRight (60));
 
     right.removeFromTop (8);
     sessionsTitle.setBounds (right.removeFromTop (18));

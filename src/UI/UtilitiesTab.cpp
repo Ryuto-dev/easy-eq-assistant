@@ -68,6 +68,12 @@ UtilitiesTab::UtilitiesTab (UiContext& context)
     setupEditor (attenToEditor, "20");
     setupLabel (attenResultLabel, {});
 
+    // 空気吸収の入力（issue #36: ISO 9613-1 の式を距離減衰ツールへ接続する）
+    setupLabel (attenFreqLabel, "Hz");
+    setupLabel (attenHumidityLabel, "RH %");
+    setupEditor (attenFreqEditor, "8000");
+    setupEditor (attenHumidityEditor, "50");
+
     // ---- レベル換算 ----
     setupLabel (levelTitle, strings::toolLevelConversion, true);
     setupLabel (voltsLabel, "V");
@@ -151,12 +157,27 @@ void UtilitiesTab::updateCalculations()
             combResultLabel.setText ({}, juce::dontSendNotification);
     }
 
-    // 距離減衰（逆二乗則。仕様 5.6）
+    // 距離減衰（逆二乗則 + 空気吸収。仕様 5.6 / issue #36）。
+    // 空気吸収は ISO 9613-1（Acoustics.h）で、気温は上部バーの設定値を使う
     {
         const auto from = attenFromEditor.getText().getDoubleValue();
         const auto to = attenToEditor.getText().getDoubleValue();
-        attenResultLabel.setText (juce::String (eeq::util::distanceAttenuationDb (from, to), 2) + " dB",
-                                  juce::dontSendNotification);
+        const auto frequency = attenFreqEditor.getText().getDoubleValue();
+        const auto humidity = attenHumidityEditor.getText().getDoubleValue();
+        const auto temperature = ctx.state.airTemperatureC.load();
+
+        const auto geometric = eeq::util::distanceAttenuationDb (from, to);
+        const auto air = frequency > 0.0 && to > from
+                           ? -eeq::acoustics::airAbsorptionDbPerMetre (frequency, humidity, temperature) * (to - from)
+                           : 0.0;
+
+        auto text = juce::String (geometric, 2) + " dB";
+
+        if (std::abs (air) > 0.005)
+            text += juce::String (u8" ＋空気吸収 ") + juce::String (air, 2) + " dB = "
+                  + juce::String (geometric + air, 2) + " dB";
+
+        attenResultLabel.setText (text, juce::dontSendNotification);
     }
 
     // レベル換算（dBu / dBV / V。仕様 5.6）
@@ -220,7 +241,9 @@ void UtilitiesTab::resized()
     place (0, 0, distanceDelayTitle, { &distanceLabel, &distanceEditor, &distanceResultLabel, &delayLabel2, &delayEditor, &delayResultLabel });
     place (1, 0, temperatureTitle, { &temperatureEditorLabel, &temperatureEditor, &soundSpeedLabel, &temperatureNoteLabel });
     place (2, 0, wavelengthTitle, { &wavelengthFreqLabel, &wavelengthFreqEditor, &wavelengthResultLabel, &combTitle, &combDelayLabel, &combDelayEditor, &combResultLabel });
-    place (0, 1, attenuationTitle, { &attenFromLabel, &attenFromEditor, &attenToLabel, &attenToEditor, &attenResultLabel });
+    place (0, 1, attenuationTitle, { &attenFromLabel, &attenFromEditor, &attenToLabel, &attenToEditor,
+                                     &attenFreqLabel, &attenFreqEditor, &attenHumidityLabel, &attenHumidityEditor,
+                                     &attenResultLabel });
     place (1, 1, levelTitle, { &voltsLabel, &voltsEditor, &levelResultLabel, &tempoTitle, &bpmLabel, &bpmEditor, &tempoResultLabel });
     place (2, 1, qbwTitle, { &qLabel, &qEditor, &qResultLabel, &bwLabel, &bwEditor, &bwResultLabel });
 }

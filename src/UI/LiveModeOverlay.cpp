@@ -389,6 +389,24 @@ void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>&
                         juce::Justification::centred);
         }
     }
+
+    // dB目盛り（issue #27）: 20 dB 刻みの水平グリッドと値。範囲はピーク-60 dB
+    g.setFont (juce::Font (juce::FontOptions (9.0f)));
+
+    for (auto db = std::ceil (rangeBottom / 20.0f) * 20.0f; db <= rangeTop; db += 20.0f)
+    {
+        const auto y = plot.getBottom() - (db - rangeBottom) / 60.0f * plot.getHeight();
+
+        if (y < plot.getY() - 0.5f || y > plot.getBottom() + 0.5f)
+            continue;
+
+        g.setColour (theme::get (theme::ColourId::grid).withAlpha (0.45f));
+        g.drawLine (plot.getX(), y, plot.getRight(), y);
+
+        g.setColour (theme::get (theme::ColourId::gridText));
+        g.drawText (juce::String (db, 0), (int) plot.getX() + 2, (int) y - 6, 40, 12,
+                    juce::Justification::centredLeft);
+    }
 }
 
 void LiveModeOverlay::resized()
