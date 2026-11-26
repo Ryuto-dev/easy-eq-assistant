@@ -1,6 +1,25 @@
 #include "Core/JuceModules.h"
 
+#include "Core/Log.h"
+
 #include "MainComponent.h"
+
+#if JUCE_WINDOWS
+// 予期しない終了の際に、例外コードと発生アドレスをログへ残す（仕様 6.3 のログ収集）。
+// 現場で「落ちた」報告だけだと原因が追えないため
+static LONG WINAPI eeqCrashHandler (EXCEPTION_POINTERS* info)
+{
+    if (info != nullptr && info->ExceptionRecord != nullptr)
+    {
+        const auto code = info->ExceptionRecord->ExceptionCode;
+        const auto address = reinterpret_cast<unsigned long long> (info->ExceptionRecord->ExceptionAddress);
+        eeq::log::write ("CRASH: code=0x" + juce::String::toHexString ((juce::int64) code)
+                             + " address=0x" + juce::String::toHexString ((juce::int64) address));
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 
 class EasyEQAssistantApplication : public juce::JUCEApplication
 {
@@ -13,6 +32,9 @@ public:
 
     void initialise (const juce::String&) override
     {
+       #if JUCE_WINDOWS
+        SetUnhandledExceptionFilter (eeqCrashHandler);
+       #endif
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
     }
 
