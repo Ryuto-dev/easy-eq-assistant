@@ -391,14 +391,20 @@ void EQTab::runProposal()
                               juce::dontSendNotification);
 
     // 一覧を作り直すので選択と編集欄を同期させる（古い提案の値が別の帯域に
-    // 書き込まれる事故を防ぐ）
-    bandList.deselectAllRows();
+    // 書き込まれる事故を防ぐ）。編集ハンドラは getSelectedRow() で対象を決める
+    // ため、行選択も必ず連動させる（選択が無いと入力が無言で無効になる）
     refreshBandTable();
 
     if (! ctx.state.proposedBands.empty())
+    {
+        bandList.selectRow (0);
         selectBandForEditing (0);
+    }
     else
+    {
+        bandList.deselectAllRows();
         selectedLabel.setText ({}, juce::dontSendNotification);
+    }
 }
 
 void EQTab::updatePrediction()
@@ -424,6 +430,9 @@ void EQTab::updatePrediction()
     }
 
     ctx.state.eqVersion.fetch_add (1);
+
+    // 手動編集が一覧の行表示（Hz/dB/Q/OFF）にも反映されるようにする
+    bandList.updateContent();
 }
 
 void EQTab::refreshBandTable()
@@ -600,8 +609,10 @@ void EQTab::resized()
     targetRow.removeFromLeft (6);
     tiltTitle.setBounds (targetRow.removeFromLeft (100));
     tiltEditor.setBounds (targetRow.removeFromLeft (60));
-    targetRow.removeFromLeft (6);
-    targetCsvButton.setBounds (targetRow.removeFromLeft (110));
+
+    // CSV読込ボタンは独立行に置く（同じ行に詰めると左カラム幅に収まらず幅0になる）
+    left.removeFromTop (6);
+    targetCsvButton.setBounds (left.removeFromTop (26).removeFromLeft (110));
 
     left.removeFromTop (6);
     auto rangeRow = left.removeFromTop (26);
@@ -614,9 +625,12 @@ void EQTab::resized()
     auto gateRow = left.removeFromTop (26);
     coherenceTitle.setBounds (gateRow.removeFromLeft (190));
     coherenceEditor.setBounds (gateRow.removeFromLeft (60));
-    gateRow.removeFromLeft (6);
-    maxBandsTitle.setBounds (gateRow.removeFromLeft (110));
-    maxBandsSlider.setBounds (gateRow);
+
+    // 最大帯域スライダーも独立行にする（同じ行だと幅がほぼ残らない）
+    left.removeFromTop (6);
+    auto maxBandsRow = left.removeFromTop (26);
+    maxBandsTitle.setBounds (maxBandsRow.removeFromLeft (110));
+    maxBandsSlider.setBounds (maxBandsRow);
 
     left.removeFromTop (6);
     auto boostRow = left.removeFromTop (26);
