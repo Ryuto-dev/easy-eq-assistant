@@ -18,7 +18,8 @@ struct DelayEstimate
     - numSamples は 2 の冪（FFT サイズそのまま）。循環畳み込みなので、
       実遅延が numSamples/2 を超えると負側に折り返す点に注意（通常の測定では問題ない）。
     - usePhat: 位相変換付き（GCC-PHAT）。反射の多い環境でピークが鋭くなる。
-    - minConfidence: 有効とみなす最小 confidence（既定 5.0）。ノイズ相関（≈1）と区別する。
+    - minConfidence: 有効とみなす利用側の最小 confidence（既定 5.0）。信号長に応じたノイズ棄却下限と
+      6 dB以上のピーク/サイドローブ比も常に適用するため、この値を下げても無相関ノイズは有効にならない。
     - 純粋関数（スレッドを作らない）のでテストから直接使える。 */
 [[nodiscard]] DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples,
                                            bool usePhat, double minConfidence = 5.0);

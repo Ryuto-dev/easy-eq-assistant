@@ -34,6 +34,23 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     std::copy (ref, ref + size, refBuf.begin());
     std::copy (meas, meas + size, measBuf.begin());
 
+    // DCオフセットや一定値だけの入力が相関ピークを作らないよう平均値を除く
+    auto removeMean = [&size] (std::vector<float>& buffer)
+    {
+        double sum = 0.0;
+
+        for (int i = 0; i < size; ++i)
+            sum += (double) buffer[(size_t) i];
+
+        const auto mean = (float) (sum / (double) size);
+
+        for (int i = 0; i < size; ++i)
+            buffer[(size_t) i] -= mean;
+    };
+
+    removeMean (refBuf);
+    removeMean (measBuf);
+
     // 入力がほぼ無音なら推定しない
     auto rmsOf = [&size] (const std::vector<float>& buffer)
     {
@@ -151,15 +168,19 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     if (delaySamples > (double) size / 2.0)
         delaySamples -= (double) size;
 
-    // 信頼度計算の改善: ピーク/平均 と ピーク/最大サイドローブの両方を考慮
+    // 無相関ノイズの最大ピークは信号長に応じて増えるため、単純な固定閾値では棄却できない。
+    // 独立ガウス雑音の最大値近似 sqrt(2 ln N) と平均絶対値 sqrt(2/pi) の比に余裕を持たせる。
     const auto meanAbs = sumAbs / (double) size;
     const auto confidenceRatio = meanAbs > 0.0 ? (double) peakValue / meanAbs : 0.0;
     const auto sidelobeRatioDb = maxSidelobe > 0.0f ? 20.0 * std::log10 ((double) peakValue / maxSidelobe) : 60.0;
+    const auto noiseConfidenceFloor = 1.8 * std::sqrt (2.0 * std::log ((double) size))
+                                    / std::sqrt (2.0 / juce::MathConstants<double>::pi);
 
     result.delaySamples = delaySamples;
     result.confidence = confidenceRatio;
     result.peakToSidelobe = sidelobeRatioDb;
-    result.valid = result.confidence >= minConfidence; // peakToSidelobe チェックは一旦無効化（サブサンプル遅延では拡がるため）
+    result.valid = result.confidence >= std::max (minConfidence, noiseConfidenceFloor)
+                && result.peakToSidelobe >= 6.0;
 
     return result;
 }

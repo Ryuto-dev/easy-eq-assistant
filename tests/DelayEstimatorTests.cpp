@@ -61,6 +61,23 @@ TEST (DelayEstimator, RecoversIntegerDelay)
     EXPECT_NEAR (result.delaySamples, 37.0, 0.15);
 }
 
+TEST (DelayEstimator, RecoversDelayWithDcOffsets)
+{
+    constexpr int count = 16384;
+    auto reference = makeExcitation (count);
+    auto meas = delayed (reference, 53.0, 0.005f, 19);
+
+    for (int i = 0; i < count; ++i)
+    {
+        reference[(size_t) i] += 0.35f;
+        meas[(size_t) i] -= 0.20f;
+    }
+
+    const auto result = eeq::dsp::estimateDelay (reference.data(), meas.data(), count, false);
+    EXPECT_TRUE (result.valid);
+    EXPECT_NEAR (result.delaySamples, 53.0, 0.2);
+}
+
 TEST (DelayEstimator, RecoversSubSampleDelay)
 {
     const auto count = 16384;
@@ -122,9 +139,9 @@ TEST (DelayEstimator, PeakToSidelobeRatioReported)
     EXPECT_GT (result.peakToSidelobe, 10.0); // クリーンな信号ならサイドローブは十分低い
 }
 
-TEST (DelayEstimator, MinConfidenceThresholdWorks)
+TEST (DelayEstimator, MinConfidenceCannotBypassNoiseRejection)
 {
-    // 純粋なノイズ同士では相関が低く、confidence が低くなる
+    // 純粋なノイズ同士の相関は低く、呼び出し側の閾値を下げても安全条件で棄却する
     const auto count = 4096;
     std::mt19937 rng1 (1), rng2 (2);
     std::uniform_real_distribution<float> dist (-1.0f, 1.0f);
@@ -142,9 +159,41 @@ TEST (DelayEstimator, MinConfidenceThresholdWorks)
     // 閾値 5.0 では invalid になる
     EXPECT_FALSE (resultNoise.valid);
 
-    // 閾値 0.5 なら valid になる
+    // 呼び出し側が閾値を下げても、無相関ノイズを有効な遅延として扱わない
     const auto resultLowThresh = eeq::dsp::estimateDelay (noise1.data(), noise2.data(), count, false, 0.5);
-    EXPECT_TRUE (resultLowThresh.valid);
+    EXPECT_FALSE (resultLowThresh.valid);
+}
+
+TEST (DelayEstimator, RejectsUncorrelatedNoiseAtMeasurementSize)
+{
+    constexpr int count = 32768;
+
+    for (unsigned seed = 0; seed < 20; ++seed)
+    {
+        std::mt19937 rng1 (1000u + seed), rng2 (2000u + seed);
+        std::uniform_real_distribution<float> dist (-0.5f, 0.5f);
+        std::vector<float> ref ((size_t) count), meas ((size_t) count);
+
+        for (int i = 0; i < count; ++i)
+        {
+            ref[(size_t) i] = dist (rng1);
+            meas[(size_t) i] = dist (rng2);
+        }
+
+        const auto result = eeq::dsp::estimateDelay (ref.data(), meas.data(), count, false);
+        EXPECT_FALSE (result.valid) << "seed=" << seed << ", confidence=" << result.confidence
+                                    << ", peakToSidelobe=" << result.peakToSidelobe;
+    }
+}
+
+TEST (DelayEstimator, ConstantSignalIsInvalidEvenWithLowThreshold)
+{
+    constexpr int count = 4096;
+    const std::vector<float> ref ((size_t) count, 0.35f);
+    const std::vector<float> meas ((size_t) count, -0.20f);
+
+    const auto result = eeq::dsp::estimateDelay (ref.data(), meas.data(), count, false, 0.5);
+    EXPECT_FALSE (result.valid);
 }
 
 TEST (DelayEstimator, PhatImprovesPeakSharpness)
