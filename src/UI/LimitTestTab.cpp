@@ -181,7 +181,7 @@ LimitTestTab::LimitTestTab (UiContext& context)
     startButton.onClick = [this]
     {
         // 実行中はボタン文言が「停止」になるので、押したら実際に止める
-        if (stepPhase != Phase::idle)
+        if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning)
             stopTest (false);
         else
             startStepTest();
@@ -190,7 +190,13 @@ LimitTestTab::LimitTestTab (UiContext& context)
 
     styleButton (thdButton);
     thdButton.setButtonText (strings::limitThdButton);
-    thdButton.onClick = [this] { startThdTest(); };
+    thdButton.onClick = [this]
+    {
+        if (thdPhase != ThdPhase::idle)
+            stopTest (false);
+        else
+            startThdTest();
+    };
     addAndMakeVisible (thdButton);
 
     styleButton (thermalButton);
@@ -237,6 +243,9 @@ double LimitTestTab::currentSplFast()
 
 void LimitTestTab::startStepTest()
 {
+    if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning)
+        return;
+
     if (! acknowledgeToggle.getToggleState())
     {
         progressLabel.setText (strings::limitAcknowledge + juce::String (u8" にチェックしてください"), juce::dontSendNotification);
@@ -261,6 +270,7 @@ void LimitTestTab::startStepTest()
     ctx.engine.startExcitation();
     ctx.engine.getMeasurement().startMeasurement();
     startButton.setButtonText (strings::limitStopButton);
+    updateControlState();
     eeq::log::write (juce::String ("limit test: step test started, ceiling=") + juce::String (ceiling, 1));
 }
 
@@ -272,7 +282,9 @@ void LimitTestTab::stopTest (bool automatic)
     ctx.engine.stopExcitation();
     ctx.engine.getMeasurement().stopMeasurement();
     startButton.setButtonText (strings::limitStartButton);
+    thdButton.setButtonText (strings::limitThdButton);
     thermalButton.setButtonText (strings::limitThermalButton);
+    updateControlState();
     progressLabel.setText (automatic ? strings::limitAutoStopped : juce::String (u8"停止しました"),
                            juce::dontSendNotification);
     eeq::log::write (juce::String ("limit test: stopped (automatic=") + (automatic ? "1" : "0") + ")");
@@ -281,7 +293,8 @@ void LimitTestTab::stopTest (bool automatic)
 
 void LimitTestTab::startThdTest()
 {
-    if (! acknowledgeToggle.getToggleState())
+    if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning
+        || ! acknowledgeToggle.getToggleState())
         return;
 
     // 対数スイープを鳴らしてIRから高調波を分離する（仕様 3.7）
@@ -295,6 +308,8 @@ void LimitTestTab::startThdTest()
 
     thdPhase = ThdPhase::playing;
     thdDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (11.5);
+    thdButton.setButtonText (strings::limitStopButton);
+    updateControlState();
     thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + juce::String (u8" dBFS — ") + strings::limitThdButton
                           + juce::String (u8" 実行中…"),
                       juce::dontSendNotification);
@@ -302,7 +317,8 @@ void LimitTestTab::startThdTest()
 
 void LimitTestTab::startThermalTest()
 {
-    if (! acknowledgeToggle.getToggleState())
+    if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning
+        || ! acknowledgeToggle.getToggleState())
         return;
 
     const auto ceiling = ceilingEditor.getText().getDoubleValue();
@@ -317,7 +333,20 @@ void LimitTestTab::startThermalTest()
     ctx.engine.setNoiseLevelDb ((float) thermalLevel);
     ctx.engine.startExcitation();
     thermalButton.setButtonText (strings::limitStopButton);
+    updateControlState();
     eeq::log::write (juce::String ("limit test: thermal test started, level=") + juce::String (thermalLevel, 1));
+}
+
+void LimitTestTab::updateControlState()
+{
+    const auto thdActive = thdPhase != ThdPhase::idle;
+    const auto stepActive = stepPhase != Phase::idle;
+
+    // Keep only the active test's stop control available; no other test may
+    // replace its excitation or measurement while it is running.
+    startButton.setEnabled (! thdActive);
+    thermalButton.setEnabled (! thdActive && (! stepActive || thermalRunning));
+    thdButton.setEnabled (thdActive || (! stepActive && ! thermalRunning));
 }
 
 void LimitTestTab::timerTick()
@@ -391,6 +420,8 @@ void LimitTestTab::timerTick()
         thdPhase = ThdPhase::idle;
         ctx.engine.stopExcitation();
         ctx.engine.getMeasurement().stopMeasurement();
+        thdButton.setButtonText (strings::limitThdButton);
+        updateControlState();
 
         // IRから高調波を分離する（Farina法。仕様 3.7）
         eeq::dsp::SpectrumFrame frame;
@@ -461,6 +492,7 @@ void LimitTestTab::timerTick()
             thermalRunning = false;
             thermalButton.setButtonText (strings::limitThermalButton);
             ctx.engine.stopExcitation();
+            updateControlState();
             eeq::log::write ("limit test: thermal test finished");
         }
     }

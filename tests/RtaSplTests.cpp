@@ -122,6 +122,48 @@ TEST (RtaSpl, LeqMatchesSteadyLevel)
     EXPECT_NEAR (spl.leqSessionDb, spl.currentDb, 0.2);
 }
 
+TEST (RtaSpl, FullBandReferenceMakesBinCenteredFullScaleSineZeroDbfs)
+{
+    eeq::dsp::RtaSplAnalyzer analyzer;
+    analyzer.configure (sampleRate, 3, 0.1);
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::zWeighted);
+
+    feed (analyzer, makeSine (4.0 * sampleRate / (double) (1 << eeq::dsp::RtaSplAnalyzer::fftOrder), 1.0, 3.0));
+
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copySpl (spl);
+
+    ASSERT_TRUE (spl.hasSignal);
+    EXPECT_NEAR (spl.currentDb, 0.0, 0.05);
+}
+
+TEST (RtaSpl, AdjacentLowBandsPartitionBoundaryBinPower)
+{
+    eeq::dsp::RtaSplAnalyzer analyzer;
+    analyzer.configure (sampleRate, 3, 0.1);
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::zWeighted);
+
+    // Bin 4 (23.4375 Hz) is in the low-frequency range where rounded inclusive
+    // ranges assigned the same bin to both adjacent 1/3-octave bands. Some of
+    // the window's leakage falls below the first 20 Hz band edge, so compare
+    // against full-band SPL with a margin for that expected out-of-band energy.
+    feed (analyzer, makeSine (4.0 * sampleRate / (double) (1 << eeq::dsp::RtaSplAnalyzer::fftOrder), 1.0, 3.0));
+
+    eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copyRta (frame);
+    analyzer.copySpl (spl);
+
+    double rtaPower = 0.0;
+    for (const auto level : frame.levelDb)
+        rtaPower += std::pow (10.0, (double) level / 10.0);
+
+    const auto splPower = std::pow (10.0, spl.currentDb / 10.0);
+    const auto rtaToSplPowerRatio = rtaPower / splPower;
+    EXPECT_GT (rtaToSplPowerRatio, 0.85); // retain most in-band power
+    EXPECT_LT (rtaToSplPowerRatio, 1.01); // do not count any bin twice
+}
+
 TEST (RtaSpl, ToneLandsInCorrectBand)
 {
     eeq::dsp::RtaSplAnalyzer analyzer;

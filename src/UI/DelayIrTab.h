@@ -77,7 +77,7 @@ private:
 
     // ---- 遅延パネル ----
     juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel;
-    juce::TextButton measureButton, applyButton, clearButton;
+    juce::TextButton measureButton, applyButton, clearButton, manualApplyButton;
     juce::ToggleButton phatToggle, rawPhaseToggle, peakAlignToggle, etcToggle;
 
     // 手動入力（ms と m が連動: 仕様 3.3.2）

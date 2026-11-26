@@ -107,6 +107,7 @@ inline const juce::String delayMetresUnit { u8"m" };
 inline const juce::String delayFeetUnit { u8"ft" };
 inline const juce::String delayNotDetected { u8"遅延を検出できません" };
 inline const juce::String delayApplyButton { u8"遅延を適用" };
+inline const juce::String delayApplyManualButton { u8"手動値を適用" };
 inline const juce::String delayClearButton { u8"補正を解除" };
 inline const juce::String delayRawPhaseToggle { u8"生位相を表示" };
 inline const juce::String delayPhatToggle { u8"GCC-PHAT" };
@@ -123,6 +124,7 @@ inline const juce::String systemDelayLabel { u8"システム遅延（ループ�
 inline const juce::String spatialDelayLabel { u8"空間伝播時間" };
 inline const juce::String loopbackSection { u8"システム補正（ループバック校正）" };
 inline const juce::String loopbackMeasureButton { u8"システム補正を測定" };
+inline const juce::String loopbackMeasuring { u8"測定中…（平均が16回以上たまったら再度押す）" };
 inline const juce::String loopbackClearButton { u8"補正を削除" };
 inline const juce::String loopbackEnableToggle { u8"補正を適用" };
 inline const juce::String loopbackStaleWarning { u8"接続・サンプルレート・ゲインが変わったら再測定してください" };

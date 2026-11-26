@@ -59,6 +59,9 @@ private:
     std::vector<eeq::dsp::GridPoint> cachedLivePoints;
     eeq::dsp::SpectrumFrame cachedFrame; // フレームの指紋（averages/fftSize/sampleRate等）で変化検出
     bool cachedFrameValid = false;
+    double cachedViewMin = 0.0;
+    double cachedViewMax = 0.0;
+    int cachedPlotWidth = 0;
 };
 
 } // namespace eeq::ui

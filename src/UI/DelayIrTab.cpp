@@ -124,6 +124,30 @@ DelayIrTab::DelayIrTab (UiContext& context)
     manualDelayEditor.setInputRestrictions (10, "0123456789.-");
     manualDistanceEditor.setInputRestrictions (10, "0123456789.-");
     manualDelayEditor.onTextChange = [this] { refreshDistanceFromManualDelay(); };
+    styleButton (manualApplyButton);
+    manualApplyButton.setButtonText (strings::delayApplyManualButton);
+    manualApplyButton.onClick = [this]
+    {
+        const auto text = manualDelayEditor.getText().trim();
+        const auto ms = text.getDoubleValue();
+        const auto sampleRate = ctx.engine.getCurrentSampleRate();
+
+        if (text.isEmpty() || ! std::isfinite (ms) || sampleRate <= 0.0)
+        {
+            manualWarnLabel.setText (text.isEmpty() || ! std::isfinite (ms)
+                                         ? juce::String (u8"遅延 (ms) を入力してください")
+                                         : juce::String (u8"有効なサンプルレートがありません"),
+                                     juce::dontSendNotification);
+            return;
+        }
+
+        ctx.state.manualDelayMs.store (ms);
+        ctx.state.appliedDelaySamples.store (eeq::acoustics::samplesForDelayMs (ms, sampleRate));
+        tempAtDelayApply = ctx.state.airTemperatureC.load();
+        manualWarnLabel.setText ({}, juce::dontSendNotification);
+        eeq::log::write (juce::String ("delay: manually applied ") + juce::String (ms, 2) + " ms");
+    };
+    addAndMakeVisible (manualApplyButton);
     manualDistanceEditor.onTextChange = [this]
     {
         // 距離→ms（気温で換算。仕様 3.3.2）
@@ -152,7 +176,13 @@ DelayIrTab::DelayIrTab (UiContext& context)
         ctx.engine.getMeasurement().copyLatestResult (frame);
 
         if (frame.averages == 0)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                strings::snapshotExportTitle,
+                juce::String (u8"測定結果がまだありません。測定を開始してから IR を書き出してください。"),
+                strings::okButton, this, nullptr);
             return;
+        }
 
         auto chooser = std::make_shared<juce::FileChooser> ("impulse_response.wav",
                                                             juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
@@ -730,6 +760,8 @@ void DelayIrTab::setExciteTarget (int index)
         // 全体（合成）: 全系統を鳴らす（仕様 3.3.4）
         for (const auto& system : systems)
             mask |= (uint64_t) 1 << juce::jlimit (0, 63, system.outputChannel);
+
+        ctx.state.currentSystemName = strings::systemsAll;
     }
     else if (index < (int) systems.size())
     {
@@ -945,6 +977,7 @@ void DelayIrTab::resized()
     manualRow.removeFromLeft (8);
     manualDistanceTitle.setBounds (manualRow.removeFromLeft (70));
     manualDistanceEditor.setBounds (manualRow.removeFromLeft (80));
+    manualApplyButton.setBounds (delayPanel.removeFromTop (26).removeFromLeft (130));
     manualWarnLabel.setBounds (delayPanel.removeFromTop (30));
     distanceCheckLabel.setBounds (delayPanel.removeFromTop (30));
     delayProposalLabel.setBounds (delayPanel);

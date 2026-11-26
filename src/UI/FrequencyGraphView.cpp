@@ -204,7 +204,11 @@ void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const ju
     else if (wheel.deltaY != 0.0f && plot.contains (event.position))
     {
         if (axis.zoom (event.position.x, plot, wheel.deltaY))
+        {
             viewDirty = true;
+            dataDirty = true;
+            lastOverlayVersion = -1;
+        }
     }
 
     repaint();
@@ -224,7 +228,11 @@ void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
     if (std::abs (event.position.x - dragStart.x) > std::abs (event.position.y - dragStart.y))
     {
         if (axis.pan (event.position.x - dragStart.x, plot))
+        {
             viewDirty = true;
+            dataDirty = true;
+            lastOverlayVersion = -1;
+        }
     }
     else if (! ampAuto)
     {
@@ -246,6 +254,8 @@ void FrequencyGraphView::mouseDoubleClick (const juce::MouseEvent&)
     axis.resetView();
     ampAuto = true;
     viewDirty = true;
+    dataDirty = true;
+    lastOverlayVersion = -1;
     repaint();
 }
 
@@ -352,6 +362,9 @@ void FrequencyGraphView::paint (juce::Graphics& g)
                                   float thickness, bool brightRunsOnly, bool dashed, float alphaDim,
                                   auto&& valueOf, auto&& yOf, auto&& isBright)
     {
+        const juce::Graphics::ScopedSaveState save (graphics);
+        graphics.reduceClipRegion (area.toNearestInt());
+
         juce::Path dimPath, brightPath;
         bool inDim = false, inBright = false;
 
@@ -508,7 +521,9 @@ void FrequencyGraphView::paint (juce::Graphics& g)
                            + "   " + strings::gammaSquared + " " + juce::String (column.coherence, 2);
 
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        const auto box = juce::Rectangle<float> (ampArea.getRight() - 340.0f, ampArea.getY() + 4, 340.0f, 20.0f);
+        const auto boxWidth = juce::jmax (0.0f, juce::jmin (340.0f, ampArea.getWidth() - 8.0f));
+        const auto box = juce::Rectangle<float> (ampArea.getRight() - boxWidth, ampArea.getY() + 4,
+                                                 boxWidth, 20.0f);
         g.setColour (juce::Colours::black.withAlpha (0.65f));
         g.fillRoundedRectangle (box, 4.0f);
         g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));

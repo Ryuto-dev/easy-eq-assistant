@@ -46,6 +46,8 @@ public:
 
     /** plotArea の幅を返す（キャッシュ計算用） */
     int getPlotWidthForCache() const noexcept { return juce::jmax (2, (int) plotArea().getWidth()); }
+    double getViewMinForCache() const noexcept { return axis.viewMin; }
+    double getViewMaxForCache() const noexcept { return axis.viewMax; }
 
     /** オーバーレイを差し替える（version が変わったときだけ再計算する） */
     void setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom);

@@ -31,6 +31,7 @@ private:
     void stopTest (bool automatic);
     void startThdTest();
     void startThermalTest();
+    void updateControlState();
     void updateSuggestion();
     double currentSplFast();
 

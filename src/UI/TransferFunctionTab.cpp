@@ -195,21 +195,29 @@ void TransferFunctionTab::timerTick()
     }
 
     const auto smoothing = ctx.state.smoothingDenom;
+    const auto plotWidth = graph.getPlotWidthForCache();
+    const auto viewMin = graph.getViewMinForCache();
+    const auto viewMax = graph.getViewMaxForCache();
+    const bool smoothingChanged = smoothing != cachedSmoothing;
 
     // ---- 重いスムージング計算をここで実行（paintスレッド外）----
     const bool frameChanged = ! cachedFrameValid
                            || frame.averages != cachedFrame.averages
                            || frame.fftSize != cachedFrame.fftSize
                            || std::abs (frame.sampleRate - cachedFrame.sampleRate) > 0.5;
+    const bool viewChanged = viewMin != cachedViewMin || viewMax != cachedViewMax
+                          || plotWidth != cachedPlotWidth;
 
-    if (frameChanged || smoothing != cachedSmoothing)
+    if (frameChanged || smoothingChanged || viewChanged)
     {
-        const auto plotWidth = juce::jmax (2, graph.getPlotWidthForCache());
-        const auto effectiveMax = std::min (ctx.engine.getCurrentSampleRate() * 0.5, 20000.0);
-        cachedLivePoints = eeq::dsp::smoothToLogGrid (frame, smoothing, 20.0, effectiveMax, plotWidth);
+        const auto effectiveMax = std::min (viewMax, frame.sampleRate * 0.5);
+        cachedLivePoints = eeq::dsp::smoothToLogGrid (frame, smoothing, viewMin, effectiveMax, plotWidth);
         cachedFrame = frame;
         cachedFrameValid = true;
         cachedSmoothing = smoothing;
+        cachedViewMin = viewMin;
+        cachedViewMax = viewMax;
+        cachedPlotWidth = plotWidth;
     }
 
     // キャッシュ済みポイントをグラフへ渡す（setLiveFrameは軽量版）
@@ -218,7 +226,7 @@ void TransferFunctionTab::timerTick()
 
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion
-        || smoothing != cachedSmoothing)
+        || smoothingChanged)
         refreshSnapshotList();
 }
 
@@ -375,6 +383,18 @@ void TransferFunctionTab::showSaveSnapshotDialog()
     if (dialogOpen)
         return;
 
+    eeq::dsp::SpectrumFrame currentFrame;
+    ctx.engine.getMeasurement().copyLatestResult (currentFrame);
+
+    if (currentFrame.averages == 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+            strings::snapshotDialogTitle,
+            juce::String (u8"測定結果がまだありません。測定を開始し、平均がたまってから保存してください。"),
+            strings::okButton, this, nullptr);
+        return;
+    }
+
     dialogOpen = true;
 
     auto* window = new juce::AlertWindow (strings::snapshotDialogTitle, {}, juce::MessageBoxIconType::NoIcon, this);
@@ -421,7 +441,13 @@ void TransferFunctionTab::showSaveSnapshotDialog()
             snapshot.delaySamples = ctx.state.appliedDelaySamples.load();
 
             if (snapshot.frame.averages == 0)
-                return; // 測定していないときは保存しない
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
+                    strings::snapshotDialogTitle,
+                    juce::String (u8"測定結果がなくなったため、スナップショットを保存できませんでした。"),
+                    strings::okButton, this, nullptr);
+                return;
+            }
 
             auto& snapshots = ctx.project.snapshots();
             snapshots.push_back (std::move (snapshot));
