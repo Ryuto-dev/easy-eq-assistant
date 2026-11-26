@@ -61,6 +61,9 @@ public:
     void copySpl (SplSnapshot& out) const;
     void resetSpl();
 
+    /** RTAとSPLを1回のロックで取得する（UIタイマー用。ロック回数を減らす: issue #37） */
+    void copyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const;
+
     // 単体テスト用: IEC 61672 の A/C 重み付けの定義式（1 kHz で 0 dB に正規化）
     [[nodiscard]] static double aWeightingDb (double frequency);
     [[nodiscard]] static double cWeightingDb (double frequency);
@@ -69,6 +72,8 @@ public:
 
 private:
     void rebuildBands();
+    /** copySpl のロック外実体（copySpl / copyAll から使う。呼び出し側でロックを取ること） */
+    void copySplUnlocked (SplSnapshot& out) const;
     void processFrame(); // 窓済み1フレームを処理
 
     mutable juce::CriticalSection lock;

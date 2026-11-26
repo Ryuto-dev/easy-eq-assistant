@@ -341,14 +341,13 @@ void RtaSplTab::timerTick()
     const auto offset = analyzer.getCalibrationOffsetDb();
     splTopDb = (std::abs (offset) < 1.0e-9) ? 0.0f : (float) (94.0 + offset); // 未校正: 0 dBFS、校正済み: 94 dB SPL 基準
 
+    // RTAとSPLを1回のロックで取得する（issue #37）
     eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
-    analyzer.copyRta (frame);
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copyAll (frame, spl);
     rtaCenters = frame.centerFreq;
     rtaLevels = frame.levelDb;
     rtaPeakLevels = frame.peakHoldDb;
-
-    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    analyzer.copySpl (spl);
     lastSplDb = spl.currentDb;
 
     splValueLabel.setText (spl.hasSignal ? juce::String (spl.currentDb, 1) : "--",

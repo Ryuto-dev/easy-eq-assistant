@@ -581,6 +581,15 @@ void DelayIrTab::rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame)
 {
     const auto width = juce::jmax (100, getWidth() - 100);
 
+    // 平均回数の増加による再構築は250 ms以上の間隔を空ける（issue #37）:
+    // 測定中は15 Hzで平均が増えるが、IRの再構築（2N点の逆FFT）をその頻度で
+    // 行う必要はなく、見た目も4回/秒で十分追従する。サイズやレートの変更は
+    // 即座に反映させるため間引かない
+    const auto now = juce::Time::getCurrentTime();
+
+    if (frame.averages > cachedIrAverages && now < irRebuildAllowed)
+        return;
+
     // サンプルレートも含めてキャッシュの鍵にする（レートが変わると時間軸がずれる）
     if (frame.averages > 0 && (frame.averages != cachedIrAverages || width != cachedIrWidth
                                || frame.fftSize != cachedIrFftSize
@@ -591,6 +600,7 @@ void DelayIrTab::rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame)
         cachedIrWidth = width;
         cachedIrFftSize = frame.fftSize;
         cachedIrSampleRate = frame.sampleRate;
+        irRebuildAllowed = now + juce::RelativeTime::milliseconds (250);
         repaint();
     }
 }

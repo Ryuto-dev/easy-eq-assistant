@@ -16,7 +16,10 @@ public:
         b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0f;
     }
 
-    /** 次の1サンプルを返す。概ね −1..1 の範囲。ゲインは呼び出し側で掛ける */
+    /** 次の1サンプルを返す。実効RMSがほぼ1.0になるよう正規化済み。
+        （出力レベル=「dBFS RMS」という統一定義のため。仕様 3.2 / issue #29）
+        生の Kellet フィルタ出力のRMSは 0.1933 なので 1/0.1933 を掛けてある。
+        ゲイン（フェード・レベル設定）は呼び出し側で掛ける */
     [[nodiscard]] float nextSample() noexcept
     {
         const auto white = whiteNoise() * 0.11f;
@@ -31,7 +34,7 @@ public:
         const auto pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362f;
         b6 = white * 0.115926f;
 
-        return pink;
+        return pink * unitRmsScale;
     }
 
 private:
@@ -46,6 +49,9 @@ private:
 
     uint32_t state = 0x1234567u; // 0 は不可
     float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f, b3 = 0.0f, b4 = 0.0f, b5 = 0.0f, b6 = 0.0f;
+
+    // Kellet フィルタ（white × 0.11）の定常RMSの逆数。tests/AudioTests.cpp が回帰を保証する
+    static constexpr float unitRmsScale = 5.1723f;
 };
 
 } // namespace eeq::audio

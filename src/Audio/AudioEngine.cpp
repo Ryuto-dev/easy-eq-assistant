@@ -258,6 +258,16 @@ bool AudioEngine::isExcitationAudible() const noexcept
     return state == NoiseState::fadeIn || state == NoiseState::running;
 }
 
+void AudioEngine::publishExcitationBuffer (std::vector<float> samples)
+{
+    // 旧バッファを ownedBuffers[1] へ退避してから差し替える（issue #33）。
+    // オーディオスレッドが activeBufferPtr を読んでいる最中に旧バッファが解放される
+    // ことがないよう、直前の世代を次の差し替えまで保持する
+    ownedBuffers[1] = std::move (ownedBuffers[0]);
+    ownedBuffers[0] = std::make_shared<const std::vector<float>> (std::move (samples));
+    activeBufferPtr.store (ownedBuffers[0].get(), std::memory_order_release);
+}
+
 void AudioEngine::setSweep (std::vector<float> sweepSamples)
 {
     stopExcitation();
@@ -266,10 +276,7 @@ void AudioEngine::setSweep (std::vector<float> sweepSamples)
     eeq::log::write ("excitation: sweep set (" + juce::String (sweepSamples.size()) + " samples, "
                      + juce::String (logLength, 2) + " s)");
 
-    {
-        const juce::ScopedLock lock (bufferMutex);
-        pendingBuffer = std::make_shared<const std::vector<float>> (std::move (sweepSamples));
-    }
+    publishExcitationBuffer (std::move (sweepSamples));
     excitationSource.store (ExcitationSource::sweep, std::memory_order_relaxed);
 }
 
@@ -301,6 +308,8 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
     std::vector<float> mono ((size_t) length, 0.0f);
     const auto channels = buffer.getNumChannels();
 
+    float peak = 0.0f;
+
     for (int i = 0; i < (int) length; ++i)
     {
         float sum = 0.0f;
@@ -308,17 +317,23 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
         for (int ch = 0; ch < channels; ++ch)
             sum += buffer.getSample (ch, i);
 
-        mono[(size_t) i] = sum / (float) channels;
+        const auto value = sum / (float) channels;
+        peak = juce::jmax (peak, std::abs (value));
+        mono[(size_t) i] = value;
     }
+
+    // WAVはピーク1.0へ正規化して保持する（issue #29）。レベル設定（dBFS）は
+    // オーディオスレッドでピーク基準として掛かるので、どのファイルでも
+    // 「設定した dBFS ＝ ピーク」が一致する
+    if (peak > 1.0e-9f)
+        for (auto& value : mono)
+            value /= peak;
 
     stopExcitation();
     eeq::log::write ("excitation: WAV loaded \"" + file.getFullPathName() + "\" ("
                      + juce::String ((double) length / std::max (1.0, (double) reader->sampleRate), 2) + " s)");
 
-    {
-        const juce::ScopedLock lock (bufferMutex);
-        pendingBuffer = std::make_shared<const std::vector<float>> (std::move (mono));
-    }
+    publishExcitationBuffer (std::move (mono));
     excitationSource.store (ExcitationSource::wavFile, std::memory_order_relaxed);
 
     return true;
@@ -329,16 +344,9 @@ double AudioEngine::getExcitationProgress() const noexcept
     if (const auto source = excitationSource.load (std::memory_order_relaxed);
         source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
     {
-        std::shared_ptr<const std::vector<float>> buffer;
-
-        {
-            // getExcitationProgress は const なので、ミューテックスの一時外しは行わない
-            const auto* self = const_cast<AudioEngine*> (this);
-            const juce::ScopedLock lock (self->bufferMutex);
-            buffer = activeBuffer;
-        }
-
-        if (buffer != nullptr && ! buffer->empty())
+        // ロックフリー読み（issue #33）。ポインタは publishExcitationBuffer が公開する
+        if (const auto* buffer = activeBufferPtr.load (std::memory_order_acquire);
+            buffer != nullptr && ! buffer->empty())
             return juce::jlimit (0.0, 1.0, (double) playbackPosition.load (std::memory_order_relaxed)
                                             / (double) buffer->size());
     }
@@ -460,14 +468,6 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 position = 0;
                 playPos = 0;
                 playbackPosition.store (0, std::memory_order_relaxed);
-
-                // スイープ/WAVは開始時にUIスレッドが用意したバッファへ取り替える
-                //（ソースを切り替えた直後の開始でも確実に新しいバッファを使う）
-                if (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
-                {
-                    const juce::ScopedLock lock (bufferMutex);
-                    activeBuffer = pendingBuffer;
-                }
             }
             break;
 
@@ -483,15 +483,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             break;
     }
 
-    // オーディオスレッドで使う値はブロックの先頭で一度だけ読む（リアルタイム性。
-    // バッファの取り込みはここだけで、per-sample のロックは行わない）
-    std::shared_ptr<const std::vector<float>> activeSweep;
-
-    if (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
-    {
-        const juce::ScopedLock lock (bufferMutex);
-        activeSweep = activeBuffer;
-    }
+    // オーディオスレッドで使う値はブロックの先頭で一度だけ読む（リアルタイム性）。
+    // バッファは atomic な生ポインタを acquire 読みするだけで、ロックは行わない（issue #33）
+    const auto* activeSweep = (source == ExcitationSource::sweep || source == ExcitationSource::wavFile)
+                                ? activeBufferPtr.load (std::memory_order_acquire)
+                                : nullptr;
     const auto ceilingGain = juce::Decibels::decibelsToGain (outputCeilingDb.load (std::memory_order_relaxed));
 
     const float* refIn = (refIndex >= 0 && refIndex < numInputChannels) ? inputChannelData[refIndex] : nullptr;
@@ -503,13 +499,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     for (int i = 0; i < numSamples; ++i)
     {
-        float gain = 0.0f;
+        // フェード包絡（0..1）。レベル設定はブロック先頭の level、ソースごとの正規化は
+        // 下の分岐で行い、最後に一括して掛ける（issue #29: レベル定義の統一）
+        float envelope = 0.0f;
 
-        // 状態ごとに明示的に処理する（running は定常出力。フェード処理と混同しない）
         if (state == NoiseState::fadeIn)
         {
             const auto length = juce::jmax (1, fadeInLength.load (std::memory_order_relaxed));
-            gain = level * ((float) position / (float) length);
+            envelope = (float) position / (float) length;
 
             if (++position >= length)
             {
@@ -519,12 +516,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         }
         else if (state == NoiseState::running)
         {
-            gain = level;
+            envelope = 1.0f;
         }
         else if (state == NoiseState::fadeOut)
         {
             const auto length = juce::jmax (1, fadeOutLength.load (std::memory_order_relaxed));
-            gain = level * (1.0f - (float) position / (float) length);
+            envelope = 1.0f - (float) position / (float) length;
 
             if (++position >= length)
             {
@@ -540,18 +537,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         switch (source)
         {
             case ExcitationSource::pinkNoise:
+                // 生成器が実効RMS≈1.0に正規化済み → 設定値=「dBFS RMS」
                 sourceSample = noise.nextSample();
                 break;
 
             case ExcitationSource::sweep:
             case ExcitationSource::wavFile:
             {
-                // スイープ/WAV は生成時にレベルが焼き込まれているため、ゲインは 1.0（フェードのみ適用）
-                gain = 1.0f;
+                // スイープ: ピーク1.0で生成されているので 1/√2 を掛けて実効RMS基準に揃える
+                // WAV: 読み込み時にピーク1.0へ正規化済み → 設定値=「dBFS ピーク」
+                const auto normalise = source == ExcitationSource::sweep ? 0.70710678f : 1.0f;
 
                 if (activeSweep != nullptr && playPos < (int) activeSweep->size())
                 {
-                    sourceSample = (*activeSweep)[(size_t) playPos];
+                    sourceSample = (*activeSweep)[(size_t) playPos] * normalise;
                     ++playPos;
                 }
                 else if (state == NoiseState::running)
@@ -571,12 +570,13 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             case ExcitationSource::tone1k:
             {
                 // SPL校正用の1kHzトーン（安定した読み取り用。仕様 3.4）
+                // 1/√2 を掛けて正弦波の実効RMSを設定値に揃える
                 tonePhase += 2.0 * juce::MathConstants<double>::pi * 1000.0 / std::max (8000.0, currentSampleRate.load());
 
                 if (tonePhase > 2.0 * juce::MathConstants<double>::pi)
                     tonePhase -= 2.0 * juce::MathConstants<double>::pi;
 
-                sourceSample = (float) std::sin (tonePhase);
+                sourceSample = (float) std::sin (tonePhase) * 0.70710678f;
                 break;
             }
 
@@ -601,8 +601,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             }
         }
 
-        // 出力のハード上限（仕様 3.7 の安全設計）。フェードとレベルを掛けた最終値に適用する
-        const auto sample = juce::jlimit (-ceilingGain, ceilingGain, sourceSample * gain);
+        // 出力のハード上限（仕様 3.7 の安全設計）。包絡とレベルを掛けた最終値に適用する
+        const auto sample = juce::jlimit (-ceilingGain, ceilingGain, sourceSample * envelope * level);
 
         outPeak = juce::jmax (outPeak, std::abs (sample));
         outSumSquares += (double) sample * (double) sample;
@@ -717,9 +717,16 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         }
     }
 
-    // 鳴っている最中にデバイスが開き直ったら、フェードインからやり直す（急な大音量を避ける）
+    // 鳴っている最中にデバイスが開き直ったら、フェードインからやり直す（急な大音量を避ける）。
+    // start コマンドは running 状態では受け付けられないため、いったん fadeOut の
+    // 位置0へ落としてから start を積む（issue #20）。コールバックはここでは止まっている
+    //（デバイス再オープン中）ので、状態を直接書いて安全
     if (isNoiseAudible())
+    {
+        noiseState.store (NoiseState::fadeOut, std::memory_order_relaxed);
+        fadePosition.store (0, std::memory_order_relaxed);
         noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
+    }
 }
 
 void AudioEngine::audioDeviceStopped() {}

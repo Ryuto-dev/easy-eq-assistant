@@ -78,6 +78,10 @@ private:
     void paintHistory (juce::Graphics& g, const juce::Rectangle<float>& area, juce::Colour frameColour);
     void paintWaterfall (juce::Graphics& g, const juce::Rectangle<float>& area);
     void paintRta (juce::Graphics& g, const juce::Rectangle<float>& area);
+    /** ウォーターフォールの中段グラフ領域（paint と push で共有） */
+    juce::Rectangle<float> graphArea() const;
+    /** 新しい列をオフスクリーン画像へ積む（0.5秒ごと。issue #24） */
+    void pushWaterfallColumn();
 
     eeq::audio::AudioEngine& engine;
 
@@ -91,9 +95,12 @@ private:
     juce::Time lastWaterfallPush;
     std::unique_ptr<eeq::core::KeepAwake> keepAwake;
 
-    // ウォーターフォール（仕様 5.4.1）: 1/3 oct の帯域レベルを0.5秒間隔で溜める
+    // ウォーターフォール（仕様 5.4.1）: 1/3 oct の帯域レベルを0.5秒間隔で溜める。
+    // 描画はオフスクリーン画像へ積み上げ、paint は画像を貼るだけ（issue #24）:
+    // 毎フレームに全履歴（最大600列×33帯域）の矩形を描き直さない
     eeq::dsp::Waterfall waterfall;
     bool waterfallVisible = false;
+    juce::Image waterfallImage;
 
     // CSVログ（仕様 5.4）
     juce::File currentLogFile;

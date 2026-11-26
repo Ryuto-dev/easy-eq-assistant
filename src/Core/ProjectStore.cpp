@@ -360,8 +360,18 @@ juce::String ProjectStore::saveToFile (const juce::File& file) const
     if (! file.getParentDirectory().exists())
         file.getParentDirectory().createDirectory();
 
-    if (! file.replaceWithText (juce::JSON::toString (object)))
-        return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
+    // アトミック書き込み（issue #38）: まず一時ファイルへ書き、成功したら置き換える。
+    // 書き込みの最中にクラッシュ・電源断しても既存の .eea が壊れない
+    const auto tmp = file.getSiblingFile (file.getFileName() + ".tmp");
+
+    if (! tmp.replaceWithText (juce::JSON::toString (object)))
+        return juce::String (u8"一時ファイルに書き込めませんでした: ") + tmp.getFullPathName();
+
+    if (! tmp.moveFileTo (file))
+    {
+        tmp.deleteFile();
+        return juce::String (u8"保存ファイルを置き換えられませんでした: ") + file.getFullPathName();
+    }
 
     return {};
 }

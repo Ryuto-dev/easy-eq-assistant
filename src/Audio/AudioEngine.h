@@ -184,6 +184,8 @@ private:
     void audioDeviceError (const juce::String& errorMessage) override;
 
     void restoreSavedAssignment (int numInputs, int numOutputs);
+    /** スイープ/WAVバッファを公開する（メッセージスレッド専用。2世代ローテーション） */
+    void publishExcitationBuffer (std::vector<float> samples);
 
     juce::AudioDeviceManager deviceManager;
     juce::PropertiesFile* settings = nullptr;
@@ -208,12 +210,13 @@ private:
     std::atomic<ExcitationSource> excitationSource { ExcitationSource::pinkNoise };
     std::atomic<float> outputCeilingDb { 0.0f };
 
-    // スイープ/WAVのバッファ。UIスレッドが pending を差し替え、オーディオスレッドが
-    // ブロック先頭で active へ取り込む。（std::atomic<std::shared_ptr> はこの環境の
-    // libc++ では使えないため CriticalSection で守る。アクセスはブロックあたり数回）
-    juce::CriticalSection bufferMutex;
-    std::shared_ptr<const std::vector<float>> pendingBuffer;
-    std::shared_ptr<const std::vector<float>> activeBuffer; // 取り込み後はオーディオスレッドだけが読む
+    // スイープ/WAVのバッファ（issue #33: RT安全方針）。
+    // オーディオスレッドは atomic な生ポインタを acquire 読みするだけで、
+    // ロック・shared_ptrコピー・解放は一切しない。解放はメッセージスレッドだが、
+    // オーディオスレッドがまだ参照している可能性があるため直前の世代を1つ保持する
+    //（2世代ローテーション。差し替え直後の1ブロックまでは旧バッファが生きる）
+    std::shared_ptr<const std::vector<float>> ownedBuffers[2]; // メッセージスレッドだけが触る
+    std::atomic<const std::vector<float>*> activeBufferPtr { nullptr };
     std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
     std::atomic<bool> excitationFinished { false };
     std::atomic<uint64_t> outputMask { 1 };
