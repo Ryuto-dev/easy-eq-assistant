@@ -38,7 +38,7 @@ private:
     // ---- RTA ----
     juce::ComboBox bandsCombo, avgTimeCombo;
     juce::Label bandsTitle, avgTimeTitle;
-    juce::TextButton peakHoldResetButton;
+    juce::TextButton peakHoldResetButton, splResetButton;
     std::vector<double> rtaCenters;
     std::vector<float> rtaLevels, rtaPeakLevels;
 

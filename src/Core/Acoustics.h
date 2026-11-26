@@ -100,7 +100,7 @@ namespace eeq::acoustics
 
     const auto geometric = -20.0 * std::log10 (distanceMetres); // 1m 基準
     const auto absorption = airAbsorptionDbPerMetre (frequencyHz, humidityPercent, temperatureCelsius) * distanceMetres;
-    return geometric + absorption;
+    return geometric - absorption; // 空気吸収も損失なので減衰（負）側に加わる
 }
 
 /** 気温 [℃] を遅延と距離から逆算（仕様 3.3.2 / 3.8 の妥当性チェック用） */

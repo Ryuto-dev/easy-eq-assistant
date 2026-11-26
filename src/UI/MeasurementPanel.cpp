@@ -1,6 +1,7 @@
 #include "MeasurementPanel.h"
 
 #include "Strings.h"
+#include "Theme.h"
 
 namespace eeq::ui
 {
@@ -177,7 +178,7 @@ void MeasurementPanel::sliderValueChanged (juce::Slider*)
 
 void MeasurementPanel::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xff1a1c20));
+    g.setColour (theme::get (theme::ColourId::panelBackground));
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
 }
 

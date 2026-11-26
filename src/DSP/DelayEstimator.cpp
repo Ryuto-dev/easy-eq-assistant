@@ -116,10 +116,17 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
         }
     }
 
-    // 最大サイドローブ（ピークを除く最大値）を探す
+    // 最大サイドローブを探す。ピーク bin だけでなくメインローブ全体（前後数bin）を
+    // ガード区間として除外しないと、隣接 bin が常に最大サイドローブになり
+    // 判別指標として機能しない
+    constexpr int guardBins = 4;
+
     for (int i = 0; i < size; ++i)
     {
-        if (i == peakIndex)
+        const auto linearDist = std::abs (i - peakIndex);
+        const auto circularDist = std::min (linearDist, size - linearDist);
+
+        if (circularDist <= guardBins)
             continue;
 
         const auto v = std::abs (measBuf[(size_t) i]);

@@ -115,10 +115,6 @@ VenueTab::VenueTab (UiContext& context)
     addAndMakeVisible (newVenueButton);
 
     // ---- 会場のフィールド ----
-    fieldsTitle.setText (strings::venueNameLabel, juce::dontSendNotification);
-    styleLabel (fieldsTitle, 12.5f, false);
-    addAndMakeVisible (fieldsTitle);
-
     auto makeField = [this] (juce::Label& label, juce::TextEditor& editor, const juce::String& title, bool multiline = false)
     {
         label.setText (title, juce::dontSendNotification);
@@ -339,7 +335,7 @@ void VenueTab::loadProject()
                 return;
 
             const auto error = safeThis->ctx.project.loadFromFile (file);
-            safeThis->statusLabel.setText (error.isEmpty() ? strings::venueSaveOk : strings::venueSaveFailed + ": " + error,
+            safeThis->statusLabel.setText (error.isEmpty() ? strings::venueLoadOk : strings::venueLoadFailed + ": " + error,
                                            juce::dontSendNotification);
             safeThis->ctx.state.snapshotVersion.fetch_add (1);
             safeThis->refreshVenueList();
@@ -508,11 +504,11 @@ void VenueTab::resized()
     tripleRow.removeFromLeft (8);
     humidityLabel.setBounds (tripleRow.removeFromLeft (70));
     humidityEditor.setBounds (tripleRow.removeFromLeft (50));
-    tripleRow.removeFromLeft (8);
-    crossoverLabel.setBounds (tripleRow.removeFromLeft (230));
-    crossoverEditor.setBounds (tripleRow);
 
+    // クロスオーバーは独立したフィールドにする（同じ行に詰めると中カラム幅に
+    // 収まらず、入力欄の幅が 0 になって入力できなくなる）
     middle.removeFromTop (4);
+    field (crossoverLabel, crossoverEditor, 24);
     field (equipmentLabel, equipmentEditor, 24);
     field (notesLabel, notesEditor, std::max (40, middle.getHeight() - 10));
 
@@ -522,9 +518,9 @@ void VenueTab::resized()
     micPointList.setBounds (right.removeFromTop (110));
     right.removeFromTop (4);
     auto micRow = right.removeFromTop (24);
-    micPointNameEditor.setBounds (micRow.removeFromLeft (110));
+    micPointNameEditor.setBounds (micRow.removeFromLeft (100));
     micRow.removeFromLeft (4);
-    micPointDescEditor.setBounds (micRow.removeFromLeft (150));
+    micPointDescEditor.setBounds (micRow.removeFromLeft (130));
     micRow.removeFromLeft (4);
     micPointAddButton.setBounds (micRow.removeFromLeft (60));
     micRow.removeFromLeft (4);
@@ -539,8 +535,9 @@ void VenueTab::resized()
     saveProjectButton.setBounds (saveRow.removeFromLeft (170));
     saveRow.removeFromLeft (6);
     loadProjectButton.setBounds (saveRow.removeFromLeft (150));
-    saveRow.removeFromLeft (6);
-    reportButton.setBounds (saveRow.removeFromLeft (180));
+    right.removeFromTop (4);
+    // レポートボタンは独立行にする（同じ行だと右カラム幅に収まらず潰れる）
+    reportButton.setBounds (right.removeFromTop (26).removeFromLeft (180));
     statusLabel.setBounds (right.removeFromTop (18));
 }
 

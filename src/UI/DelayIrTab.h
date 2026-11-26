@@ -59,7 +59,6 @@ private:
     bool hasEstimate = false;
     bool usePhat = false;
     double tempAtDelayApply = 999.0; // 遅延適用時の気温（温度ずれ予測の基準。仕様 3.8）
-    juce::String delayUnit = strings::delayMsUnit; // ms / samples / m / ft（仕様 3.3.1）
 
     // IRのキャッシュ
     std::unique_ptr<eeq::dsp::ImpulseResponse> cachedIr;
@@ -77,7 +76,7 @@ private:
     int irGraphHeight = 180;
 
     // ---- 遅延パネル ----
-    juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel, temperatureNote;
+    juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel;
     juce::TextButton measureButton, applyButton, clearButton;
     juce::ToggleButton phatToggle, rawPhaseToggle, peakAlignToggle, etcToggle;
 

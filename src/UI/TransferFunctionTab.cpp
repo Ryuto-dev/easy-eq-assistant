@@ -159,6 +159,7 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     hintLabel.setText (strings::noSnapshots, juce::dontSendNotification);
     hintLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     hintLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    hintLabel.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (hintLabel);
 
     refreshSnapshotList();
@@ -329,6 +330,10 @@ void TransferFunctionTab::updateDiffCombos()
 
     fill (diffComboA, true);
     fill (diffComboB, false);
+
+    // 既定選択（A=1件目, B=2件目）を入れたら差分カーブもすぐ再計算する
+    // （dontSendNotification では onChange が発火せず、差分が出ない/古いままになる）
+    computeDiffCurve();
 }
 
 void TransferFunctionTab::showSaveSnapshotDialog()
@@ -491,6 +496,7 @@ void TransferFunctionTab::resized()
     snapshotPanel.removeFromTop (4);
 
     snapshotList.setBounds (snapshotPanel);
+    hintLabel.setBounds (snapshotPanel); // 「スナップショットなし」の案内を一覧領域に重ねる
 
     bounds.removeFromBottom (6);
     graph.setBounds (bounds);

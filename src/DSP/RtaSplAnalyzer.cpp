@@ -145,10 +145,14 @@ void RtaSplAnalyzer::setTimeConstant (TimeConstant newTimeConstant)
 
 void RtaSplAnalyzer::process (const float* samples, int numSamples)
 {
-    if (samples == nullptr || numSamples <= 0 || fft == nullptr)
+    if (samples == nullptr || numSamples <= 0)
         return;
 
     const juce::ScopedLock sl (lock);
+
+    // fft は configure() がロック内で差し替えるため、判定もロック内で行う
+    if (fft == nullptr)
+        return;
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -205,8 +209,10 @@ void RtaSplAnalyzer::processFrame()
 
     const auto frameDuration = hop / sampleRate;
     const auto rtaAlpha = 1.0 - std::exp (-frameDuration / std::max (0.05, rtaAveragingSeconds));
-    const auto splTau = timeConstant == TimeConstant::fast ? 0.125 : 1.0;
-    const auto splAlpha = 1.0 - std::exp (-frameDuration / splTau);
+    // Fast / Slow は独立した時定数で常時それぞれ平滑する（表示切替時に
+    // 収束待ちにならないようにするため、選択中の時定数だけを進める実装にはしない）
+    const auto splAlphaFast = 1.0 - std::exp (-frameDuration / 0.125);
+    const auto splAlphaSlow = 1.0 - std::exp (-frameDuration / 1.0);
 
     double frameEnergyWeighted = 0.0; // A/C/Z 重み付け済みの全帯域エネルギー
 
@@ -239,8 +245,8 @@ void RtaSplAnalyzer::processFrame()
     for (int k = 1; k < halfBins; ++k)
         frameEnergyWeighted += binPower[(size_t) k] * std::pow (10.0, binWeightDb[(size_t) k] / 10.0);
 
-    fastEnergy += (frameEnergyWeighted - fastEnergy) * splAlpha;
-    slowEnergy += (frameEnergyWeighted - slowEnergy) * splAlpha;
+    fastEnergy += (frameEnergyWeighted - fastEnergy) * splAlphaFast;
+    slowEnergy += (frameEnergyWeighted - slowEnergy) * splAlphaSlow;
 
     sessionEnergyTime += frameEnergyWeighted * frameDuration;
     sessionSeconds += frameDuration;

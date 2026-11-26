@@ -82,9 +82,10 @@ void TopBar::timerTick()
 
 void TopBar::paint (juce::Graphics& g)
 {
-    g.setColour (juce::Colour (0xff1a1c20));
+    // 色はテーマから都度引く（リテラル固定だとライトテーマでも暗いままになる）
+    g.setColour (theme::get (theme::ColourId::panelBackground));
     g.fillRect (getLocalBounds());
-    g.setColour (juce::Colour (0xff2c2f36));
+    g.setColour (theme::get (theme::ColourId::controlOutline));
     g.fillRect (getLocalBounds().removeFromBottom (1));
 }
 

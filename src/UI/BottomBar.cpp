@@ -177,6 +177,12 @@ void BottomBar::update()
     measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
     measurementButton.setColour (juce::TextButton::buttonColourId,
                                  measuring ? juce::Colour (0xff8c3a3a) : juce::Colour (0xff2e5a63));
+
+    // 出力レベルは他タブ（リミットテスト等）からも変更されるため、ドラッグ中に
+    // なければエンジンの現在値へ同期する
+    if (! levelSlider.isMouseButtonDown()
+        && std::abs (levelSlider.getValue() - (double) engine.getNoiseLevelDb()) > 0.01)
+        levelSlider.setValue ((double) engine.getNoiseLevelDb(), juce::dontSendNotification);
 }
 
 void BottomBar::setStatusText (const juce::String& text)

@@ -16,6 +16,7 @@ namespace
 {
 constexpr const char* settingsCeilingKey = "limitTestCeilingDb";
 constexpr const char* settingsStepKey = "limitTestStepDb";
+constexpr const char* settingsDurationKey = "limitTestDurationSec";
 constexpr const char* settingsAmpGainKey = "limitTestAmpGainDb";
 constexpr const char* settingsSpeakerKey = "limitTestSpeakerMaxW";
 constexpr const char* settingsSpeakerOhmKey = "limitTestSpeakerOhm";
@@ -145,29 +146,46 @@ LimitTestTab::LimitTestTab (UiContext& context)
     addAndMakeVisible (acknowledgeToggle);
 
     auto makeField = [this] (juce::Label& label, juce::TextEditor& editor, const juce::String& title2,
-                             const juce::String& initial, bool persistKey = false)
+                             const juce::String& initial, const char* persistKey = nullptr)
     {
         label.setText (title2, juce::dontSendNotification);
         styleLabel (label);
         addAndMakeVisible (label);
 
         styleTextEditor (editor);
-        editor.setText (initial, juce::dontSendNotification);
+        // 保存済みの入力値があれば復元する（無ければ初期値）
+        editor.setText (persistKey != nullptr ? ctx.settings.getValue (persistKey, initial) : initial,
+                        juce::dontSendNotification);
         editor.setInputRestrictions (8, "0123456789.-");
-        editor.onTextChange = [this] { updateSuggestion(); };
+        editor.onTextChange = [this, &editor, persistKey]
+        {
+            if (persistKey != nullptr)
+            {
+                ctx.settings.setValue (persistKey, editor.getText());
+                ctx.settings.saveIfNeeded();
+            }
+
+            updateSuggestion();
+        };
         addAndMakeVisible (editor);
-        juce::ignoreUnused (persistKey);
     };
 
-    makeField (ceilingLabel, ceilingEditor, strings::limitCeilingLabel, "-6");
-    makeField (stepLabel, stepEditor, strings::limitStepLabel, "3");
-    makeField (durationLabel, durationEditor, strings::limitMaxDuration, "120");
-    makeField (ampGainLabel, ampGainEditor, strings::limitAmpGainLabel, "30");
-    makeField (speakerLabel, speakerEditor, strings::limitSpeakerRatingLabel, "600");
+    makeField (ceilingLabel, ceilingEditor, strings::limitCeilingLabel, "-6", settingsCeilingKey);
+    makeField (stepLabel, stepEditor, strings::limitStepLabel, "3", settingsStepKey);
+    makeField (durationLabel, durationEditor, strings::limitMaxDuration, "120", settingsDurationKey);
+    makeField (ampGainLabel, ampGainEditor, strings::limitAmpGainLabel, "30", settingsAmpGainKey);
+    makeField (speakerLabel, speakerEditor, strings::limitSpeakerRatingLabel, "600", settingsSpeakerKey);
 
     styleDangerButton (startButton);
     startButton.setButtonText (strings::limitStartButton);
-    startButton.onClick = [this] { startStepTest(); };
+    startButton.onClick = [this]
+    {
+        // 実行中はボタン文言が「停止」になるので、押したら実際に止める
+        if (stepPhase != Phase::idle)
+            stopTest (false);
+        else
+            startStepTest();
+    };
     addAndMakeVisible (startButton);
 
     styleButton (thdButton);
@@ -177,7 +195,13 @@ LimitTestTab::LimitTestTab (UiContext& context)
 
     styleButton (thermalButton);
     thermalButton.setButtonText (strings::limitThermalButton);
-    thermalButton.onClick = [this] { startThermalTest(); };
+    thermalButton.onClick = [this]
+    {
+        if (thermalRunning)
+            stopTest (false);
+        else
+            startThermalTest();
+    };
     addAndMakeVisible (thermalButton);
 
     progressLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
@@ -248,6 +272,7 @@ void LimitTestTab::stopTest (bool automatic)
     ctx.engine.stopExcitation();
     ctx.engine.getMeasurement().stopMeasurement();
     startButton.setButtonText (strings::limitStartButton);
+    thermalButton.setButtonText (strings::limitThermalButton);
     progressLabel.setText (automatic ? strings::limitAutoStopped : juce::String (u8"停止しました"),
                            juce::dontSendNotification);
     eeq::log::write (juce::String ("limit test: stopped (automatic=") + (automatic ? "1" : "0") + ")");
@@ -270,7 +295,7 @@ void LimitTestTab::startThdTest()
 
     thdPhase = ThdPhase::playing;
     thdDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (11.5);
-    thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + " dBFS — " + strings::limitThdButton
+    thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1) + u8" dBFS — " + strings::limitThdButton
                           + juce::String (u8" 実行中…"),
                       juce::dontSendNotification);
 }
@@ -409,7 +434,7 @@ void LimitTestTab::timerTick()
                 harmonicPower += rms * rms;
 
                 const auto percent = fundamental > 0.0 ? 100.0 * rms / fundamental : 0.0;
-                harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + "次: " + juce::String (percent, 2) + "%";
+                harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + u8"次: " + juce::String (percent, 2) + "%";
             }
 
             const auto thd = fundamental > 0.0 ? 100.0 * std::sqrt (harmonicPower) / fundamental : 0.0;
@@ -485,7 +510,7 @@ void LimitTestTab::updateSuggestion()
     {
         const auto headroomDb = 20.0 * std::log10 (maxVolts / thresholdVolts);
         extra = juce::String (u8"（スピーカー最大入力までの余裕: ") + juce::String (headroomDb, 1) + " dB = "
-              + juce::String (thresholdVolts, 2) + " Vrms / 最大 " + juce::String (maxVolts, 1) + " Vrms）";
+              + juce::String (thresholdVolts, 2) + u8" Vrms / 最大 " + juce::String (maxVolts, 1) + u8" Vrms）";
     }
 
     suggestionLabel.setText (strings::limitSuggestion + ": " + juce::String (suggestedLimiterDbfs, 1) + " dBFS  /  "
@@ -525,10 +550,15 @@ void LimitTestTab::paint (juce::Graphics& g)
         if (worstCoherence < 0.8)
         {
             coherenceNoteLabel.setText (juce::String (u8"低域のコヒーレンス低下: 約 ")
-                                            + juce::String (worstFreq, 0) + " Hz で γ² "
+                                            + juce::String (worstFreq, 0) + u8" Hz で γ² "
                                             + juce::String (worstCoherence, 2)
                                             + juce::String (u8"（歪みの兆候の可能性）"),
                                         juce::dontSendNotification);
+        }
+        else
+        {
+            // 回復したら警告を消す（消す経路がないと一度出た警告が残り続ける）
+            coherenceNoteLabel.setText ({}, juce::dontSendNotification);
         }
     }
 }
