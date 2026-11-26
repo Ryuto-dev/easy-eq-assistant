@@ -2,6 +2,8 @@
 
 #include "../DSP/TransferFunctionAccumulator.h"
 
+#include "../Core/SystemCorrection.h"
+
 #include "Core/JuceModules.h"
 
 #include <vector>
@@ -93,6 +95,10 @@ public:
     /** 起動時の復元先（前回保存したプロジェクトの自動復元用） */
     static juce::File defaultProjectFile();
 
+    /** システム補正（ループバック校正）の保存・復元（仕様 6.1） */
+    void setSystemCorrection (const eeq::core::SystemCorrection& correction);
+    eeq::core::SystemCorrection getSystemCorrection() const noexcept;
+
 private:
     static juce::var venueToVar (const Venue& venue);
     static Venue venueFromVar (const juce::var& v);
@@ -100,9 +106,12 @@ private:
     static Snapshot snapshotFromVar (const juce::var& v);
     static juce::var frameToVar (const eeq::dsp::SpectrumFrame& frame);
     static eeq::dsp::SpectrumFrame frameFromVar (const juce::var& v);
+    static juce::var correctionToVar (const eeq::core::SystemCorrection& correction);
+    static eeq::core::SystemCorrection correctionFromVar (const juce::var& v);
 
     std::vector<Venue> venues_;
     int currentVenueIndex = 0;
+    eeq::core::SystemCorrection systemCorrection_;
 };
 
 } // namespace eeq::core
