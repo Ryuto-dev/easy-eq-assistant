@@ -38,7 +38,7 @@ private:
     void refreshDistanceFromManualDelay();
 
     // ---- IR ----
-    void rebuildIrIfDirty();
+    void rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame);
 
     // ---- ループバック校正 ----
     void measureLoopback();

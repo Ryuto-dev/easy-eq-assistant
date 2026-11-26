@@ -167,8 +167,12 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 
 void TransferFunctionTab::timerTick()
 {
-    eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
+    // ロックフリーで最新フレームを取得（UIスレッドでブロックしない）
+    auto framePtr = ctx.engine.getMeasurement().consumeLatestFrame();
+    if (! framePtr)
+        return; // まだフレームが完成していない
+
+    eeq::dsp::SpectrumFrame frame = *framePtr; // コピー（システム補正で書き換えるため）
 
     // システム補正（ループバック校正。仕様 6.1）: 有効ならインターフェース自身の応答を差し引く
     if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))
@@ -179,8 +183,26 @@ void TransferFunctionTab::timerTick()
     }
 
     const auto smoothing = ctx.state.smoothingDenom;
-    graph.setLiveFrame (frame, smoothing, ctx.state.appliedDelaySamples.load(),
-                        ctx.state.showRawPhase.load());
+
+    // ---- 重いスムージング計算をここで実行（paintスレッド外）----
+    const bool frameChanged = ! cachedFrameValid
+                           || frame.averages != cachedFrame.averages
+                           || frame.fftSize != cachedFrame.fftSize
+                           || std::abs (frame.sampleRate - cachedFrame.sampleRate) > 0.5;
+
+    if (frameChanged || smoothing != cachedSmoothing)
+    {
+        const auto plotWidth = juce::jmax (2, graph.getPlotWidthForCache());
+        const auto effectiveMax = std::min (ctx.engine.getCurrentSampleRate() * 0.5, 20000.0);
+        cachedLivePoints = eeq::dsp::smoothToLogGrid (frame, smoothing, 20.0, effectiveMax, plotWidth);
+        cachedFrame = frame;
+        cachedFrameValid = true;
+        cachedSmoothing = smoothing;
+    }
+
+    // キャッシュ済みポイントをグラフへ渡す（setLiveFrameは軽量版）
+    graph.setLiveFrameCached (cachedLivePoints, frame, smoothing,
+                              ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
 
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion

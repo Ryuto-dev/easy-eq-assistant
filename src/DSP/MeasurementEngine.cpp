@@ -52,6 +52,14 @@ void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
     accumulator.copyResult (resultOut);
 }
 
+std::shared_ptr<const SpectrumFrame> MeasurementEngine::consumeLatestFrame()
+{
+    const juce::ScopedLock sl (framePublishLock);
+    auto frame = publishedFrame;
+    publishedFrame.reset();
+    return frame;
+}
+
 int MeasurementEngine::getAverages() const
 {
     return accumulator.getAverages();
@@ -135,8 +143,21 @@ void MeasurementEngine::run()
             if (auto* analyzer = splAnalyzer.load (std::memory_order_acquire); analyzer != nullptr)
                 analyzer->process (readMeas.data(), got);
 
+            int framesDone = 0;
             if (measuring.load (std::memory_order_relaxed))
-                accumulator.feedSamples (readRef.data(), readMeas.data(), got);
+                framesDone = accumulator.feedSamples (readRef.data(), readMeas.data(), got);
+
+            // フレームが完了したら結果を公開（UIスレッドへロックフリーで渡す）
+            if (framesDone > 0)
+            {
+                auto frame = std::make_shared<const SpectrumFrame>();
+                accumulator.copyResult (*const_cast<SpectrumFrame*>(frame.get()));
+                
+                {
+                    const juce::ScopedLock sl (framePublishLock);
+                    publishedFrame = frame;
+                }
+            }
 
             drained += got;
 

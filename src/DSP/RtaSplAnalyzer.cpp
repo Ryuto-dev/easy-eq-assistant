@@ -80,9 +80,18 @@ void RtaSplAnalyzer::configure (double newSampleRate, int newBandsPerOctave, dou
         fft = std::make_unique<juce::dsp::FFT> (fftOrder);
         window.assign ((size_t) fftSize, 0.0f);
 
+        double windowSum = 0.0;
+
         for (int i = 0; i < fftSize; ++i)
+        {
             window[(size_t) i] = 0.5f
                                * (1.0f - std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) fftSize));
+            windowSum += window[(size_t) i];
+        }
+
+        // フルスケール正弦波（振幅1）がそのbinで 0 dB になる基準パワー:
+        // 非正規化DFTでは |X| = W/2（Wは窓の総和）なので、|X|^2 = (W/2)^2 を引く
+        sineRefPowerDb = 20.0 * std::log10 (std::max (windowSum * 0.5, 1.0e-9));
 
         assembly.assign ((size_t) fftSize, 0.0f);
         assemblyPos = 0;
@@ -263,8 +272,13 @@ void RtaSplAnalyzer::processFrame()
 
     for (size_t b = 0; b < bandCenters.size(); ++b)
     {
-        rtaOut.levelDb[b] = (float) (10.0 * std::log10 (std::max (bandEnergy[b], 1.0e-30)) + calibrationOffsetDb);
-        rtaOut.peakHoldDb[b] = (float) (10.0 * std::log10 (std::max (bandPeak[b], 1.0e-30)) + calibrationOffsetDb);
+        // dBFS基準（フルスケール正弦波=0 dB）に正規化してから校正オフセットを足す。
+        // 正規化しないと生のFFTパワー（数十dB）になり、表示レンジをオーバーして
+        // バーが常に天井に張り付く
+        rtaOut.levelDb[b] = (float) (10.0 * std::log10 (std::max (bandEnergy[b], 1.0e-30)) - sineRefPowerDb
+                                       + calibrationOffsetDb);
+        rtaOut.peakHoldDb[b] = (float) (10.0 * std::log10 (std::max (bandPeak[b], 1.0e-30)) - sineRefPowerDb
+                                          + calibrationOffsetDb);
     }
 }
 
@@ -297,7 +311,9 @@ void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
         return;
 
     const auto& energy = timeConstant == TimeConstant::fast ? fastEnergy : slowEnergy;
-    out.currentDb = 10.0 * std::log10 (std::max (energy, 1.0e-30)) + calibrationOffsetDb;
+    // dBFS基準（フルスケール正弦波=0 dB）に正規化（RTAと同じ基準。仕様 3.4:
+    // 校正しない状態のSPLは相対値で、校正オフセットを足して絶対値にする）
+    out.currentDb = 10.0 * std::log10 (std::max (energy, 1.0e-30)) - sineRefPowerDb + calibrationOffsetDb;
 
     auto leqFor = [this] (double windowSeconds)
     {
@@ -312,14 +328,15 @@ void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
             duration += it->duration;
         }
 
-        return duration > 0.0 ? 10.0 * std::log10 (sum / duration) + calibrationOffsetDb : -300.0;
+        return duration > 0.0 ? 10.0 * std::log10 (sum / duration) - sineRefPowerDb + calibrationOffsetDb : -300.0;
     };
 
     out.leq1minDb = leqFor (60.0);
     out.leq15minDb = leqFor (900.0);
 
     if (sessionEnergyTime > 0.0 && sessionSeconds > 0.0)
-        out.leqSessionDb = 10.0 * std::log10 (sessionEnergyTime / sessionSeconds) + calibrationOffsetDb;
+        out.leqSessionDb = 10.0 * std::log10 (sessionEnergyTime / sessionSeconds) - sineRefPowerDb
+                         + calibrationOffsetDb;
 
     out.peakDb = 20.0 * std::log10 (std::max (peakSample, 1.0e-9)) + calibrationOffsetDb;
 }

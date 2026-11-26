@@ -146,7 +146,7 @@ MainComponent::MainComponent()
             strings::wizardTitle, guide, strings::wizardClose, this, nullptr);
     }
 
-    startTimerHz (30);
+    startTimerHz (15); // 15fps UI更新で十分滑らか（重い計算はtimerTickでキャッシュ済み）
 }
 
 MainComponent::~MainComponent()
@@ -272,9 +272,15 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         auto& measurement = engine.getMeasurement();
 
         if (measurement.isMeasuring())
+        {
             measurement.stopMeasurement();
+            engine.stopExcitation();
+        }
         else
+        {
             measurement.startMeasurement();
+            engine.startExcitation();
+        }
 
         return true;
     }
