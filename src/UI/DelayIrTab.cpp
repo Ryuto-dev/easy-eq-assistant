@@ -178,11 +178,21 @@ DelayIrTab::DelayIrTab (UiContext& context)
     peakAlignToggle.setButtonText (strings::irPeakAlignToggle);
     peakAlignToggle.setToggleState (true, juce::dontSendNotification);
     styleToggle (peakAlignToggle);
+    peakAlignToggle.onClick = [this]
+    {
+        peakAligned = peakAlignToggle.getToggleState();
+        repaint();
+    };
     addAndMakeVisible (peakAlignToggle);
 
     etcToggle.setButtonText (strings::irEtcToggle);
     etcToggle.setToggleState (true, juce::dontSendNotification);
     styleToggle (etcToggle);
+    etcToggle.onClick = [this]
+    {
+        showEtc = etcToggle.getToggleState();
+        repaint();
+    };
     addAndMakeVisible (etcToggle);
 
     // ---- ループバック校正（仕様 6.1）----
@@ -407,7 +417,15 @@ void DelayIrTab::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 
     // ---- IRグラフ（時間軸。仕様 3.3）----
-    const auto irArea = getLocalBounds().toFloat().reduced (8.0f).removeFromTop (irGraphHeight);
+    // 描画領域は resized() の左カラム配置と一致させる（全幅で描くと右カラムの
+    // パネル背面までカーブが伸びる）。タイトル行・書き出しボタン行・トグル行は
+    // 子コンポーネントの領域なので、グラフ本体からは除く
+    auto paintBounds = getLocalBounds().reduced (8);
+    auto leftColumn = paintBounds.removeFromLeft (paintBounds.getWidth() * 3 / 5);
+    auto irAreaInt = leftColumn.removeFromTop (irGraphHeight);
+    irAreaInt.removeFromTop (18 + 26);
+    irAreaInt.removeFromBottom (20);
+    const auto irArea = irAreaInt.toFloat();
 
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (irArea, 6.0f);
@@ -671,7 +689,7 @@ void DelayIrTab::updateLoopbackUi()
     loopbackEnableToggle.setEnabled (true);
     loopbackStatusLabel.setText (juce::String (u8"測定済み（往復遅延 ")
                                      + juce::String (ctx.correction.getRoundtripDelaySamples(), 1)
-                                     + " " + strings::delaySamplesUnit + "） " + strings::loopbackStaleWarning,
+                                     + " " + strings::delaySamplesUnit + u8"） " + strings::loopbackStaleWarning,
                                  juce::dontSendNotification);
 }
 
@@ -759,16 +777,16 @@ void DelayIrTab::updateCompare()
                                     + juce::String (arrivalDiffSamples, 1) + " samples / "
                                     + juce::String (arrivalDiffMetres, 2) + " m / "
                                     + juce::String (arrivalDiffMetres * 3.28084, 1) + " ft\n"
-                                    + strings::compareSuggestedDelay + ": " + direction + " に +"
+                                    + strings::compareSuggestedDelay + ": " + direction + u8" に +"
                                     + juce::String (std::abs (proposedMs), 2) + " ms"
-                                    + (std::abs (fineMs) > 0.05 ? juce::String (u8"（微調整 +") + juce::String (fineMs, 1) + "ms）" : "")
+                                    + (std::abs (fineMs) > 0.05 ? juce::String (u8"（微調整 +") + juce::String (fineMs, 1) + u8"ms）" : "")
                                     + "\n" + strings::compareMicPointNote,
                                 juce::dontSendNotification);
 
     // ディレイタワー用の大きな1行表示（仕様 3.3.1）
     compareTowerLabel.setText (juce::String (u8"ディレイタワー：") + direction
                                    + juce::String (u8" に +") + juce::String (std::abs (proposedMs), 1)
-                                   + " ms delay をかけてください",
+                                   + u8" ms delay をかけてください",
                                juce::dontSendNotification);
 
     // ---- 極性の提案（仕様 3.3.3）----
@@ -804,8 +822,8 @@ void DelayIrTab::updateCompare()
         if (bestBin > 0)
         {
             crossoverHz = (double) bestBin * binWidth;
-            compareCrossoverLabel.setText (strings::compareCrossover + ": 約 "
-                                               + juce::String (crossoverHz, 0) + " Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）",
+            compareCrossoverLabel.setText (strings::compareCrossover + u8": 約 "
+                                               + juce::String (crossoverHz, 0) + u8" Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）",
                                            juce::dontSendNotification);
         }
         else
@@ -815,7 +833,7 @@ void DelayIrTab::updateCompare()
     }
     else
     {
-        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (crossoverHz, 0) + " Hz（会場メモの設定値）",
+        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (crossoverHz, 0) + u8" Hz（会場メモの設定値）",
                                        juce::dontSendNotification);
     }
 
@@ -934,12 +952,14 @@ void DelayIrTab::resized()
 
     auto compare = right;
     compareTitle.setBounds (compare.removeFromTop (18));
-    auto compareRow = compare.removeFromTop (26);
-    compareARowLabel.setBounds (compareRow.removeFromLeft (120));
-    compareComboA.setBounds (compareRow.removeFromLeft (170));
-    compareRow.removeFromLeft (8);
-    compareBRowLabel.setBounds (compareRow.removeFromLeft (150));
-    compareComboB.setBounds (compareRow);
+    // A/B を1行に詰めると右カラム幅に収まらず B 側コンボの幅が 0 になるため2行に分ける
+    auto compareRowA = compare.removeFromTop (26);
+    compareARowLabel.setBounds (compareRowA.removeFromLeft (120));
+    compareComboA.setBounds (compareRowA);
+    compare.removeFromTop (4);
+    auto compareRowB = compare.removeFromTop (26);
+    compareBRowLabel.setBounds (compareRowB.removeFromLeft (120));
+    compareComboB.setBounds (compareRowB);
     compare.removeFromTop (4);
     compareTowerLabel.setBounds (compare.removeFromTop (30));
     compareResultLabel.setBounds (compare.removeFromTop (80));
