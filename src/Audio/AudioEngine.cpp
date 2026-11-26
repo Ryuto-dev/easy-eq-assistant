@@ -594,9 +594,12 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 bandNoiseY2 = bandNoiseY1;
                 bandNoiseY1 = out;
 
-                // バンドパスで振幅が落ちるので持ち上げる（校正オフセットは表示側で決めるため
-                // 絶対値は問題にならない。レベルの見た目をそろえるための補正）
-                sourceSample = (float) juce::jlimit (-1.0, 1.0, out * 1.414);
+                // 校正オフセットは表示側で決めるため絶対値は問題にならない。
+                // 持ち上げ過ぎると ±1.0 のクランプで校正信号自身が歪むため、
+                // 0.6 倍に留める（出力 RMS ≈ 0.19、ピーク ≈ 0.86 でクリップなし。
+                // 入力は RMS≈1.0 に正規化されたピンクノイズ。バンドパス出力の
+                // 実測: RMS 0.314 / ピーク 1.44）
+                sourceSample = (float) juce::jlimit (-1.0, 1.0, out * 0.6);
                 break;
             }
         }
