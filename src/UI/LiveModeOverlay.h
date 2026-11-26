@@ -83,7 +83,7 @@ private:
 
     LongPressButton exitButton;
     juce::TextButton waterfallButton;
-    juce::Label splLabel, leqLabel, peakLabel, sessionLabel, hintLabel, historyTitle;
+    juce::Label splLabel, leqLabel, peakLabel, sessionLabel, hintLabel;
 
     // 直近60分のSPL推移（1秒間隔）
     std::deque<float> historySpl;

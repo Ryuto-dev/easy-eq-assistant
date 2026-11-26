@@ -42,7 +42,7 @@ private:
 
     UiContext& ctx;
 
-    juce::Label listTitle, searchTitle, fieldsTitle, micPointsTitle, sessionsTitle;
+    juce::Label listTitle, searchTitle, micPointsTitle, sessionsTitle;
     juce::TextEditor searchEditor;
     juce::ListBox venueList { {}, this };
     juce::TextButton newVenueButton;
@@ -55,7 +55,6 @@ private:
     juce::TextEditor micPointNameEditor, micPointDescEditor;
     juce::TextButton micPointAddButton, micPointRemoveButton;
 
-    juce::Label sessionListLabel;
     juce::ListBox sessionList { {}, nullptr };
     std::unique_ptr<juce::ListBoxModel> sessionModel;
 

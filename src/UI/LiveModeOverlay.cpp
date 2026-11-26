@@ -68,11 +68,10 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
     };
     addAndMakeVisible (waterfallButton);
 
-    for (auto* label : { &splLabel, &leqLabel, &peakLabel, &sessionLabel, &historyTitle })
+    for (auto* label : { &splLabel, &leqLabel, &peakLabel, &sessionLabel })
         addAndMakeVisible (label);
 
-    historyTitle.setText (strings::liveSplHistory, juce::dontSendNotification);
-    historyTitle.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    // 履歴グラフのタイトルは paintHistory が描くため、専用ラベルは持たない
 
     hintLabel.setText (strings::liveLongPressHint + " / " + strings::splUncalibrated,
                        juce::dontSendNotification);
