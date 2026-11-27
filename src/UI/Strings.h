@@ -503,4 +503,17 @@ inline const juce::String deviceRestartStoppedNotice { u8"オーディオデバ�
 
 inline const juce::String loopbackRestoreFailed { u8"保存されていたループバック校正を読み込めませんでした。補正なしで測定しています。IR・遅延タブで測り直してください。" };
 
+inline const juce::String eqBandFreqTooltip { u8"中心周波数 (Hz)。10 Hz〜fs×0.45" };
+inline const juce::String eqBandGainTooltip { u8"ゲイン (dB)。−24〜+24 dB" };
+inline const juce::String eqBandQTooltip { u8"Q（帯域の鋭さ）。0.1〜30" };
+
+inline const juce::String wizardFootnote { u8"※ 各ステップは「IR・遅延」タブ（ループバック校正）と「RTA・SPL」タブ（校正・ゲイン調整）から実行できます。Esc でいつでも出力を止められます。" };
+inline const juce::String calibrationNoSignal { u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。" };
+inline const juce::String calibrationMeterRange { u8"騒音計の値は 30〜140 dB で入力してください" };
+inline const juce::String calibrationAcquiring { u8"A/Fast の新しい測定値を取得しています…" };
+inline const juce::String rtaScaleUncalibrated { u8"dBFS（未校正）" };
+inline const juce::String rtaScaleCalibrated { u8"dB SPL（校正済み）" };
+inline const juce::String averagesPrefix { u8"平均: " };
+inline const juce::String averagesSuffix { u8" 回" };
+
 } // namespace eeq::strings

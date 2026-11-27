@@ -25,6 +25,10 @@ MainComponent::MainComponent()
     eeq::log::write ("--- Easy EQ assistant started ---");
     setOpaque (true);
 
+    // アプリ全体の LookAndFeel（ダイアログ・メニューもテーマに追従させる: issue #132）
+    applyLookAndFeelColours();
+    juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+
     topBar.onError = [this] (const juce::String& message) { showError (message); };
     topBar.onLiveModeRequested = [this]
     {
@@ -178,8 +182,7 @@ MainComponent::MainComponent()
                          + strings::wizardStep3 + "\n"
                          + strings::wizardStep4 + "\n\n"
                          + strings::shortcutHint + " / " + strings::emergencyStopHint + "\n"
-                         + juce::String (u8"※ 各ステップは「IR・遅延」タブ（ループバック校正）と「RTA・SPL」タブ")
-                         + juce::String (u8"（校正・ゲイン調整）から実行できます。Esc でいつでも出力を止められます。");
+                         + strings::wizardFootnote;
 
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::wizardTitle, guide, strings::wizardClose, this, nullptr);
@@ -193,6 +196,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
 
     for (auto& target : modalEscapeTargets)
         if (target != nullptr)
@@ -252,13 +256,41 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 }
 
+void MainComponent::applyLookAndFeelColours()
+{
+    // PopupMenu・AlertWindow・CallOutBox などは LookAndFeel の配色で描かれる（issue #132:
+    // 既定の V4 のままだとライトテーマでもダイアログやメニューが暗い配色のままだった）
+    using CS = juce::LookAndFeel_V4::ColourScheme;
+    lookAndFeel.setColourScheme (CS (theme::get (theme::ColourId::windowBackground),    // windowBackground
+                                     theme::get (theme::ColourId::panelBackground),     // widgetBackground
+                                     theme::get (theme::ColourId::panelBackground),     // menuBackground
+                                     theme::get (theme::ColourId::controlOutline),      // outline
+                                     theme::get (theme::ColourId::text),                // defaultText
+                                     theme::get (theme::ColourId::control),             // defaultFill
+                                     theme::get (theme::ColourId::text),                // highlightedText
+                                     theme::get (theme::ColourId::accent).withAlpha (0.35f), // highlightedFill
+                                     theme::get (theme::ColourId::text)));              // menuText
+    lookAndFeel.setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
+    lookAndFeel.setColour (juce::TabbedButtonBar::frontTextColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::TooltipWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::TooltipWindow::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::TooltipWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    lookAndFeel.setColour (juce::AlertWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::AlertWindow::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::AlertWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    lookAndFeel.setColour (juce::PopupMenu::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::PopupMenu::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::get (theme::ColourId::accent).withAlpha (0.35f));
+    lookAndFeel.setColour (juce::PopupMenu::highlightedTextColourId, theme::get (theme::ColourId::text));
+}
+
 void MainComponent::applyThemeToComponents()
 {
+    applyLookAndFeelColours();
     // 生成時に各ウィジェットへ焼き込まれた色を、現在のテーマで塗り直す（issue #9/#50）
     eeq::ui::restyleTree (this);
 
     tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    getLookAndFeel().setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
 
     // addTab 時に焼き込んだタブ背景色も張り直す
     for (int i = 0; i < tabs.getNumTabs(); ++i)
@@ -382,6 +414,9 @@ void MainComponent::timerCallback()
     limitTab.timerTick();
     venueTab.timerTick();
 
+    if (uiShowing && ! liveMode && currentTab == 5)
+        utilitiesTab.timerTick();
+
     if (liveMode)
         liveOverlay.timerTick();
 
@@ -416,6 +451,14 @@ void MainComponent::timerCallback()
 
     if (engine.consumeExcitationFinished())
         eeq::log::write ("excitation: playback reached the end");
+
+    juce::String fallbackNotice;
+
+    if (engine.consumeFallbackNotice (fallbackNotice))
+    {
+        eeq::log::write ("audio: " + fallbackNotice);
+        showError (fallbackNotice);
+    }
 
     juce::String deviceError;
 

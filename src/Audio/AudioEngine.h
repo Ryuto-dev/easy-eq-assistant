@@ -224,6 +224,9 @@ public:
     /** エラーが滞留していれば true を返して内容を out に入れ、滞留を消す */
     bool consumeDeviceError (juce::String& messageOut);
 
+    /** 起動時に保存デバイスが無く既定デバイスで開いたとき、その説明を一度だけ返す（issue #124） */
+    bool consumeFallbackNotice (juce::String& messageOut);
+
     /** フェードアウトが完了して停止したことをUIが消費する（診断ログ用） */
     bool consumeNoiseReachedIdle() noexcept
     { return noiseReachedIdle.exchange (false, std::memory_order_relaxed); }
@@ -272,7 +275,7 @@ public:
     static constexpr double switchFadeSeconds = 0.03; // 構成切替時の短いフェードアウト（issue #104）
 
 private:
-    /** スイープ/WAVバッファを公開する（メッセージスレッド専用。2世代ローテーション） */
+    /** スイープ/WAVバッファを公開する（メッセージスレッド専用。3世代＋使用中の世代を保持） */
     void publishExcitationBuffer (std::vector<float> samples);
 
     juce::AudioDeviceManager deviceManager;
@@ -307,6 +310,8 @@ private:
     //（3世代ローテーション: 1ブロック内に2回差し替わっても旧バッファが生きる）
     std::shared_ptr<const std::vector<float>> ownedBuffers[3]; // メッセージスレッドだけが触る
     std::atomic<const std::vector<float>*> activeBufferPtr { nullptr };
+    std::atomic<const std::vector<float>*> adoptedBufferPtr { nullptr }; // オーディオスレッドが鳴らしている世代
+    std::vector<std::shared_ptr<const std::vector<float>>> retiredBuffers; // 3世代より古いが使用中のもの
     std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
     std::atomic<bool> excitationFinished { false };
     std::atomic<uint64_t> outputMask { 1 };
@@ -318,6 +323,8 @@ private:
     juce::CriticalSection errorMutex;
     juce::String pendingErrorMessage;
     std::atomic<bool> hasPendingError { false };
+    juce::String fallbackNotice;
+    std::atomic<bool> hasFallbackNotice { false };
     std::atomic<bool> noiseReachedIdle { false };
     // UI watchdogはオーディオコールバックのサンプルカウンターで進める。
     // RT側はatomic load/storeだけを使い、時計・ロック・割り当て・ログを使わない。

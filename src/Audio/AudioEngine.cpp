@@ -277,14 +277,24 @@ bool AudioEngine::isExcitationAudible() const noexcept
 
 void AudioEngine::publishExcitationBuffer (std::vector<float> samples)
 {
-    // 旧バッファを2世代まで退避してから差し替える（issue #33 / #54）。
-    // オーディオスレッドが activeBufferPtr を読んでいる最中に旧バッファが解放される
-    // ことがないよう、直前の2世代を保持する（1ブロック内に2回 publish されても
-    // オーディオスレッドが読んでいる世代が生存する）
+    // 旧バッファの寿命（issue #33 / #54 / #94）:
+    //  - 直近3世代（現行＋旧2世代）を常に保持する。オーディオスレッドがブロック先頭で
+    //    activeBufferPtr を読んだ直後に差し替わっても、読んだ世代が生きている
+    //  - さらに、オーディオスレッドが「実際に鳴らしている」世代（adoptedBufferPtr）は、
+    //    3世代より古くなっても解放しない。構成切替（issue #104）では鳴っている間は
+    //    新しいバッファへ移らないため、その間に何度差し替えても古い世代を読み続けられる
+    if (ownedBuffers[2] != nullptr)
+        retiredBuffers.push_back (std::move (ownedBuffers[2]));
+
     ownedBuffers[2] = std::move (ownedBuffers[1]);
     ownedBuffers[1] = std::move (ownedBuffers[0]);
     ownedBuffers[0] = std::make_shared<const std::vector<float>> (std::move (samples));
     activeBufferPtr.store (ownedBuffers[0].get(), std::memory_order_release);
+
+    const auto* adopted = adoptedBufferPtr.load (std::memory_order_acquire);
+    retiredBuffers.erase (std::remove_if (retiredBuffers.begin(), retiredBuffers.end(),
+                                          [adopted] (const auto& buffer) { return buffer.get() != adopted; }),
+                          retiredBuffers.end());
 }
 
 void AudioEngine::setSweep (std::vector<float> sweepSamples)
@@ -434,6 +444,16 @@ void AudioEngine::startCalibrationSignal (CalibrationSignal signal)
 //==============================================================================
 // デバイスエラー
 
+bool AudioEngine::consumeFallbackNotice (juce::String& messageOut)
+{
+    if (! hasFallbackNotice.exchange (false, std::memory_order_acq_rel))
+        return false;
+
+    const juce::ScopedLock lock (errorMutex);
+    messageOut = fallbackNotice;
+    return true;
+}
+
 bool AudioEngine::consumeDeviceError (juce::String& messageOut)
 {
     if (! hasPendingError.exchange (false, std::memory_order_relaxed))
@@ -555,6 +575,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             appliedSource = requestedSource;
             appliedMask = requestedMask;
             appliedBuffer = requestedBuffer;
+            adoptedBufferPtr.store (appliedBuffer, std::memory_order_release);
             switchPending = false;
 
             // 構成切替のフェードアウトが終わった: まだ鳴らす要求があれば新しい構成でフェードインする
@@ -910,6 +931,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     appliedSource = excitationSource.load (std::memory_order_relaxed);
     appliedMask = outputMask.load (std::memory_order_relaxed);
     appliedBuffer = activeBufferPtr.load (std::memory_order_acquire);
+    adoptedBufferPtr.store (appliedBuffer, std::memory_order_release);
     switchPending = false;
     pendingResumeAfterSwitch = false;
 }
@@ -1084,16 +1106,51 @@ void AudioEngine::openInitialDevice()
     eeq::log::write ("initialise result: \"" + error + "\" setup: input=\"" + setup.inputDeviceName
                      + "\" output=\"" + setup.outputDeviceName + "\"");
 
-    if (error.isNotEmpty())
+    if (error.isNotEmpty() || deviceManager.getCurrentAudioDevice() == nullptr)
     {
-        // フォールバック: 保存したレート/バッファを捨てて既定の構成で再試行
-        eeq::log::write ("initial open FAILED: " + error + " (retrying with default settings)");
-        auto fallback = deviceManager.getAudioDeviceSetup();
-        fallback.useDefaultInputChannels = true;
-        fallback.useDefaultOutputChannels = true;
+        // フォールバック（issue #124）: 保存したデバイスが無い（未接続）などで開けなかったら、
+        // この型の既定の入出力デバイスを「名前を明示して」開き直す。
+        // JUCE は失敗時に currentSetup のデバイス名を消すため、getAudioDeviceSetup() から作ると
+        // 名前が空のまま initialise され、エラーも出ずに何も開かない（=無音で起動していた）
+        eeq::log::write ("initial open FAILED: " + (error.isNotEmpty() ? error : juce::String ("no device"))
+                         + " (falling back to the default devices)");
+
+        juce::AudioDeviceManager::AudioDeviceSetup fallback;
+        const auto inputs = typeForEnumeration->getDeviceNames (true);
+        const auto outputs = typeForEnumeration->getDeviceNames (false);
+
+        if (! inputs.isEmpty())
+            fallback.inputDeviceName = inputs[juce::jmax (0, typeForEnumeration->getDefaultDeviceIndex (true))];
+
+        if (! outputs.isEmpty())
+            fallback.outputDeviceName = outputs[juce::jmax (0, typeForEnumeration->getDefaultDeviceIndex (false))];
+
+        fallback.useDefaultInputChannels = false;
+        fallback.useDefaultOutputChannels = false;
+        fallback.inputChannels.setRange (0, 64, true);
+        fallback.outputChannels.setRange (0, 64, true);
         fallback.sampleRate = 0.0;
         fallback.bufferSize = 0;
-        deviceManager.initialise (0, 0, nullptr, true, {}, &fallback);
+
+        const auto fallbackError = deviceManager.initialise (0, 0, nullptr, true, {}, &fallback);
+
+        if (deviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            const juce::ScopedLock lock (errorMutex);
+            fallbackNotice = juce::String (u8"前回のオーディオデバイス（")
+                           + (setup.inputDeviceName.isNotEmpty() ? setup.inputDeviceName : setup.outputDeviceName)
+                           + juce::String (u8"）が見つからないため、既定のデバイスで開きました: ")
+                           + fallback.inputDeviceName + " / " + fallback.outputDeviceName;
+            hasFallbackNotice.store (true, std::memory_order_release);
+        }
+        else
+        {
+            eeq::log::write ("fallback open FAILED: " + fallbackError);
+            const juce::ScopedLock lock (errorMutex);
+            pendingErrorMessage = juce::String (u8"オーディオデバイスを開けませんでした。上部バーで入力・出力を選んでください。")
+                                + (fallbackError.isNotEmpty() ? "\n" + fallbackError : juce::String());
+            hasPendingError.store (true, std::memory_order_release);
+        }
     }
 
     int numInputs = 0, numOutputs = 0;

@@ -21,7 +21,6 @@ constexpr const char* settingsStepKey = "limitTestStepDb";
 constexpr const char* settingsDurationKey = "limitTestDurationSec";
 constexpr const char* settingsAmpGainKey = "limitTestAmpGainDb";
 constexpr const char* settingsSpeakerKey = "limitTestSpeakerMaxW";
-constexpr const char* settingsSpeakerOhmKey = "limitTestSpeakerOhm";
 } // namespace
 
 void LimitTestTab::StepGraph::paint (juce::Graphics& g)

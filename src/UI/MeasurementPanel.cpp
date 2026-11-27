@@ -56,7 +56,7 @@ MeasurementPanel::MeasurementPanel()
 
     averagesDisplay.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     averagesDisplay.setFont (juce::Font (juce::FontOptions (11.5f)));
-    averagesDisplay.setText (juce::String (u8"平均: 0 回"), juce::dontSendNotification);
+    averagesDisplay.setText (strings::averagesPrefix + "0" + strings::averagesSuffix, juce::dontSendNotification);
 
     for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo, &avgCountCombo })
     {
@@ -182,12 +182,12 @@ int MeasurementPanel::getSmoothingOctaveDenominator() const noexcept
 void MeasurementPanel::setAverageCountDisplay (int averages)
 {
     const auto config = getAveragingConfig();
-    auto newText = juce::String (u8"平均: ") + juce::String (averages);
+    auto newText = strings::averagesPrefix + juce::String (averages);
 
     if (config.mode != eeq::dsp::AveragingConfig::Mode::cumulative)
         newText << " / " << config.maxAverages;
 
-    newText << juce::String (u8" 回");
+    newText << strings::averagesSuffix;
 
     if (averagesDisplay.getText() != newText)
         averagesDisplay.setText (newText, juce::dontSendNotification);

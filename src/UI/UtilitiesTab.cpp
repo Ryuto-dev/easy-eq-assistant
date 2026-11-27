@@ -42,7 +42,7 @@ UtilitiesTab::UtilitiesTab (UiContext& context)
     // ---- 音速 ----
     setupLabel (temperatureTitle, strings::toolSpeedOfSound, true);
     setupLabel (temperatureEditorLabel, strings::temperatureLabel + juce::String (u8" (℃)"));
-    setupEditor (temperatureEditor, "20");
+    setupEditor (temperatureEditor, juce::String (ctx.state.airTemperatureC.load(), 1));
     setupLabel (soundSpeedLabel, {});
     temperatureNoteLabel.setText (strings::temperatureManualNote, juce::dontSendNotification);
     styleLabel (temperatureNoteLabel, 10.5f);
@@ -98,18 +98,38 @@ UtilitiesTab::UtilitiesTab (UiContext& context)
     updateCalculations();
 }
 
-void UtilitiesTab::textEditorTextChanged (juce::TextEditor&)
+void UtilitiesTab::textEditorTextChanged (juce::TextEditor& editor)
 {
+    // 気温は共有値（会場タブと同じ）。この欄を直接編集したときだけ書き込む（issue #136:
+    // 以前は起動時やどの欄を触っても 20 ℃ を書き込み、会場の気温や遅延の温度ずれ予測を壊していた）
+    if (&editor == &temperatureEditor)
+    {
+        const auto text = temperatureEditor.getText().trim();
+        const auto value = text.getDoubleValue();
+
+        if (text.containsAnyOf ("0123456789") && value > -20.0 && value < 60.0)
+            ctx.state.airTemperatureC.store (value);
+    }
+
     updateCalculations();
+}
+
+void UtilitiesTab::timerTick()
+{
+    // 会場タブなど他で気温が変わったら表示を合わせる（入力中は触らない）
+    const auto shared = ctx.state.airTemperatureC.load();
+
+    if (! temperatureEditor.hasKeyboardFocus (true)
+        && std::abs (temperatureEditor.getText().getDoubleValue() - shared) > 0.05)
+    {
+        temperatureEditor.setText (juce::String (shared, 1), juce::dontSendNotification);
+        updateCalculations();
+    }
 }
 
 void UtilitiesTab::updateCalculations()
 {
-    const auto temperature = temperatureEditor.getText().getDoubleValue();
-
-    // 気温は全アプリで共有する（仕様 3.3.2 / 3.8: 既定 20 ℃）
-    if (temperature > -20.0 && temperature < 60.0)
-        ctx.state.airTemperatureC.store (temperature);
+    const auto temperature = ctx.state.airTemperatureC.load();
 
     const auto soundSpeed = eeq::acoustics::speedOfSoundMetresPerSecond (temperature);
     soundSpeedLabel.setText (juce::String (soundSpeed, 2) + " m/s", juce::dontSendNotification);

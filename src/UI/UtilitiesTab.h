@@ -18,6 +18,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** 30Hzタイマーから呼ぶ: 共有の気温を表示に反映する（issue #136） */
+    void timerTick();
+
 private:
     void textEditorTextChanged (juce::TextEditor&) override;
     void updateCalculations();

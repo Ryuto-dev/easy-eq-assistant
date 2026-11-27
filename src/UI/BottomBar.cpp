@@ -136,8 +136,7 @@ void BottomBar::applyExcitationSource (int comboId)
 {
     // 同じ項目の選び直しも受け付ける（表示とエンジンがずれていても選べば必ず反映される: issue #133）
     lastExcitationId = comboId;
-    auto& measurement = engine.getMeasurement();
-
+    
     switch (comboId)
     {
         case 2:

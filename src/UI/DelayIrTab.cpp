@@ -13,8 +13,6 @@ namespace eeq::ui
 
 namespace
 {
-constexpr double defaultTemperatureC = 20.0;
-
 /** ループバック測定の妥当性検証（issue #31）。不合格の理由を返す（空文字なら合格）。
     ケーブル直結の電気系統は「無音でなく・高コヒーレンス・平坦」であることを使って、
     部屋の測定結果を誤って補正として保存することを防ぐ */
@@ -438,6 +436,17 @@ DelayIrTab::DelayIrTab (UiContext& context)
                     {
                         sys.erase (sys.begin() + selected);
                         safeThis->saveSystemsToVenue();
+
+                        // 測定対象の印とルーティングを、消した系統に残さない（issue #140）
+                        auto& target = safeThis->exciteTarget;
+
+                        if (target == selected)
+                            safeThis->setExciteTarget (-1);
+                        else if (target > selected)
+                            --target;
+                        else if (target < 0)
+                            safeThis->setExciteTarget (-1); // 「全体」のマスクから消した系統の ch を外す
+
                         safeThis->rebuildSystemList();
                     }
                 }));
@@ -1235,9 +1244,12 @@ void DelayIrTab::setExciteTarget (int index)
         ctx.state.currentSystemName = systems[(size_t) index].name;
     }
 
-    if (mask != 0)
-        ctx.engine.setOutputRoutingMask (mask);
+    // 系統が1つもないときの「全体」は、出力chの割り当て（上部バー）どおりに鳴らす（issue #140:
+    // マスク 0 は無視されて表示だけ「全体」になっていた）
+    if (mask == 0)
+        mask = (uint64_t) 1 << juce::jlimit (0, 63, juce::jmax (0, ctx.engine.getOutputChannel()));
 
+    ctx.engine.setOutputRoutingMask (mask);
     systemList.updateContent();
     eeq::log::write (juce::String ("excitation target: ") + (index < 0 ? "all systems" : juce::String (index)));
 }
@@ -1267,8 +1279,22 @@ void DelayIrTab::updateCompare()
     const auto& snapshotA = snapshots[(size_t) indexA]; // 基準（メイン）
     const auto& snapshotB = snapshots[(size_t) indexB]; // 比較（サブ/ディレイ/モニター）
 
-    const auto irA = eeq::dsp::buildImpulseResponse (snapshotA.frame);
-    const auto irB = eeq::dsp::buildImpulseResponse (snapshotB.frame);
+    // IR はスナップショットが変わったときだけ作る（issue #138: 微調整スライダーを動かすたびに
+    // 最大 65536 点の IFFT を UI スレッドで2回実行していた）
+    if (compareIrIdA != snapshotA.id || compareIrA == nullptr)
+    {
+        compareIrA = std::make_unique<eeq::dsp::ImpulseResponse> (eeq::dsp::buildImpulseResponse (snapshotA.frame));
+        compareIrIdA = snapshotA.id;
+    }
+
+    if (compareIrIdB != snapshotB.id || compareIrB == nullptr)
+    {
+        compareIrB = std::make_unique<eeq::dsp::ImpulseResponse> (eeq::dsp::buildImpulseResponse (snapshotB.frame));
+        compareIrIdB = snapshotB.id;
+    }
+
+    const auto& irA = *compareIrA;
+    const auto& irB = *compareIrB;
     const auto sampleRate = snapshotA.frame.sampleRate;
 
     // 到達時間差（Aから見てBが遅れる量。ms）
@@ -1277,9 +1303,10 @@ void DelayIrTab::updateCompare()
     const auto temperature = ctx.state.airTemperatureC.load();
     const auto arrivalDiffMetres = eeq::acoustics::distanceMetresForDelay (arrivalDiffMs, temperature);
 
-    // 微調整（既定 +0 ms。仕様 3.3.1）
+    // 微調整（既定 +0 ms。仕様 3.3.1）は「遅らせる側に追加で足す量」。
+    // 以前は arrivalDiff + fine の絶対値を出していたため、B が早い（diff < 0）ときに +fine で提案値が減っていた（issue #138）
     const auto fineMs = compareFineSlider.getValue();
-    const auto proposedMs = arrivalDiffMs + fineMs;
+    const auto proposedMs = juce::jmax (0.0, std::abs (arrivalDiffMs) + fineMs);
 
     // 提案（どちらに遅延を入れるか）
     // 到達を揃えるには「早い側」を遅らせる（遅い側に足すと差が拡大する）。仕様 3.3.1
@@ -1298,14 +1325,14 @@ void DelayIrTab::updateCompare()
                                     + juce::String (arrivalDiffMetres, 2) + " m / "
                                     + juce::String (arrivalDiffMetres * 3.28084, 1) + " ft\n"
                                     + strings::compareSuggestedDelay + ": " + direction + juce::String (u8" に +")
-                                    + juce::String (std::abs (proposedMs), 2) + " ms"
+                                    + juce::String (proposedMs, 2) + " ms"
                                     + (std::abs (fineMs) > 0.05 ? juce::String (u8"（微調整 +") + juce::String (fineMs, 1) + juce::String (u8"ms）") : "")
                                     + "\n" + strings::compareMicPointNote,
                                 juce::dontSendNotification);
 
     // ディレイタワー用の大きな1行表示（仕様 3.3.1）
     compareTowerLabel.setText (juce::String (u8"ディレイタワー：") + direction
-                                   + juce::String (u8" に +") + juce::String (std::abs (proposedMs), 1)
+                                   + juce::String (u8" に +") + juce::String (proposedMs, 1)
                                    + juce::String (u8" ms delay をかけてください"),
                                juce::dontSendNotification);
 
@@ -1467,7 +1494,8 @@ void DelayIrTab::resized()
     loopbackMeasureButton.setBounds (loopbackRow);
     loopbackStatusLabel.setBounds (loopback);
 
-    auto systems = right.removeFromTop (178);
+    // 最小ウィンドウ（1100×700）でも比較パネルが画面外に出ないよう、系統一覧は残り高さに応じて縮める（issue #137）
+    auto systems = right.removeFromTop (juce::jlimit (130, 178, right.getHeight() - 230));
     systemsTitle.setBounds (systems.removeFromTop (18));
     systemsHint.setBounds (systems.removeFromTop (14));
     auto systemsButtons = systems.removeFromTop (26);
@@ -1500,13 +1528,14 @@ void DelayIrTab::resized()
     compareBRowLabel.setBounds (compareRowB.removeFromLeft (120));
     compareComboB.setBounds (compareRowB);
     compare.removeFromTop (4);
-    compareTowerLabel.setBounds (compare.removeFromTop (30));
-    compareResultLabel.setBounds (compare.removeFromTop (80));
-    comparePolarityLabel.setBounds (compare.removeFromTop (20));
-    compareCrossoverLabel.setBounds (compare.removeFromTop (20));
-    auto fineRow = compare.removeFromTop (24);
+    // 固定行（微調整・極性・クロスオーバー）を先に確保し、結果の説明文は残りの高さを使う
+    auto fineRow = compare.removeFromBottom (24);
     compareFineLabel.setBounds (fineRow.removeFromLeft (80));
-    compareFineSlider.setBounds (fineRow.removeFromLeft (220));
+    compareFineSlider.setBounds (fineRow.removeFromLeft (juce::jmin (220, fineRow.getWidth())));
+    compareCrossoverLabel.setBounds (compare.removeFromBottom (20));
+    comparePolarityLabel.setBounds (compare.removeFromBottom (20));
+    compareTowerLabel.setBounds (compare.removeFromTop (juce::jmin (30, compare.getHeight() / 3)));
+    compareResultLabel.setBounds (compare);
 }
 
 } // namespace eeq::ui

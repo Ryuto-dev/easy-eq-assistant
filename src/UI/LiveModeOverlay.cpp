@@ -200,8 +200,18 @@ void LiveModeOverlay::timerTick()
                           + juce::String (spl.leqSessionDb, 1),
                       juce::dontSendNotification);
 
-    peakLabel.setText (strings::splPeakLabel + ": " + juce::String (spl.peakDb, 1) + " dB",
-                       juce::dontSendNotification);
+    // 重み付けと時定数を必ず併記する（issue #139: 何を測っている数字か分からなかった）
+    {
+        const auto& analyzer = engine.getSplAnalyzer();
+        const auto weighting = analyzer.getWeighting();
+        const auto unit = juce::String (weighting == eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted ? "dB(A)"
+                                        : weighting == eeq::dsp::RtaSplAnalyzer::Weighting::cWeighted ? "dB(C)"
+                                                                                                      : "dB(Z)")
+                        + (analyzer.getTimeConstant() == eeq::dsp::RtaSplAnalyzer::TimeConstant::slow ? " Slow" : " Fast");
+
+        peakLabel.setText (unit + "    " + strings::splPeakLabel + ": " + juce::String (spl.peakDb, 1) + " dB",
+                           juce::dontSendNotification);
+    }
 
     sessionLabel.setText (juce::String ((int) (spl.sessionSeconds / 60.0)) + " min",
                           juce::dontSendNotification);

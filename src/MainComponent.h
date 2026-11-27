@@ -47,6 +47,7 @@ private:
     void showError (const juce::String& message);
     void applyMeasurementSettings();
     void applyThemeToComponents();
+    void applyLookAndFeelColours();
     void saveProjectIfPossible();
 
     // 設定ファイルの保存先を確定させてから engine に渡す必要があるため、
@@ -80,6 +81,8 @@ private:
     };
 
     ThemeModeInitializer themeModeInit { appPropertiesStorage.properties.getUserSettings() };
+    // 既定の LookAndFeel にする。他のメンバー（ウィジェット）より先に構築し、最後に破棄されるようここに置く
+    juce::LookAndFeel_V4 lookAndFeel;
     eeq::audio::AudioEngine engine;
     eeq::core::ProjectStore project;
     eeq::core::SystemCorrection correction;

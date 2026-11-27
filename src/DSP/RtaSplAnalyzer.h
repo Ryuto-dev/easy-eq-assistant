@@ -30,6 +30,10 @@ public:
     void configure (double sampleRate, int bandsPerOctave, double rtaAveragingSeconds);
     void setWeighting (Weighting weighting);
     void setTimeConstant (TimeConstant timeConstant);
+
+    /** 表示用（本番モードの「dB(A) Fast」表記など: issue #139） */
+    Weighting getWeighting() const { const juce::ScopedLock sl (lock); return weighting; }
+    TimeConstant getTimeConstant() const { const juce::ScopedLock sl (lock); return timeConstant; }
     void setCalibrationOffsetDb (double offsetDb) noexcept { calibrationOffsetDb.store (offsetDb, std::memory_order_relaxed); }
     double getCalibrationOffsetDb() const noexcept { return calibrationOffsetDb.load (std::memory_order_relaxed); }
 

@@ -319,6 +319,8 @@ void VenueTab::loadSelectedVenueFields()
     const auto& venue = ctx.project.currentVenue();
     nameEditor.setText (venue.name, juce::dontSendNotification);
     tempEditor.setText (juce::String (venue.temperatureC, 1), juce::dontSendNotification);
+    // 会場を選んだら、その会場の気温を測定の換算（遅延⇄距離・温度ずれ）にも使う（issue #136）
+    ctx.state.airTemperatureC.store (venue.temperatureC);
     humidityEditor.setText (juce::String (venue.humidityPercent, 0), juce::dontSendNotification);
     crossoverEditor.setText (venue.subCrossoverHz > 0.0 ? juce::String (venue.subCrossoverHz, 0) : "0",
                              juce::dontSendNotification);
@@ -333,9 +335,11 @@ void VenueTab::saveFieldsToVenue()
     if (nameEditor.getText().trim().isNotEmpty())
         venue.name = nameEditor.getText().trim();
 
-    const auto temp = tempEditor.getText().getDoubleValue();
+    const auto tempText = tempEditor.getText().trim();
+    const auto temp = tempText.getDoubleValue();
 
-    if (temp > -20.0 && temp < 60.0)
+    // 空欄や入力途中（"-" など）は 0 ℃ として扱わない（issue #136）
+    if (tempText.containsAnyOf ("0123456789") && temp > -20.0 && temp < 60.0)
     {
         venue.temperatureC = temp;
         ctx.state.airTemperatureC.store (temp); // 気温は測定の換算にも使う（仕様 3.3.2）

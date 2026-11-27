@@ -495,7 +495,7 @@ void RtaSplTab::processCalibrationPending()
     {
         calibrationOffsetPending = false;
         calibrationOffsetLabel.setText (
-            juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
+            strings::calibrationNoSignal,
             juce::dontSendNotification);
     }
 }
@@ -539,7 +539,7 @@ void RtaSplTab::applyCalibrationOffset()
 
     if (! std::isfinite (meterValue) || meterValue < 30.0 || meterValue > 140.0)
     {
-        calibrationOffsetLabel.setText (juce::String (u8"騒音計の値は 30〜140 dB で入力してください"),
+        calibrationOffsetLabel.setText (strings::calibrationMeterRange,
                                         juce::dontSendNotification);
         return;
     }
@@ -561,7 +561,7 @@ void RtaSplTab::applyCalibrationOffset()
     calibrationOffsetPending = true;
     calibrationMeterValue = meterValue;
     calibrationDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
-    calibrationOffsetLabel.setText (juce::String (u8"A/Fast の新しい測定値を取得しています…"),
+    calibrationOffsetLabel.setText (strings::calibrationAcquiring,
                                     juce::dontSendNotification);
 }
 
@@ -797,8 +797,8 @@ void RtaSplTab::paint (juce::Graphics& g)
     }
 
     g.setColour (theme::get (theme::ColourId::gridText));
-    g.drawText (std::abs (splTopDb) < 0.01f ? juce::String (u8"dBFS（未校正）")
-                                            : juce::String (u8"dB SPL（校正済み）"),
+    g.drawText (std::abs (splTopDb) < 0.01f ? strings::rtaScaleUncalibrated
+                                            : strings::rtaScaleCalibrated,
                 (int) plotArea.getX () - 40, (int) plotArea.getY () - 18, 150, 12,
                 juce::Justification::centredLeft);
 }
@@ -859,9 +859,13 @@ void RtaSplTab::resized()
     calibrationMeterEditor.setBounds (calRow2.removeFromLeft (70));
     calRow2.removeFromLeft (6);
     calibrationApplyButton.setBounds (calRow2.removeFromLeft (120));
-    calibrationOffsetLabel.setBounds (calRow2);
-    auto calRow3 = calibrationPanel.removeFromTop (26);
-    calibrationResetButton.setBounds (calRow3.removeFromLeft (120));
+    // 校正結果・エラーは専用の行に置き、2行まで折り返して全文を読めるようにする（issue #137:
+    // 1100 px 幅では残り幅が約 8 px しかなく、エラー文が読めなかった）
+    auto calRow3 = calibrationPanel.removeFromTop (34);
+    calibrationResetButton.setBounds (calRow3.removeFromLeft (120).withHeight (26));
+    calRow3.removeFromLeft (6);
+    calibrationOffsetLabel.setBounds (calRow3);
+    calibrationOffsetLabel.setMinimumHorizontalScale (1.0f);
     calibrationPanel.removeFromTop (2);
     calibrationGuideLabel.setBounds (calibrationPanel);
 
