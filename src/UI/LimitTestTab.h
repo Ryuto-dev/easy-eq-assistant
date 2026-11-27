@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "Core/JuceModules.h"
 
 #include "../DSP/TransferFunctionAccumulator.h"
@@ -38,7 +40,7 @@ private:
     void updateControlState();
     void updateSuggestion();
     void updateCoherenceNote (const eeq::dsp::SpectrumFrame* frame);
-    double currentSplFast();
+    std::optional<double> tryReadSpl() const;
     /** テスト中だけ出力上限（ceiling）を掛け替え、終了時に元へ戻す（issue #29） */
     void overrideCeilingForTest();
     void restoreCeilingAfterTest();
@@ -47,7 +49,6 @@ private:
     enum class Phase { idle, settling, measuring };
     Phase stepPhase = Phase::idle;
     double stepLevel = -40.0;      // 現在のステップの出力レベル (dBFS)
-    double cachedSplDb = -300.0;
     std::vector<double> stepLevels;
     std::vector<double> stepSpl;
     juce::Time phaseDeadline;

@@ -189,6 +189,8 @@ if(EASYEQ_BUILD_TESTS)
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
+        src/Audio/AudioEngine.cpp
+        src/Core/Log.cpp
         src/DSP/TransferFunctionAccumulator.cpp
         src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp
@@ -203,6 +205,7 @@ if(EASYEQ_BUILD_TESTS)
     )
     target_link_libraries(EasyEQTests PRIVATE
         gtest_main
+        juce::juce_audio_devices
         juce::juce_dsp
         # Core/JuceModules.h 経由でGUIモジュールの静的初期化子も参照されるためリンクする
         juce::juce_graphics

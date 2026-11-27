@@ -57,6 +57,7 @@ private:
     bool dialogOpen = false;
     std::vector<eeq::dsp::GridPoint> diffPoints;
     int cachedSmoothing = -1;
+    int displayedSmoothing = -1;
     uint32_t lastSeenSnapshotVersion = 0;
     uint32_t lastSeenEqVersion = 0;
     juce::Rectangle<int> graphBounds;
@@ -66,7 +67,7 @@ private:
     std::shared_ptr<const eeq::dsp::SpectrumFrame> lastRequestedFrame;
     std::shared_ptr<const eeq::dsp::SpectrumFrame> displayedFrame;
     std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> displayedPoints;
-    std::uint64_t renderGeneration = 0;
+    std::uint64_t settingsGeneration = 0;
     std::uint64_t requestedCorrectionGeneration = 0;
     bool requestedCorrectionEnabled = false;
     int requestedSmoothing = -1;

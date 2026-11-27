@@ -202,7 +202,7 @@ public:
     static constexpr double fadeOutSeconds = 0.15;
     static constexpr double uiWatchdogSilenceBudgetSeconds = 0.5;
 
-    /** 500msの総無音化予算からフェード時間と次のcallbackまでの最大ブロック分を引く */
+    /** Reserve time for the fade and up to one block before the next block-start check. */
     [[nodiscard]] static constexpr std::uint64_t uiWatchdogTimeoutSamplesFor (double sampleRate,
                                                                                int bufferSize) noexcept
     {
@@ -242,6 +242,8 @@ public:
     dsp::MeasurementEngine& getMeasurement() noexcept { return measurement; }
 
 private:
+    friend struct AudioEngineCallbackTestAccess;
+
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                            float* const* outputChannelData, int numOutputChannels,
@@ -268,7 +270,6 @@ private:
 
     // UI はコマンドだけを出す。状態遷移はオーディオスレッドが一括して管理する
     //（UI が直接 state を書くと、コールバックの書き戻しと競合するため）
-    std::atomic<NoiseCommand> noiseCommand { NoiseCommand::none };
     std::atomic<NoiseState> noiseState { NoiseState::idle };
     std::atomic<int> fadePosition { 0 };
     std::atomic<int> fadeInLength { 1 };
@@ -302,10 +303,12 @@ private:
     // UI watchdogはオーディオコールバックのサンプルカウンターで進める。
     // RT側はatomic load/storeだけを使い、時計・ロック・割り当て・ログを使わない。
     std::atomic<std::uint64_t> audioSampleCounter { 0 };
-    std::atomic<std::uint64_t> uiWatchdogDeadlineSamples { 0 };
+    // One atomic publication: zero means stop; otherwise the upper bits hold
+    // the deadline and the low bit indicates an unconsumed start.
+    static constexpr std::uint64_t pendingStartBit = 1;
+    std::atomic<std::uint64_t> excitationRequest { 0 };
     std::atomic<std::uint64_t> uiWatchdogTimeoutSamples
         { uiWatchdogTimeoutSamplesFor (48000.0, 512) };
-    std::atomic<bool> uiWatchdogArmed { false };
     std::atomic<bool> uiWatchdogStopPending { false };
 
     PinkNoiseGenerator noise;

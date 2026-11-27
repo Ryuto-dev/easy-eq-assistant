@@ -287,19 +287,20 @@ void TransferFunctionTab::timerTick()
 
     if (framePtr != nullptr)
     {
-        const bool requestChanged = framePtr != lastRequestedFrame
-                                 || smoothing != requestedSmoothing
-                                 || std::abs (viewMin - cachedViewMin) > 1.0e-9
-                                 || std::abs (viewMax - cachedViewMax) > 1.0e-9
-                                 || plotWidth != cachedPlotWidth
-                                 || applyCorrection != requestedCorrectionEnabled
-                                 || correctionGeneration != requestedCorrectionGeneration;
+        const bool settingsChanged = smoothing != requestedSmoothing
+                                   || std::abs (viewMin - cachedViewMin) > 1.0e-9
+                                   || std::abs (viewMax - cachedViewMax) > 1.0e-9
+                                   || plotWidth != cachedPlotWidth
+                                   || applyCorrection != requestedCorrectionEnabled
+                                   || correctionGeneration != requestedCorrectionGeneration;
 
-        if (requestChanged)
+        if (settingsChanged)
+            ++settingsGeneration;
+
+        if (settingsChanged || framePtr != lastRequestedFrame)
         {
-            ++renderGeneration;
             LiveSmoothingWorker::Request request;
-            request.generation = renderGeneration;
+            request.generation = settingsGeneration;
             request.frame = framePtr;
             request.smoothing = smoothing;
             request.viewMin = viewMin;
@@ -321,15 +322,15 @@ void TransferFunctionTab::timerTick()
     }
 
     LiveSmoothingWorker::Result result;
-    if (liveSmoothingWorker->takeResult (result) && result.generation == renderGeneration)
+    if (liveSmoothingWorker->takeResult (result) && result.generation == settingsGeneration)
     {
         displayedFrame = std::move (result.frame);
         displayedPoints = std::move (result.points);
-        cachedSmoothing = result.smoothing;
+        displayedSmoothing = result.smoothing;
     }
 
     if (displayedFrame != nullptr && displayedPoints != nullptr)
-        graph.setLiveFrameCached (displayedPoints, displayedFrame, cachedSmoothing,
+        graph.setLiveFrameCached (displayedPoints, displayedFrame, displayedSmoothing,
                                   ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
 
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion

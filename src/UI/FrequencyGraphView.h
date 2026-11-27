@@ -118,6 +118,7 @@ private:
 
     // 振幅軸。auto のときは滑らかに追従、固定のときはホイール/ドラッグで調整（仕様 5.5）
     bool ampAuto = true;
+    bool ampScaleConverging = false;
     float ampTop = 10.0f;
     float ampSpan = 100.0f;
 

@@ -262,14 +262,14 @@ void LimitTestTab::restoreCeilingAfterTest()
     }
 }
 
-double LimitTestTab::currentSplFast()
+std::optional<double> LimitTestTab::tryReadSpl() const
 {
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
 
-    if (ctx.engine.getSplAnalyzer().tryCopySpl (spl))
-        cachedSplDb = spl.hasSignal ? spl.currentDb : -300.0;
+    if (ctx.engine.getSplAnalyzer().tryCopySpl (spl) && spl.hasSignal && std::isfinite (spl.currentDb))
+        return spl.currentDb;
 
-    return cachedSplDb;
+    return std::nullopt;
 }
 
 void LimitTestTab::updateCoherenceNote (const eeq::dsp::SpectrumFrame* frame)
@@ -443,8 +443,12 @@ void LimitTestTab::timerTick()
         }
         else if (stepPhase == Phase::measuring && now > phaseDeadline)
         {
+            const auto spl = tryReadSpl();
+            if (! spl)
+                return;
+
             stepLevels.push_back (stepLevel);
-            stepSpl.push_back (currentSplFast());
+            stepSpl.push_back (*spl);
             stepGraph.levels = stepLevels;
             stepGraph.spl = stepSpl;
 
@@ -488,33 +492,32 @@ void LimitTestTab::timerTick()
         thdPhase = ThdPhase::waiting;
         ctx.engine.stopExcitation();
         ctx.engine.getMeasurement().stopMeasurement();
-        updateControlState();
-
-        // 録音コピー（最大約1.1Mサンプル）とFarina法のFFTをUIから外す。
-        // MeasurementEngineはLimitTestTabより長生きし、デストラクタでこのthreadをjoinする。
-        if (thdAnalysisThread.joinable())
-            thdAnalysisThread.join();
-
         const auto sampleRate = thdSampleRate;
         const auto captureSamples = (int) std::llround (11.5 * std::max (8000.0, sampleRate));
-        auto* measurement = &ctx.engine.getMeasurement();
         auto* inFlight = &thdAnalysisInFlight;
         const auto level = thdLevel;
         const auto generation = ++thdGeneration;
         juce::Component::SafePointer<LimitTestTab> safeThis { this };
-        thdAnalysisInFlight.store (true, std::memory_order_release);
-        thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
-                              + juce::String (u8" dBFS — 解析中…"),
-                          juce::dontSendNotification);
-
         try
         {
-            thdAnalysisThread = std::thread ([safeThis, measurement, inFlight, captureSamples,
-                                               sampleRate, level, generation]
+            // Freeze the window at stop; the rolling history keeps advancing during analysis.
+            std::vector<float> recordedRef, recordedMeas;
+            const auto copied = ctx.engine.getMeasurement().copyRecentSamplesExact (
+                captureSamples, recordedRef, recordedMeas);
+
+            if (thdAnalysisThread.joinable())
+                thdAnalysisThread.join();
+
+            thdAnalysisInFlight.store (true, std::memory_order_release);
+            updateControlState();
+            thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
+                                  + juce::String (u8" dBFS — 解析中…"),
+                              juce::dontSendNotification);
+
+            thdAnalysisThread = std::thread ([safeThis, inFlight, copied, sampleRate, level, generation,
+                                               recordedRef = std::move (recordedRef),
+                                               recordedMeas = std::move (recordedMeas)]
             {
-                std::vector<float> recordedRef, recordedMeas;
-                const auto copied = measurement->copyRecentSamplesExact (captureSamples,
-                                                                          recordedRef, recordedMeas);
                 float refPeak = 0.0f;
 
                 for (const auto sample : recordedRef)
@@ -592,9 +595,12 @@ void LimitTestTab::timerTick()
     if (thermalRunning)
     {
         const auto elapsed = (now - thermalStart).inSeconds();
-        thermalHistory.push_back ({ elapsed, currentSplFast() });
-        thermalGraph.samples = thermalHistory;
-        thermalGraph.repaint();
+        if (const auto spl = tryReadSpl())
+        {
+            thermalHistory.push_back ({ elapsed, *spl });
+            thermalGraph.samples = thermalHistory;
+            thermalGraph.repaint();
+        }
 
         if (now > thermalDeadline)
         {

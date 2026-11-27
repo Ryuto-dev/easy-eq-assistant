@@ -90,7 +90,7 @@ void FrequencyGraphView::setLiveFrameCached (std::shared_ptr<const std::vector<e
 
     dataDirty = false;  // columns はキャッシュから埋まっているので再計算不要
     lastWidth = getWidth();
-    if (changed)
+    if (changed || (ampAuto && ampScaleConverging))
         repaint();
 }
 
@@ -316,6 +316,7 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     axis.drawGrid (g, plot, grid, gridMajor, gridText);
 
     // ---- 振幅エリア: dBグリッド ----
+    ampScaleConverging = false;
     if (ampAuto && liveFrame.averages > 0 && ! columns.empty())
     {
         // 自動スケール（滑らかに追従）
@@ -336,8 +337,19 @@ void FrequencyGraphView::paint (juce::Graphics& g)
         {
             const auto targetTop = maxAmp + 10.0f;
             const auto targetSpan = juce::jlimit (60.0f, 160.0f, (maxAmp - minAmp) + 20.0f);
-            ampTop += (targetTop - ampTop) * 0.15f;
-            ampSpan += (targetSpan - ampSpan) * 0.15f;
+            const auto approach = [this] (float& value, float target)
+            {
+                constexpr auto toleranceDb = 0.01f;
+                if (std::abs (target - value) <= toleranceDb)
+                    value = target;
+                else
+                {
+                    value += (target - value) * 0.15f;
+                    ampScaleConverging = true;
+                }
+            };
+            approach (ampTop, targetTop);
+            approach (ampSpan, targetSpan);
         }
     }
 
