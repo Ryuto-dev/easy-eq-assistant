@@ -2,6 +2,7 @@
 
 #include "../Core/Log.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace eeq::audio
