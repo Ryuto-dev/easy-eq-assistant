@@ -18,7 +18,9 @@ namespace eeq::ui
 // コヒーレンスがしきい値未満の帯域は薄く表示する（仕様 3.1 / 5.5）。
 // ズーム・パン（周波数/dB 軸それぞれ独立）と、スナップショット・ターゲット・予測カーブの
 // 重ね描きに対応（仕様 5.2）。
-class FrequencyGraphView : public juce::Component
+// 60fpsアニメーションタイマーでヌルヌル描画（ライブデータ時のパルス表示等）。
+class FrequencyGraphView : public juce::Component,
+                           public juce::Timer
 {
 public:
     FrequencyGraphView();
@@ -72,6 +74,9 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    // Timer interface for 60fps smooth animation
+    void timerCallback() override;
 
     /** スナップショット等の平滑化に使うグリッド幅（タブ側の差分計算で揃える） */
     [[nodiscard]] int plotWidth() const noexcept { return juce::jmax (2, (int) plotArea().getWidth()); }
@@ -132,6 +137,12 @@ private:
     static constexpr float coherenceThreshold = 0.8f; // 仕様 4.1 の既定しきい値
     static constexpr float dimmedAlpha = 0.25f;
     static constexpr int dBLabelStripWidth = 40;
+
+    // 60fps なめらかアニメーション用
+    double animationPhase = 0.0;
+    bool hasLiveData = false; // ライブデータがあるか（パルス表示用）
+
+    void startAnimationTimer();
 };
 
 } // namespace eeq::ui

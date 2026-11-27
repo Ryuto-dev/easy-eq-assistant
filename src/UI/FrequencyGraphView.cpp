@@ -16,6 +16,25 @@ FrequencyGraphView::FrequencyGraphView()
     axis.limitMax = freqLimitMax;
     dataDirty = true;
     viewDirty = false;
+
+    startAnimationTimer();
+}
+
+void FrequencyGraphView::startAnimationTimer()
+{
+    // 60fps (16.67ms) で再描画し、ヌルヌル感を出す
+    startTimerHz (60);
+}
+
+void FrequencyGraphView::timerCallback()
+{
+    // アニメーション位相を進める（2秒周期のパルス）
+    animationPhase += 1.0 / 60.0;
+    if (animationPhase >= 2.0)
+        animationPhase -= 2.0;
+
+    // 常に再描画（データが更新されていなくても60fpsでリフレッシュ）
+    repaint();
 }
 
 void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
@@ -43,6 +62,7 @@ void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int
         lastOverlayVersion = -1;
     }
 
+    hasLiveData = (frame.averages > 0);
     repaint();
 }
 
@@ -90,6 +110,7 @@ void FrequencyGraphView::setLiveFrameCached (std::shared_ptr<const std::vector<e
 
     dataDirty = false;  // columns はキャッシュから埋まっているので再計算不要
     lastWidth = getWidth();
+    hasLiveData = (frame != nullptr && frame->averages > 0);
     if (changed || (ampAuto && ampScaleConverging))
         repaint();
 }
@@ -557,28 +578,48 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     g.setColour (gridText.withAlpha (0.55f));
     g.strokePath (coherencePath, juce::PathStrokeType (1.0f));
 
-    // ---- ライブの測定カーブ ----
+    // ---- ライブの測定カーブ（パルスアニメーション付き）----
     const auto liveColour = theme::get (theme::ColourId::accent);
     const auto livePhaseColour = theme::get (theme::ColourId::accent2);
 
-    strokeColumnCurve (g, columns, ampArea, liveColour, 1.2f, true, false, dimmedAlpha,
+    // パルスアニメーション: hasLiveData のときだけ明滅させる
+    float pulseAlpha = 1.0f;
+    float pulseThickness = 1.2f;
+    if (hasLiveData)
+    {
+        // 2秒周期のサイン波で 0.7〜1.0 の間を変動
+        const float pulse = 0.85f + 0.15f * std::sin (animationPhase * juce::MathConstants<float>::pi);
+        pulseAlpha = pulse;
+        pulseThickness = 1.2f + 0.3f * (1.0f - pulse); // 細くなるとき少し太く見せる
+    }
+
+    strokeColumnCurve (g, columns, ampArea, liveColour, pulseThickness, true, false, pulseAlpha * dimmedAlpha,
                        ampOf, ampY,
                        [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
 
-    strokeColumnCurve (g, columns, lower, livePhaseColour, 1.2f, true, false, dimmedAlpha,
+    strokeColumnCurve (g, columns, lower, livePhaseColour, pulseThickness, true, false, pulseAlpha * dimmedAlpha,
                        phaseOfLive, phaseY,
                        [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
 
-    // ---- 凡例（左上に表示）----
-    // ライブ測定 + オーバーレイの色と名前を表示
-    struct LegendEntry { juce::String name; juce::Colour colour; bool dashed; float thickness; };
+    // ライブ中は右上に小さな「LIVE」インジケータを表示
+    if (hasLiveData && ! columns.empty())
+    {
+        g.setColour (liveColour.withAlpha ((float)(0.6f + 0.4f * std::sin (animationPhase * juce::MathConstants<float>::pi * 2.0f))));
+        g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        const auto indicatorX = ampArea.getRight() - 50.0f;
+        const auto indicatorY = ampArea.getY() + 16.0f;
+        g.drawText ("LIVE", (int) indicatorX, (int) indicatorY, 44, 14, juce::Justification::centredRight);
+    }
+
+    // ---- 凡例（左上に表示：より視認性高く）----
+    struct LegendEntry { juce::String name; juce::Colour colour; bool dashed; float thickness; bool isLive; };
     std::vector<LegendEntry> legendEntries;
 
-    // ライブ測定（メイン）
+    // ライブ測定（メイン） - 常に最初に表示
     if (liveFrame.averages > 0 && ! columns.empty())
     {
         legendEntries.push_back ({ strings::liveMeasurementLabel,
-                                   theme::get (theme::ColourId::accent), false, 1.2f });
+                                   theme::get (theme::ColourId::accent), false, 1.2f, true });
     }
 
     // オーバーレイ（スナップショット、ターゲット、予測、差分）
@@ -589,31 +630,34 @@ void FrequencyGraphView::paint (juce::Graphics& g)
             legendEntries.push_back ({ overlaySources[s].name,
                                        overlaySources[s].colour,
                                        overlaySources[s].dashed,
-                                       overlaySources[s].thickness });
+                                       overlaySources[s].thickness, false });
         }
     }
 
     if (! legendEntries.empty())
     {
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        float legendX = ampArea.getX() + 8.0f;
-        float legendY = ampArea.getY() + 4.0f;
-        const float lineLen = 24.0f;
-        const float lineGap = 6.0f;
-        const float textGap = 8.0f;
-        const float rowHeight = 16.0f;
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        float legendX = ampArea.getX() + 10.0f;
+        float legendY = ampArea.getY() + 6.0f;
+        const float lineLen = 28.0f;
+        const float lineGap = 8.0f;
+        const float textGap = 10.0f;
+        const float rowHeight = 20.0f;
 
-        // 背景
+        // 背景（半透明ダーク + 枠線）
         float maxTextWidth = 0.0f;
         const auto& font = g.getCurrentFont();
         for (const auto& entry : legendEntries)
             maxTextWidth = juce::jmax (maxTextWidth, juce::GlyphArrangement::getStringWidth (font, entry.name));
 
-        const float boxWidth = lineLen + lineGap + textGap + maxTextWidth + 12.0f;
-        const float boxHeight = legendEntries.size() * rowHeight + 8.0f;
+        const float boxWidth = lineLen + lineGap + textGap + maxTextWidth + 16.0f;
+        const float boxHeight = legendEntries.size() * rowHeight + 10.0f;
 
-        g.setColour (juce::Colours::black.withAlpha (0.65f));
-        g.fillRoundedRectangle (legendX - 4.0f, legendY - 4.0f, boxWidth, boxHeight, 4.0f);
+        // 背景グラデーション風
+        g.setColour (juce::Colours::black.withAlpha (0.75f));
+        g.fillRoundedRectangle (legendX - 6.0f, legendY - 5.0f, boxWidth, boxHeight, 6.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline).withAlpha (0.5f));
+        g.drawRoundedRectangle (legendX - 6.0f, legendY - 5.0f, boxWidth, boxHeight, 6.0f, 1.5f);
 
         for (size_t i = 0; i < legendEntries.size(); ++i)
         {
@@ -621,20 +665,32 @@ void FrequencyGraphView::paint (juce::Graphics& g)
             const float y = legendY + (float) i * rowHeight + rowHeight * 0.5f;
             const float lineX = legendX;
 
+            // ライブ測定はパルスアニメーション付きで強調
+            float entryAlpha = 1.0f;
+            float entryThickness = entry.thickness;
+            if (entry.isLive && hasLiveData)
+            {
+                const float pulse = 0.8f + 0.2f * std::sin (animationPhase * juce::MathConstants<float>::pi * 2.0f);
+                entryAlpha = pulse;
+                entryThickness = entry.thickness + 0.5f;
+            }
+
             // 線（実線/破線）
-            g.setColour (entry.colour);
+            g.setColour (entry.colour.withAlpha (entryAlpha));
             if (entry.dashed)
             {
                 const float dashPattern[] = { 5.0f, 3.0f };
-                g.drawDashedLine ({ lineX, y, lineX + lineLen, y }, dashPattern, 2, entry.thickness);
+                g.drawDashedLine ({ lineX, y, lineX + lineLen, y }, dashPattern, 2, entryThickness);
             }
             else
             {
-                g.drawLine (lineX, y, lineX + lineLen, y, entry.thickness);
+                g.drawLine (lineX, y, lineX + lineLen, y, entryThickness);
             }
 
-            // テキスト
-            g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));
+            // テキスト（ライブは太字・パルス）
+            g.setFont (entry.isLive ? juce::Font (juce::FontOptions (12.0f, juce::Font::bold))
+                                    : juce::Font (juce::FontOptions (11.0f)));
+            g.setColour (theme::get (theme::ColourId::text).withAlpha (entry.isLive ? 1.0f : 0.85f));
             g.drawText (entry.name,
                         (int) (lineX + lineLen + lineGap),
                         (int) (y - rowHeight * 0.5f),

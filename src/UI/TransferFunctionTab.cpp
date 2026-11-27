@@ -676,13 +676,16 @@ void TransferFunctionTab::showSaveSnapshotDialog()
     window->addButton (strings::snapshotCancelButton, 0);
 
     // deleteWhenDismissed = true: 閉じたら必ず破棄する（放置すると幽霊ダイアログとリークになる）
+    auto safeWindowPtr = std::make_shared<juce::Component::SafePointer<juce::AlertWindow>> (window);
     window->enterModalState (true, juce::ModalCallbackFunction::create (
-        [this, safeWindow = juce::Component::SafePointer<juce::AlertWindow> (window)] (int result)
+        [this, safeWindowPtr] (int result)
         {
             dialogOpen = false;
 
-            if (result != 1 || safeWindow == nullptr)
+            if (result != 1 || safeWindowPtr == nullptr || *safeWindowPtr == nullptr)
                 return;
+
+            auto* safeWindow = safeWindowPtr->getComponent();
 
             eeq::core::Snapshot snapshot;
             snapshot.name = safeWindow->getTextEditorContents ("name");
