@@ -28,6 +28,11 @@ struct EQProposalInput
     double minSpacingOctaves = 1.0 / 3.0; // 帯域間の最小間隔
     double residualToleranceDb = 1.5;     // 収束条件（±1.5 dB）
     bool allowValleyBoost = false;  // 谷（キャンセレーション）へのブースト。既定で無効
+    // ターゲットの全体レベル合わせ（#109）。H1 の絶対レベルは機器のゲインで決まり 0 dB の
+    // 保証はないため、既定では補正範囲内（weight>0）の「測定 − ターゲット」の加重中央値を
+    // ターゲットに足してから反復する。false にすると levelOffsetDb（手動 dB）をそのまま足す。
+    bool autoLevelAlign = true;
+    double levelOffsetDb = 0.0;
     double boostScale = 0.7;        // ブースト時のゲイン係数（カットを優先: 仕様 4.2 (3)）
 };
 
@@ -36,7 +41,8 @@ struct EQProposalResult
 {
     std::vector<peq::Band> bands;
     std::vector<double> predictedDb; // 提案を全て適用した予測カーブ（入力グリッドと同じ長さ）
-    std::vector<double> residualDb;  // ターゲット − 予測
+    std::vector<double> residualDb;  // （レベル合わせ後の）ターゲット − 予測
+    double appliedLevelOffsetDb = 0.0; // ターゲットに足したレベル（自動なら推定値、手動なら入力値）
     int iterations = 0;
     bool converged = false;
 };

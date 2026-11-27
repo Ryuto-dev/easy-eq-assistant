@@ -33,26 +33,94 @@ BumpShape estimateBumpShape (const std::vector<WeightedPoint>& points, int cente
     auto sameSign = [&center] (double error)
     { return error * center.error > 0.0; };
 
-    // 中心誤差と同じ符号で、絶対値が半分を下回る点まで広がる
+    // 中心誤差と同じ符号で、絶対値が半分を上回る点（内側）の範囲を求める
+    auto inside = [&] (int index)
+    {
+        const auto error = points[(size_t) index].error;
+        return sameSign (error) && std::abs (error) > std::abs (half);
+    };
+
     int lo = centerIndex;
 
-    while (lo > 0 && sameSign (points[(size_t) (lo - 1)].error)
-           && std::abs (points[(size_t) (lo - 1)].error) > std::abs (half))
+    while (lo > 0 && inside (lo - 1))
         --lo;
 
     int hi = centerIndex;
 
-    while (hi < n - 1 && sameSign (points[(size_t) (hi + 1)].error)
-           && std::abs (points[(size_t) (hi + 1)].error) > std::abs (half))
+    while (hi < n - 1 && inside (hi + 1))
         ++hi;
 
-    const auto fLo = std::max (1.0, points[(size_t) lo].freq);
-    const auto fHi = std::max (fLo * 1.0001, points[(size_t) hi].freq);
+    // 内側の端の点と、その外側の点の間で、誤差が半値を横切る周波数を
+    // 対数周波数上の線形補間で求める（グリッド点で打ち切ると帯域幅を
+    // 過小評価し、Q を過大に推定する。#117）
+    auto crossing = [&] (int innerIndex, int outerIndex)
+    {
+        const auto& inner = points[(size_t) innerIndex];
+        const auto& outer = points[(size_t) outerIndex];
+        const auto denom = inner.error - outer.error;
+        const auto t = std::abs (denom) > 1.0e-12 ? juce::jlimit (0.0, 1.0, (inner.error - half) / denom) : 0.0;
+        const auto logInner = std::log (std::max (1.0, inner.freq));
+        const auto logOuter = std::log (std::max (1.0, outer.freq));
+        return std::exp (logInner + t * (logOuter - logInner));
+    };
+
+    const auto fLo = std::max (1.0, lo > 0 ? crossing (lo, lo - 1) : points[(size_t) lo].freq);
+    const auto fHi = std::max (fLo * 1.0001, hi < n - 1 ? crossing (hi, hi + 1) : points[(size_t) hi].freq);
 
     const auto bandwidthOctaves = std::log2 (fHi / fLo);
-    const auto q = center.freq / std::max (1.0, fHi - fLo);
+
+    // RBJ のベルでは、dB 半値点 f1, f2 と Q の関係は Q = √(f1·f2) / (f2 − f1)
+    const auto q = std::sqrt (fLo * fHi) / std::max (1.0e-6, fHi - fLo);
 
     return { juce::jlimit (0.1, 20.0, q), bandwidthOctaves };
+}
+
+// 補正範囲内（weight>0）の「測定 − ターゲット」の加重中央値（#109）。
+// 平均ではなく中央値にして、深いノッチや鋭いピークに引っ張られないようにする
+double estimateLevelOffset (const EQProposalInput& input)
+{
+    const auto n = input.frequency.size();
+    std::vector<std::pair<double, double>> values; // (差, 重み)
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        const auto f = input.frequency[i];
+        const auto w = input.weight.size() == n ? input.weight[i] : 1.0;
+        const auto diff = input.measuredDb[i] - input.targetDb[i];
+
+        if (! (w > 0.0) || f < input.minFrequency || f > input.maxFrequency || ! std::isfinite (diff))
+            continue;
+
+        values.emplace_back (diff, w);
+    }
+
+    if (values.empty())
+        return 0.0;
+
+    std::sort (values.begin(), values.end());
+
+    double total = 0.0;
+
+    for (const auto& v : values)
+        total += v.second;
+
+    double cumulative = 0.0;
+
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        cumulative += values[i].second;
+
+        if (cumulative >= total * 0.5)
+        {
+            // ちょうど半分で切れる場合は隣との平均を取る（偶数個の通常の中央値と一致）
+            if (std::abs (cumulative - total * 0.5) < 1.0e-12 && i + 1 < values.size())
+                return 0.5 * (values[i].first + values[i + 1].first);
+
+            return values[i].first;
+        }
+    }
+
+    return values.back().first;
 }
 
 // 帯域が既存帯域と最小間隔より近いか（仕様 4.3）
@@ -78,19 +146,33 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
     if (n == 0 || (int) input.measuredDb.size() != n || (int) input.targetDb.size() != n)
         return result;
 
+    auto inRange = [&] (double f)
+    { return f >= input.minFrequency && f <= input.maxFrequency; };
+
+    auto weightAt = [&] (int i)
+    { return input.weight.size() == (size_t) n ? input.weight[(size_t) i] : 1.0; };
+
+    // ターゲットの全体レベルを測定に合わせる（#109）
+    result.appliedLevelOffsetDb = input.autoLevelAlign ? estimateLevelOffset (input) : input.levelOffsetDb;
+
+    if (! std::isfinite (result.appliedLevelOffsetDb))
+        result.appliedLevelOffsetDb = 0.0;
+
+    std::vector<double> targetDb ((size_t) n);
+
+    for (int i = 0; i < n; ++i)
+        targetDb[(size_t) i] = input.targetDb[(size_t) i] + result.appliedLevelOffsetDb;
+
     result.predictedDb = input.measuredDb;
     result.residualDb.assign ((size_t) n, 0.0);
 
     auto updateResidual = [&] ()
     {
         for (int i = 0; i < n; ++i)
-            result.residualDb[(size_t) i] = input.targetDb[(size_t) i] - result.predictedDb[(size_t) i];
+            result.residualDb[(size_t) i] = targetDb[(size_t) i] - result.predictedDb[(size_t) i];
     };
 
     updateResidual();
-
-    auto inRange = [&] (double f)
-    { return f >= input.minFrequency && f <= input.maxFrequency; };
 
     auto maxResidualInRange = [&] ()
     {
@@ -99,7 +181,7 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
 
         for (int i = 0; i < n; ++i)
         {
-            const auto weight = input.weight.empty() ? 1.0 : input.weight[(size_t) i];
+            const auto weight = weightAt (i);
 
             if (weight <= 0.0 || ! inRange (input.frequency[(size_t) i]))
                 continue;
@@ -113,7 +195,11 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
     std::vector<WeightedPoint> points ((size_t) n);
     std::vector<bool> excluded ((size_t) n, false); // 谷ルールでスキップした点を二度と選ばないようにする
 
-    for (int iteration = 0; iteration < input.maxBands; ++iteration)
+    // 谷のスキップは帯域の試行回数に数えない（#110）。スキップのたびに少なくとも1点が
+    // 候補から外れるので、無限ループ防止の上限は点数 + 帯域数で十分
+    const auto maxAttempts = n + std::max (0, input.maxBands);
+
+    for (int attempt = 0; attempt < maxAttempts && (int) result.bands.size() < input.maxBands; ++attempt)
     {
         if (maxResidualInRange() <= input.residualToleranceDb)
         {
@@ -135,7 +221,7 @@ EQProposalResult proposeEQ (const EQProposalInput& input)
             if (! inRange (freq))
                 continue;
 
-            const auto weight = input.weight.empty() ? 1.0 : input.weight[(size_t) i];
+            const auto weight = weightAt (i);
 
             if (weight <= 0.0)
                 continue;
