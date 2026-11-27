@@ -175,7 +175,7 @@ MainComponent::MainComponent()
             strings::wizardTitle, guide, strings::wizardClose, this, nullptr);
     }
 
-    startTimerHz (15); // 15fps UI更新で十分滑らか（重い計算はtimerTickでキャッシュ済み）
+    startTimerHz (30); // 解析は別スレッド、UI操作と表示更新は30Hzで維持
 
     lastAutoSave = juce::Time::getCurrentTime();
 }
@@ -183,6 +183,13 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+
+    for (auto& target : modalEscapeTargets)
+        if (target != nullptr)
+            target->removeKeyListener (this);
+
+    modalEscapeTargets.clear();
+    modalEscapeRoot = nullptr;
     engine.saveSettings();
     // 最終保存は同期的に行う（自動保存がワーカースレッドのまま終了すると、
     // 終了処理に書き込みが殺されて失われる可能性があるため）
@@ -265,8 +272,46 @@ void MainComponent::resized()
     liveOverlay.setBounds (getLocalBounds());
 }
 
+void MainComponent::attachEscapeListenerRecursively (juce::Component& component)
+{
+    component.addKeyListener (this);
+    modalEscapeTargets.emplace_back (&component);
+
+    for (int i = 0; i < component.getNumChildComponents(); ++i)
+        if (auto* child = component.getChildComponent (i))
+            attachEscapeListenerRecursively (*child);
+}
+
+void MainComponent::updateModalEscapeListener()
+{
+    auto* modal = juce::ModalComponentManager::getInstance()->getModalComponent (0);
+
+    if (modal == modalEscapeRoot.getComponent())
+        return;
+
+    for (auto& target : modalEscapeTargets)
+        if (target != nullptr)
+            target->removeKeyListener (this);
+
+    modalEscapeTargets.clear();
+    modalEscapeRoot = modal;
+
+    if (modal != nullptr)
+        attachEscapeListenerRecursively (*modal);
+}
+
 void MainComponent::timerCallback()
 {
+    engine.kickUiWatchdog();
+    updateModalEscapeListener();
+    const auto nowMs = juce::Time::getMillisecondCounter();
+
+    if (engine.consumeUiWatchdogStop())
+    {
+        uiWatchdogWarningUntilMs = nowMs + 3000u;
+        eeq::log::write ("UI watchdog: timer stalled; excitation and measurement were stopped");
+    }
+
     // 定期オートセーブ（issue #38）: 60秒ごとに last_project.eea へ書く。
     // クラッシュ・強制終了・電源断でも直近60秒以内の状態が残る。
     // 書き込みはアトミック（ProjectStore::saveToFile）なので、
@@ -306,7 +351,10 @@ void MainComponent::timerCallback()
     measurementPanel.setAverageCountDisplay (engine.getMeasurement().getAverages());
 
     const auto status = engine.getStatusText();
-    bottomBar.setStatusText (status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
+    const auto watchdogWarningActive = (std::int32_t) (uiWatchdogWarningUntilMs - nowMs) > 0;
+    bottomBar.setStatusText (watchdogWarningActive
+                                 ? juce::String (u8"UI停止を検知：励起音を自動停止しました")
+                                 : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
 
     // デバイスが開き直されたら測定設定（サンプルレート）を合わせ直す
     if (engine.getDeviceGeneration() != lastSeenGeneration)
@@ -391,6 +439,19 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
     if (key.isKeyCode (juce::KeyPress::escapeKey))
     {
         // 緊急停止（仕様 6.3）: 出力をフェードアウトして測定も止める
+        engine.emergencyStop();
+        return true;
+    }
+
+    return false;
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent)
+{
+    juce::ignoreUnused (originatingComponent);
+
+    if (key.isKeyCode (juce::KeyPress::escapeKey))
+    {
         engine.emergencyStop();
         return true;
     }

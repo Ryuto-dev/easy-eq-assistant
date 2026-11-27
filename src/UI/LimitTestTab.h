@@ -1,10 +1,16 @@
-﻿#pragma once
+#pragma once
+
+#include <optional>
 
 #include "Core/JuceModules.h"
 
+#include "../DSP/TransferFunctionAccumulator.h"
 #include "../DSP/ImpulseResponseBuilder.h"
 #include "UiContext.h"
 
+#include <atomic>
+#include <cstdint>
+#include <thread>
 #include <vector>
 
 namespace eeq::ui
@@ -33,7 +39,8 @@ private:
     void startThermalTest();
     void updateControlState();
     void updateSuggestion();
-    double currentSplFast();
+    void updateCoherenceNote (const eeq::dsp::SpectrumFrame* frame);
+    std::optional<double> tryReadSpl() const;
     /** テスト中だけ出力上限（ceiling）を掛け替え、終了時に元へ戻す（issue #29） */
     void overrideCeilingForTest();
     void restoreCeilingAfterTest();
@@ -51,7 +58,11 @@ private:
     enum class ThdPhase { idle, playing, waiting };
     ThdPhase thdPhase = ThdPhase::idle;
     double thdLevel = -20.0;
+    double thdSampleRate = 48000.0;
     juce::Time thdDeadline;
+    std::uint64_t thdGeneration = 0;
+    std::atomic<bool> thdAnalysisInFlight { false };
+    std::thread thdAnalysisThread;
 
     // 熱圧縮
     bool thermalRunning = false;
@@ -87,6 +98,7 @@ private:
 
     double suggestedLimiterDbfs = 0.0;
     bool hasSuggestion = false;
+    std::shared_ptr<const eeq::dsp::SpectrumFrame> lastCoherenceFrame;
 
     // テスト前の出力上限（issue #29: テスト終了後に通常測定へ戻す）
     bool ceilingOverridden = false;

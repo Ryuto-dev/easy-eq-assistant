@@ -102,6 +102,7 @@ void TransferFunctionAccumulator::resetAveragesInternal()
     samplesSinceFrame = 0;
     totalFed = 0;
     averages = 0;
+    publishedAverages.store (0, std::memory_order_relaxed);
 
     result = {};
     result.fftSize = fftSize;
@@ -196,6 +197,7 @@ void TransferFunctionAccumulator::processFrame()
 
     ++averages;
     updateResult();
+    publishedAverages.store (result.averages, std::memory_order_relaxed);
 }
 
 void TransferFunctionAccumulator::updateResult()
@@ -242,8 +244,8 @@ void TransferFunctionAccumulator::copyResult (SpectrumFrame& resultOut) const
 
 int TransferFunctionAccumulator::getAverages() const
 {
-    const juce::ScopedLock sl (lock);
-    return (int) std::min<long long> (averages, std::numeric_limits<int>::max());
+    // UI表示だけの読み出しでFFT処理中のロックを待たせない。
+    return publishedAverages.load (std::memory_order_relaxed);
 }
 
 } // namespace eeq::dsp

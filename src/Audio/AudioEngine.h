@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 
 #include "Core/JuceModules.h"
@@ -198,6 +199,20 @@ public:
 
     // これを超える出力レベルは確認ダイアログを出す（仕様 3.2: 既定 −20 dBFS）
     static constexpr float outputLevelLimitDb = -20.0f;
+    static constexpr double fadeOutSeconds = 0.15;
+    static constexpr double uiWatchdogSilenceBudgetSeconds = 0.5;
+
+    /** Reserve time for the fade and up to one block before the next block-start check. */
+    [[nodiscard]] static constexpr std::uint64_t uiWatchdogTimeoutSamplesFor (double sampleRate,
+                                                                               int bufferSize) noexcept
+    {
+        const auto rate = sampleRate > 0.0 ? sampleRate : 48000.0;
+        const auto budget = static_cast<std::uint64_t> (rate * uiWatchdogSilenceBudgetSeconds);
+        const auto fade = static_cast<std::uint64_t> (rate * fadeOutSeconds);
+        const auto block = static_cast<std::uint64_t> (bufferSize > 0 ? bufferSize : 1);
+        const auto reserved = fade + block;
+        return budget > reserved ? budget - reserved : 1;
+    }
 
     // ---- RTA・SPL（仕様 3.4 / 5.4）: Meas 1chだけで常時動く ----
 
@@ -212,6 +227,12 @@ public:
     bool consumeNoiseReachedIdle() noexcept
     { return noiseReachedIdle.exchange (false, std::memory_order_relaxed); }
 
+    /** UIタイマーから呼ぶ。励起中だけ音声サンプル基準の停止期限を延長する */
+    void kickUiWatchdog() noexcept;
+    /** UI停止監視が励起を止めたことを一度だけ返す */
+    bool consumeUiWatchdogStop() noexcept
+    { return uiWatchdogStopPending.exchange (false, std::memory_order_relaxed); }
+
     // ---- 設定の保存（仕様 6.2 相当の軽量保存）----
 
     void saveSettings();
@@ -221,6 +242,8 @@ public:
     dsp::MeasurementEngine& getMeasurement() noexcept { return measurement; }
 
 private:
+    friend struct AudioEngineCallbackTestAccess;
+
     // AudioIODeviceCallback
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
                                            float* const* outputChannelData, int numOutputChannels,
@@ -247,7 +270,6 @@ private:
 
     // UI はコマンドだけを出す。状態遷移はオーディオスレッドが一括して管理する
     //（UI が直接 state を書くと、コールバックの書き戻しと競合するため）
-    std::atomic<NoiseCommand> noiseCommand { NoiseCommand::none };
     std::atomic<NoiseState> noiseState { NoiseState::idle };
     std::atomic<int> fadePosition { 0 };
     std::atomic<int> fadeInLength { 1 };
@@ -278,6 +300,16 @@ private:
     juce::String pendingErrorMessage;
     std::atomic<bool> hasPendingError { false };
     std::atomic<bool> noiseReachedIdle { false };
+    // UI watchdogはオーディオコールバックのサンプルカウンターで進める。
+    // RT側はatomic load/storeだけを使い、時計・ロック・割り当て・ログを使わない。
+    std::atomic<std::uint64_t> audioSampleCounter { 0 };
+    // One atomic publication: zero means stop; otherwise the upper bits hold
+    // the deadline and the low bit indicates an unconsumed start.
+    static constexpr std::uint64_t pendingStartBit = 1;
+    std::atomic<std::uint64_t> excitationRequest { 0 };
+    std::atomic<std::uint64_t> uiWatchdogTimeoutSamples
+        { uiWatchdogTimeoutSamplesFor (48000.0, 512) };
+    std::atomic<bool> uiWatchdogStopPending { false };
 
     PinkNoiseGenerator noise;
     juce::AudioFormatManager formatManager;
@@ -297,7 +329,6 @@ private:
     static constexpr float defaultNoiseLevelDb = -20.0f;
     static constexpr float clipThresholdLinear = 0.98f; // 約 −0.2 dBFS（仕様 3.5 のクリップ検出）
     static constexpr double fadeInSeconds = 0.3;
-    static constexpr double fadeOutSeconds = 0.15;
 };
 
 } // namespace eeq::audio

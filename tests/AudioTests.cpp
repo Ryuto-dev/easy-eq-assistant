@@ -9,6 +9,22 @@
 #include "Audio/PinkNoiseGenerator.h"
 #include "DSP/SweepGenerator.h"
 
+namespace eeq::audio
+{
+struct AudioEngineCallbackTestAccess
+{
+    static void prepare (AudioEngine& engine, juce::AudioIODevice& device)
+    {
+        engine.audioDeviceAboutToStart (&device);
+    }
+
+    static void render (AudioEngine& engine, float* output, int samples)
+    {
+        engine.audioDeviceIOCallbackWithContext (nullptr, 0, &output, 1, samples, {});
+    }
+};
+}
+
 namespace
 {
 
@@ -140,6 +156,98 @@ TEST (Audio, StoppingDuringFadeInKeepsEnvelopeContinuous)
 
     // 定常からの停止は 1.0 からフェードアウト（従来どおり）
     EXPECT_NEAR (AudioEngine::fadeEnvelopeAt (3, 0, fadeOutLength, 1.0f), 1.0f, 1e-4);
+}
+
+TEST (Audio, UiWatchdogReservesFadeAndOneAudioBlockWithin500Ms)
+{
+    using eeq::audio::AudioEngine;
+
+    for (const auto sampleRate : { 44100.0, 48000.0, 96000.0 })
+    {
+        const auto budget = (std::uint64_t) (sampleRate * AudioEngine::uiWatchdogSilenceBudgetSeconds);
+        const auto fade = (std::uint64_t) (sampleRate * AudioEngine::fadeOutSeconds);
+
+        for (const auto bufferSize : { 64, 512, 2048, 8192 })
+        {
+            const auto timeout = AudioEngine::uiWatchdogTimeoutSamplesFor (sampleRate, bufferSize);
+            EXPECT_GT (timeout, 0u);
+            EXPECT_LE (timeout + fade + (std::uint64_t) bufferSize, budget)
+                << "sampleRate=" << sampleRate << " bufferSize=" << bufferSize;
+        }
+    }
+}
+
+class WatchdogTestDevice final : public juce::AudioIODevice
+{
+public:
+    WatchdogTestDevice() : AudioIODevice ("Watchdog test", "Test") {}
+
+    static constexpr int blockSize = 8192;
+    static constexpr double sampleRate = 44100.0;
+
+    juce::StringArray getOutputChannelNames() override { return { "Out" }; }
+    juce::StringArray getInputChannelNames() override { return {}; }
+    juce::Array<double> getAvailableSampleRates() override { return { sampleRate }; }
+    juce::Array<int> getAvailableBufferSizes() override { return { blockSize }; }
+    int getDefaultBufferSize() override { return blockSize; }
+    juce::String open (const juce::BigInteger&, const juce::BigInteger&, double, int) override { return {}; }
+    void close() override {}
+    bool isOpen() override { return true; }
+    void start (juce::AudioIODeviceCallback*) override {}
+    void stop() override {}
+    bool isPlaying() override { return false; }
+    juce::String getLastError() override { return {}; }
+    int getCurrentBufferSizeSamples() override { return blockSize; }
+    double getCurrentSampleRate() override { return sampleRate; }
+    int getCurrentBitDepth() override { return 32; }
+    juce::BigInteger getActiveOutputChannels() const override { return juce::BigInteger (1); }
+    juce::BigInteger getActiveInputChannels() const override { return {}; }
+    int getOutputLatencyInSamples() override { return 0; }
+    int getInputLatencyInSamples() override { return 0; }
+};
+
+TEST (Audio, UiWatchdogAcceptsFreshHeartbeatBefore8192SampleCallbackAt44100Hz)
+{
+    using eeq::audio::AudioEngine;
+    using eeq::audio::AudioEngineCallbackTestAccess;
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    WatchdogTestDevice device;
+    std::vector<float> output (WatchdogTestDevice::blockSize);
+
+    for (const auto calibration : { false, true })
+    {
+        SCOPED_TRACE (calibration ? "calibration signal" : "excitation");
+        AudioEngine engine (nullptr);
+        AudioEngineCallbackTestAccess::prepare (engine, device);
+
+        if (calibration)
+            engine.startCalibrationSignal (AudioEngine::CalibrationSignal::tone1k);
+        else
+            engine.startExcitation();
+
+        const auto render = [&]
+        { AudioEngineCallbackTestAccess::render (engine, output.data(), (int) output.size()); };
+
+        for (int i = 0; i < 2; ++i)
+        {
+            engine.kickUiWatchdog();
+            render();
+            EXPECT_FALSE (engine.consumeUiWatchdogStop());
+            EXPECT_TRUE (engine.isExcitationAudible());
+            EXPECT_GT (rmsOf (output, 0), 0.0);
+        }
+
+        render(); // No heartbeat: expire, fade out, and reach silence within this block.
+        EXPECT_TRUE (engine.consumeUiWatchdogStop());
+        EXPECT_FALSE (engine.isExcitationAudible());
+        EXPECT_FLOAT_EQ (output.back(), 0.0f);
+
+        engine.kickUiWatchdog();
+        render();
+        EXPECT_FLOAT_EQ (rmsOf (output, 0), 0.0f);
+        EXPECT_FALSE (engine.consumeUiWatchdogStop());
+    }
 }
 
 } // namespace

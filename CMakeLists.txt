@@ -12,6 +12,10 @@ endif()
 
 project(EasyEQAssistant VERSION 0.1.0 LANGUAGES C CXX)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 if(APPLE)
     enable_language(OBJC OBJCXX)
 endif()
@@ -66,6 +70,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/DSP/RtaSplAnalyzer.cpp
     src/DSP/RtaSplAnalyzer.h
     src/DSP/OctaveSmoother.h
+    src/DSP/CoherenceSummary.h
     src/DSP/PEQ.h
     src/DSP/SweepGenerator.h
     src/DSP/Waterfall.h
@@ -172,6 +177,8 @@ if(EASYEQ_BUILD_TESTS)
     add_executable(EasyEQTests
         tests/AcousticsTests.cpp
         tests/TransferFunctionTests.cpp
+        tests/MeasurementEngineTests.cpp
+        tests/CoherenceSummaryTests.cpp
         tests/DelayEstimatorTests.cpp
         tests/ImpulseResponseTests.cpp
         tests/PEQTests.cpp
@@ -182,7 +189,10 @@ if(EASYEQ_BUILD_TESTS)
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
+        src/Audio/AudioEngine.cpp
+        src/Core/Log.cpp
         src/DSP/TransferFunctionAccumulator.cpp
+        src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp
         src/DSP/ImpulseResponseBuilder.cpp
         src/DSP/EQProposer.cpp
@@ -195,6 +205,7 @@ if(EASYEQ_BUILD_TESTS)
     )
     target_link_libraries(EasyEQTests PRIVATE
         gtest_main
+        juce::juce_audio_devices
         juce::juce_dsp
         # Core/JuceModules.h 経由でGUIモジュールの静的初期化子も参照されるためリンクする
         juce::juce_graphics

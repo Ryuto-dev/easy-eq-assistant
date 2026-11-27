@@ -3,6 +3,7 @@
 #include "RtaSplAnalyzer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 
 namespace eeq::dsp
@@ -26,14 +27,19 @@ MeasurementEngine::~MeasurementEngine()
 
 void MeasurementEngine::startMeasurement()
 {
-    // 前回の測定が残したアセンブリバッファ（直近fftSizeサンプル）を捨てる。
-    // 残っていると再開後の最初のフレームが古い音と混ざる
-    accumulator.resetAverages();
+    // 大きなWelch平均配列の初期化は解析スレッドで行う。測定要求は即時に
+    // 表示しつつ、リセット完了までは新しい平均を取り込まない。
+    measurementGeneration.fetch_add (1, std::memory_order_acq_rel);
+    measurementReady.store (false, std::memory_order_relaxed);
     measuring.store (true, std::memory_order_relaxed);
+    resetRequested.store (true, std::memory_order_release);
 }
 
 void MeasurementEngine::stopMeasurement()
 {
+    measurementGeneration.fetch_add (1, std::memory_order_acq_rel);
+    resetRequested.store (false, std::memory_order_release);
+    measurementReady.store (false, std::memory_order_relaxed);
     measuring.store (false, std::memory_order_relaxed);
 }
 
@@ -144,8 +150,26 @@ void MeasurementEngine::appendCapture (const float* ref, const float* meas, int 
 
 void MeasurementEngine::run()
 {
+    int samplesToSkipForMeasurement = 0;
+
     while (! threadShouldExit())
     {
+        if (resetRequested.exchange (false, std::memory_order_acq_rel))
+        {
+            const auto generation = measurementGeneration.load (std::memory_order_acquire);
+            const auto queuedBeforeReset = ring.samplesAvailable();
+            accumulator.resetAverages();
+
+            // stopMeasurement() や後続の startMeasurement() が先に来た場合、
+            // 古い要求で測定状態を上書きしない。
+            if (generation == measurementGeneration.load (std::memory_order_acquire)
+                && measuring.load (std::memory_order_relaxed))
+            {
+                samplesToSkipForMeasurement = queuedBeforeReset;
+                measurementReady.store (true, std::memory_order_release);
+            }
+        }
+
         // リングバッファを 8ms ごとに吸い出す（フレーム周期は0.34秒以上なので十分）
         int drained = 0;
 
@@ -168,9 +192,18 @@ void MeasurementEngine::run()
             if (auto* analyzer = splAnalyzer.load (std::memory_order_acquire); analyzer != nullptr)
                 analyzer->process (readMeas.data(), got);
 
+            const auto skip = std::min (samplesToSkipForMeasurement, got);
+            samplesToSkipForMeasurement -= skip;
+
             int framesDone = 0;
-            if (measuring.load (std::memory_order_relaxed))
-                framesDone = accumulator.feedSamples (readRef.data(), readMeas.data(), got);
+            if (measuring.load (std::memory_order_relaxed)
+                && measurementReady.load (std::memory_order_acquire)
+                && got > skip)
+            {
+                framesDone = accumulator.feedSamples (readRef.data() + skip,
+                                                      readMeas.data() + skip,
+                                                      got - skip);
+            }
 
             // フレームが完了したら結果を公開（UIスレッドへ、複数購読可・非破壊的）
             if (framesDone > 0)

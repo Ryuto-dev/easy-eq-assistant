@@ -18,7 +18,10 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
         auto& measurement = engine.getMeasurement();
 
         if (measurement.isMeasuring())
+        {
             measurement.stopMeasurement();
+            engine.stopExcitation();
+        }
         else
             measurement.startMeasurement();
     };

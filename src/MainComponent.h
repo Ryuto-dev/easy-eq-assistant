@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "Core/JuceModules.h"
 
@@ -27,7 +29,7 @@
 // 1ウィンドウ構成（仕様 5.1）: 上部バー / タブ領域 / 右パネル（測定設定）/ 下部バー。
 // タブ: 伝達関数 / IR・遅延 / RTA・SPL / EQ案 / 上限測定 / ツール / 会場。
 // 本番モード（5.4）はワンボタンで切り替わる専用画面（LiveModeOverlay）。
-class MainComponent : public juce::Component, private juce::Timer
+class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener
 {
 public:
     MainComponent();
@@ -36,9 +38,12 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
+    bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
 private:
     void timerCallback() override;
+    void updateModalEscapeListener();
+    void attachEscapeListenerRecursively (juce::Component& component);
     void showError (const juce::String& message);
     void applyMeasurementSettings();
     void applyThemeToComponents();
@@ -98,8 +103,11 @@ private:
     eeq::ui::LiveModeOverlay liveOverlay;
 
     uint32_t lastSeenGeneration = 0;
+    std::uint32_t uiWatchdogWarningUntilMs = 0;
     bool errorDialogOpen = false;
     bool wizardShown = false;
+    juce::Component::SafePointer<juce::Component> modalEscapeRoot;
+    std::vector<juce::Component::SafePointer<juce::Component>> modalEscapeTargets;
     juce::Time lastAutoSave; // 定期オートセーブ用（issue #38）
     std::shared_ptr<std::atomic_bool> saveInFlight
         { std::make_shared<std::atomic_bool> (false) }; // 保存の二重実行防止（issue #58）

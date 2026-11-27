@@ -65,6 +65,9 @@ private:
     SampleRingBuffer& ring;
     TransferFunctionAccumulator accumulator;
     std::atomic<bool> measuring { false };
+    std::atomic<bool> measurementReady { false };
+    std::atomic<bool> resetRequested { false };
+    std::atomic<std::uint64_t> measurementGeneration { 0 };
 
     std::vector<float> readRef, readMeas;
 

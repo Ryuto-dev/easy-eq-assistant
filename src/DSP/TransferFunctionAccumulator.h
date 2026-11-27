@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <atomic>
 #include <complex>
 #include <vector>
 
@@ -90,6 +91,7 @@ private:
     std::vector<double> gxx, gyy;
     std::vector<std::complex<double>> gxy;
     long long averages = 0;
+    std::atomic<int> publishedAverages { 0 };
 
     // FFT 作業バッファ（実FFTは 2N floats を使用）
     std::vector<float> fftBufRef, fftBufMeas;

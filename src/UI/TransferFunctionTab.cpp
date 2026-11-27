@@ -8,10 +8,132 @@
 namespace eeq::ui
 {
 
+class TransferFunctionTab::LiveSmoothingWorker final : private juce::Thread
+{
+public:
+    struct Request
+    {
+        std::uint64_t generation = 0;
+        std::shared_ptr<const eeq::dsp::SpectrumFrame> frame;
+        int smoothing = 6;
+        double viewMin = 20.0;
+        double viewMax = 20000.0;
+        int plotWidth = 2;
+        bool applyCorrection = false;
+        std::uint64_t correctionGeneration = 0;
+        eeq::core::SystemCorrection* correction = nullptr;
+    };
+
+    struct Result
+    {
+        std::uint64_t generation = 0;
+        std::shared_ptr<const eeq::dsp::SpectrumFrame> frame;
+        std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> points;
+        int smoothing = 6;
+    };
+
+    LiveSmoothingWorker() : juce::Thread ("Transfer-function smoothing") {}
+    ~LiveSmoothingWorker() override { stopThread (-1); }
+
+    void start()
+    {
+        startThread (juce::Thread::Priority::low);
+    }
+
+    void submit (Request request)
+    {
+        const juce::ScopedLock sl (lock);
+        pending = std::move (request);
+        hasPending = true;
+    }
+
+    bool takeResult (Result& result)
+    {
+        const juce::ScopedLock sl (lock);
+
+        if (! hasResult)
+            return false;
+
+        result = std::move (completed);
+        hasResult = false;
+        return true;
+    }
+
+private:
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            Request request;
+            bool haveRequest = false;
+
+            {
+                const juce::ScopedLock sl (lock);
+
+                if (hasPending)
+                {
+                    request = std::move (pending);
+                    hasPending = false;
+                    haveRequest = true;
+                }
+            }
+
+            if (! haveRequest)
+            {
+                juce::Thread::sleep (4);
+                continue;
+            }
+
+            if (request.frame == nullptr || threadShouldExit())
+                continue;
+
+            auto displayFrame = request.frame;
+
+            if (request.applyCorrection && request.correction != nullptr
+                && request.correction->getGeneration() == request.correctionGeneration
+                && request.correction->matches (*request.frame))
+            {
+                auto corrected = std::make_shared<eeq::dsp::SpectrumFrame>();
+                request.correction->apply (*request.frame, *corrected, true);
+
+                // 補正変更と処理が競合した結果は、次の要求が来るまで表示しない。
+                if (request.correction->getGeneration() == request.correctionGeneration)
+                    displayFrame = std::move (corrected);
+            }
+
+            auto calculated = std::make_shared<std::vector<eeq::dsp::GridPoint>> (
+                eeq::dsp::smoothToLogGrid (*displayFrame, request.smoothing, request.viewMin,
+                                           std::min (request.viewMax, displayFrame->sampleRate * 0.5),
+                                           request.plotWidth));
+
+            Result result;
+            result.generation = request.generation;
+            result.frame = std::move (displayFrame);
+            result.points = std::move (calculated);
+            result.smoothing = request.smoothing;
+
+            {
+                const juce::ScopedLock sl (lock);
+                completed = std::move (result);
+                hasResult = true;
+            }
+        }
+    }
+
+    juce::CriticalSection lock;
+    Request pending;
+    Result completed;
+    bool hasPending = false;
+    bool hasResult = false;
+};
+
 
 TransferFunctionTab::TransferFunctionTab (UiContext& context)
     : ctx (context)
 {
+    liveSmoothingWorker = std::make_unique<LiveSmoothingWorker>();
+    liveSmoothingWorker->start();
+
     addAndMakeVisible (graph);
 
     snapshotList.setColour (juce::ListBox::backgroundColourId, theme::get (theme::ColourId::panelBackground));
@@ -147,64 +269,69 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     refreshSnapshotList();
 }
 
+TransferFunctionTab::~TransferFunctionTab() = default;
+
 void TransferFunctionTab::timerTick()
 {
-    // ロックフリーで最新フレームを取得（UIスレッドでブロックしない）
     auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
-
-    // フレームがなければキャッシュされた最後のフレームを使う（測定停止中でもオーバーレイを表示するため）
-    eeq::dsp::SpectrumFrame frame;
-
-    if (framePtr)
-    {
-        frame = *framePtr; // コピー（システム補正で書き換えるため）
-    }
-    else if (cachedFrameValid)
-    {
-        frame = cachedFrame; // 測定停止中はキャッシュを使う
-    }
-    else
-    {
-        return; // まだ一度もフレームが来ていない
-    }
-
-    // システム補正（ループバック校正。仕様 6.1）: 有効ならインターフェース自身の応答を差し引く
-    if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load() && ctx.correction.matches (frame))
-    {
-        eeq::dsp::SpectrumFrame corrected;
-        ctx.correction.apply (frame, corrected, true);
-        frame = corrected;
-    }
+    if (framePtr == nullptr)
+        framePtr = lastRequestedFrame;
 
     const auto smoothing = ctx.state.smoothingDenom;
     const auto plotWidth = graph.getPlotWidthForCache();
     const auto viewMin = graph.getViewMinForCache();
     const auto viewMax = graph.getViewMaxForCache();
     const bool smoothingChanged = smoothing != cachedSmoothing;
+    const bool applyCorrection = ctx.correction.isActive() && ctx.state.loopbackEnabled.load();
+    const auto correctionGeneration = ctx.correction.getGeneration();
 
-    // ---- 重いスムージング計算をここで実行（paintスレッド外）----
-    const bool frameChanged = ! cachedFrameValid
-                           || frame.averages != cachedFrame.averages
-                           || frame.fftSize != cachedFrame.fftSize
-                           || std::abs (frame.sampleRate - cachedFrame.sampleRate) > 0.5;
-    const bool viewChanged = viewMin != cachedViewMin || viewMax != cachedViewMax
-                          || plotWidth != cachedPlotWidth;
-
-    if (frameChanged || smoothingChanged || viewChanged)
+    if (framePtr != nullptr)
     {
-        const auto effectiveMax = std::min (viewMax, frame.sampleRate * 0.5);
-        cachedLivePoints = eeq::dsp::smoothToLogGrid (frame, smoothing, viewMin, effectiveMax, plotWidth);
-        cachedFrame = frame;
-        cachedFrameValid = true;
-        cachedSmoothing = smoothing;
-        cachedViewMin = viewMin;
-        cachedViewMax = viewMax;
-        cachedPlotWidth = plotWidth;
+        const bool settingsChanged = smoothing != requestedSmoothing
+                                   || std::abs (viewMin - cachedViewMin) > 1.0e-9
+                                   || std::abs (viewMax - cachedViewMax) > 1.0e-9
+                                   || plotWidth != cachedPlotWidth
+                                   || applyCorrection != requestedCorrectionEnabled
+                                   || correctionGeneration != requestedCorrectionGeneration;
+
+        if (settingsChanged)
+            ++settingsGeneration;
+
+        if (settingsChanged || framePtr != lastRequestedFrame)
+        {
+            LiveSmoothingWorker::Request request;
+            request.generation = settingsGeneration;
+            request.frame = framePtr;
+            request.smoothing = smoothing;
+            request.viewMin = viewMin;
+            request.viewMax = viewMax;
+            request.plotWidth = plotWidth;
+            request.applyCorrection = applyCorrection;
+            request.correctionGeneration = correctionGeneration;
+            request.correction = &ctx.correction;
+            liveSmoothingWorker->submit (std::move (request));
+
+            lastRequestedFrame = std::move (framePtr);
+            requestedSmoothing = smoothing;
+            requestedCorrectionEnabled = applyCorrection;
+            requestedCorrectionGeneration = correctionGeneration;
+            cachedViewMin = viewMin;
+            cachedViewMax = viewMax;
+            cachedPlotWidth = plotWidth;
+        }
     }
 
-    // キャッシュ済みポイントをグラフへ渡す（setLiveFrameは軽量版）
-    graph.setLiveFrameCached (cachedLivePoints, frame, smoothing,
-                              ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
+    LiveSmoothingWorker::Result result;
+    if (liveSmoothingWorker->takeResult (result) && result.generation == settingsGeneration)
+    {
+        displayedFrame = std::move (result.frame);
+        displayedPoints = std::move (result.points);
+        displayedSmoothing = result.smoothing;
+    }
+
+    if (displayedFrame != nullptr && displayedPoints != nullptr)
+        graph.setLiveFrameCached (displayedPoints, displayedFrame, displayedSmoothing,
+                                  ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
 
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion
