@@ -97,3 +97,108 @@ TEST (Thd, ShortRecordingIsReportedAsFailure)
     EXPECT_FALSE (result.valid);
     EXPECT_FALSE (result.failureReason.isEmpty());
 }
+
+namespace
+{
+const eeq::dsp::ThdBand* bandAt (const eeq::dsp::ThdResult& result, double nominalHz)
+{
+    for (const auto& band : result.bands)
+        if (std::abs (band.nominalHz - nominalHz) < 1.0e-6)
+            return &band;
+
+    return nullptr;
+}
+
+// RBJ ローパス（双二次、直接形 I）
+struct LowPass
+{
+    double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+
+    LowPass (double fc, double q)
+    {
+        const auto w0 = 2.0 * juce::MathConstants<double>::pi * fc / sampleRate;
+        const auto alpha = std::sin (w0) / (2.0 * q);
+        const auto a0 = 1.0 + alpha;
+        b0 = (1.0 - std::cos (w0)) / 2.0 / a0;
+        b1 = (1.0 - std::cos (w0)) / a0;
+        b2 = b0;
+        a1 = -2.0 * std::cos (w0) / a0;
+        a2 = (1.0 - alpha) / a0;
+    }
+
+    double process (double x)
+    {
+        const auto y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1; x1 = x; y2 = y1; y1 = y;
+        return y;
+    }
+};
+} // namespace
+
+// #114: 250 Hz 未満にだけ 10% の2次歪みがある系（4次 Butterworth LP を通した成分の2乗）。
+// 周波数ごとの THD は 10%/(1+(f/250)^8) になる。エネルギー集約していた旧実装は
+// 約 1.9% と表示していた
+TEST (Thd, LowFrequencyOnlyDistortionIsResolvedPerBand)
+{
+    constexpr double seconds = 10.0; // LimitTestTab と同じ
+    const auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, seconds, 20.0, 20000.0, 1.0f);
+
+    LowPass stage1 (250.0, 0.54119610), stage2 (250.0, 1.30656296);
+    const auto recorded = makeRecording (sweep, 1000, [&] (float v)
+    {
+        const auto low = stage2.process (stage1.process ((double) v));
+        return (float) ((double) v + 0.2 * low * low);
+    });
+
+    const auto result = eeq::dsp::analyzeThdFromSweepRecording (sweep, recorded, sampleRate, seconds, 20.0, 20000.0);
+
+    ASSERT_TRUE (result.valid) << result.failureReason;
+
+    auto expectedPercent = [] (double f) { return 10.0 / (1.0 + std::pow (f / 250.0, 8.0)); };
+
+    for (const auto nominalHz : { 40.0, 63.0, 100.0, 160.0 })
+    {
+        const auto* band = bandAt (result, nominalHz);
+        ASSERT_NE (band, nullptr) << nominalHz;
+        EXPECT_NEAR (band->thdPercent, expectedPercent (band->centerHz), 0.5) << nominalHz;
+        EXPECT_NEAR (band->harmonicPercent[0], band->thdPercent, 0.05) << nominalHz; // 2次だけ
+    }
+
+    for (const auto nominalHz : { 1000.0, 4000.0 })
+    {
+        const auto* band = bandAt (result, nominalHz);
+        ASSERT_NE (band, nullptr) << nominalHz;
+        EXPECT_LT (band->thdPercent, 0.1) << nominalHz;
+    }
+
+    // 代表値は最悪バンド（低域）の値: 約 10%
+    EXPECT_NEAR (result.thdPercent, 10.0, 0.5);
+    EXPECT_LE (result.worstFrequencyHz, 160.0);
+    EXPECT_NEAR (result.harmonicPercent[0], result.thdPercent, 0.05);
+}
+
+// #114: 逆フィルタの正則化 ε = 1e-3·max|X|² は 20 kHz で −6 dB 減衰させるため、
+// 補正しないと高域の高調波が過小評価される（6.3 kHz で約 4%）。周波数に依らない
+// 5% の2次歪みが 100 Hz でも 6.3 kHz（2次は 12.6 kHz）でも 5% と出る
+TEST (Thd, RegularisationLossIsCompensatedAtHighFrequency)
+{
+    const auto sweep = makeSweep (2.0);
+    const auto recorded = makeRecording (sweep, 1000, [] (float v)
+    {
+        const auto x = (double) v;
+        return (float) (x + 0.1 * x * x);
+    });
+
+    const auto result = eeq::dsp::analyzeThdFromSweepRecording (sweep, recorded, sampleRate, 2.0, 20.0, 20000.0);
+
+    ASSERT_TRUE (result.valid) << result.failureReason;
+
+    for (const auto nominalHz : { 100.0, 1000.0, 4000.0, 6300.0 })
+    {
+        const auto* band = bandAt (result, nominalHz);
+        ASSERT_NE (band, nullptr) << nominalHz;
+        EXPECT_NEAR (band->thdPercent, 5.0, 0.25) << nominalHz;
+    }
+
+    EXPECT_NEAR (result.thdPercent, 5.0, 0.3);
+}
