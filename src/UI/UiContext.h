@@ -32,6 +32,7 @@ struct UiState
     std::vector<eeq::dsp::GridPoint> targetPoints;    // ターゲット曲線（EQ案タブが更新）
     std::vector<eeq::dsp::GridPoint> predictionPoints; // EQ予測（補正後）カーブ
     std::vector<eeq::dsp::peq::Band> proposedBands;   // 補正EQ案（EQ案タブが更新）
+    double targetLevelOffsetDb = 0.0;                 // ターゲットを測定の全体レベルへ合わせた量（issue #109）
 };
 
 // タブに渡す共有コンテキスト

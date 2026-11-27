@@ -493,4 +493,7 @@ inline const juce::String clearProjectButton { u8"プロジェクトをクリア
 inline const juce::String systemsSetTarget { u8"測定対象にする" };
 inline const juce::String systemsSetTargetTooltip { u8"選択中の系統だけから励起信号を出す（行のダブルクリックでも可）" };
 
+inline const juce::String eqLevelAlignedPrefix { u8"ターゲットのレベル合わせ: " };
+inline const juce::String eqLevelAlignTooltip { u8"測定の絶対レベルは機器のゲインで決まるため、補正範囲内の中央値にターゲットを合わせてから EQ 案を作る" };
+
 } // namespace eeq::strings

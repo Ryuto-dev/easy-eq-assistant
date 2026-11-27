@@ -63,7 +63,9 @@ public:
         minConfidence: 有効とみなす最小 confidence（既定 5.0） */
     [[nodiscard]] DelayEstimate estimateCurrentDelay (bool usePhat, double minConfidence = 5.0) const;
 
-    static constexpr int captureCapacity = 1 << 20; // 遅延推定用の直近バッファ（両ch合計で1MB）
+    // 遅延推定・THD 用の直近バッファ。2^21 サンプル（96 kHz で約 21.8 秒）: THD のスイープ 10 秒＋残響を
+    // 96 kHz でも取れる長さ（issue #114。2^20 だと 96 kHz で常に録音長不足になっていた）。両chで 16 MB
+    static constexpr int captureCapacity = 1 << 21;
 
 private:
     void run() override;

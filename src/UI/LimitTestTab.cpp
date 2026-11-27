@@ -571,9 +571,27 @@ void LimitTestTab::timerTick()
                         harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ")
                                       + juce::String (result.harmonicPercent[(size_t) (k - 2)], 2) + "%";
 
+                    // 周波数ごとの THD（issue #114）: 代表値は最も歪んだ帯域。低域・中域・高域の値も並べる
+                    juce::String bandText;
+
+                    for (const auto target : { 63.0, 250.0, 1000.0, 4000.0 })
+                    {
+                        const eeq::dsp::ThdBand* nearest = nullptr;
+
+                        for (const auto& band : result.bands)
+                            if (nearest == nullptr || std::abs (std::log (band.centerHz / target))
+                                                          < std::abs (std::log (nearest->centerHz / target)))
+                                nearest = &band;
+
+                        if (nearest != nullptr && std::abs (std::log2 (nearest->centerHz / target)) < 0.5)
+                            bandText << "  " << juce::String (nearest->nominalHz, 0) << " Hz: "
+                                     << juce::String (nearest->thdPercent, 2) << "%";
+                    }
+
                     safeThis->thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
                                                     + " dBFS   THD: " + juce::String (result.thdPercent, 2)
-                                                    + "%   (" + harmonicText + ")",
+                                                    + "% @ " + juce::String (result.worstFrequencyHz, 0) + " Hz   ("
+                                                    + harmonicText + ")" + (bandText.isNotEmpty() ? "\n" + bandText.trim() : juce::String()),
                                                 juce::dontSendNotification);
                     eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)
                                      + "% at " + juce::String (level, 1) + " dBFS");

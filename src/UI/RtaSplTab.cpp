@@ -352,6 +352,7 @@ void RtaSplTab::timerTick()
     if (! analyzer.tryCopyAll (frame, spl))
         return; // 解析中なら前回表示を維持し、UIスレッドは待たない
     rtaCenters = frame.centerFreq;
+    rtaNominals = frame.nominalFreq.size() == frame.centerFreq.size() ? frame.nominalFreq : frame.centerFreq;
     rtaLevels = frame.levelDb;
     rtaPeakLevels = frame.peakHoldDb;
     lastSplDb = spl.currentDb;
@@ -734,13 +735,20 @@ void RtaSplTab::paint (juce::Graphics& g)
 
     for (int i = 0; i < count; ++i)
     {
-        const auto f = rtaCenters[(size_t) i];
-        const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
+        // ラベルは公称周波数（IEC 61260 の 1 kHz 基準: issue #116）のオクターブ系列だけ
+        const auto f = i < (int) rtaNominals.size() ? rtaNominals[(size_t) i] : rtaCenters[(size_t) i];
+        static constexpr double labelled[] = { 31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0 };
+        bool show = false;
 
-        if (std::abs (stepsFrom20 - std::round (stepsFrom20)) >= 0.05)
+        for (const auto l : labelled)
+            show = show || std::abs (f - l) < l * 0.01;
+
+        if (! show)
             continue;
 
-        const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
+        const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k"
+                                      : (f < 100.0 && std::abs (f - std::round (f)) > 0.01 ? juce::String (f, 1)
+                                                                                           : juce::String ((int) f));
         const auto x = plotArea.getX() + ((float) i + 0.5f) * barWidth;
         g.drawText (text, (int) x - 22, (int) plotArea.getBottom() + 2, 44, 12, juce::Justification::centred);
     }

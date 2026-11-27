@@ -51,6 +51,7 @@ private:
 
     // Issue #149: EQ専用グラフ
     FrequencyGraphView eqGraph;
+    juce::Label levelAlignLabel;
 
     // 帯域一覧と手動調整
     juce::ListBox bandList { {}, this };

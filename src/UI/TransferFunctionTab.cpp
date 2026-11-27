@@ -905,6 +905,7 @@ void TransferFunctionTab::pushOverlayTraces()
             trace.name = strings::eqTargetLabel;
             trace.colour = theme::get (theme::ColourId::ok);
             trace.dashed = true;
+            trace.dbOffset = ctx.state.targetLevelOffsetDb; // EQ案と同じ基準で重ねる（issue #109）
             trace.columns = std::move (columns);
             traces.push_back (std::move (trace));
         }

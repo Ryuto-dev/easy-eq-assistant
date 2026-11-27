@@ -43,7 +43,7 @@ private:
     juce::ComboBox bandsCombo, avgTimeCombo;
     juce::Label bandsTitle, avgTimeTitle;
     juce::TextButton peakHoldResetButton, splResetButton;
-    std::vector<double> rtaCenters;
+    std::vector<double> rtaCenters, rtaNominals;
     std::vector<float> rtaLevels, rtaPeakLevels;
 
     // ---- SPL ----

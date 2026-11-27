@@ -119,6 +119,10 @@ EQTab::EQTab (UiContext& context)
     // Issue #149: EQ専用グラフ
     addAndMakeVisible (eqGraph);
 
+    styleLabel (levelAlignLabel);
+    levelAlignLabel.setTooltip (strings::eqLevelAlignTooltip);
+    addAndMakeVisible (levelAlignLabel);
+
     // ---- 帯域一覧 ----
     bandTitle.setText (strings::eqSection, juce::dontSendNotification);
     styleLabel (bandTitle, 12.0f, false);
@@ -313,7 +317,7 @@ void EQTab::runProposal()
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
-    if (frame.averages == 0)
+    if (frame.averages < 2)
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::eqSection,
@@ -407,6 +411,15 @@ void EQTab::runProposal()
 
     lastResult = eeq::dsp::proposeEQ (input);
     hasResult = true;
+
+    // ターゲットは測定の全体レベル（補正範囲内の中央値）に合わせてから比べている（issue #109）。
+    // 表示も同じだけずらして、予測とターゲットが同じ基準で重なるようにする
+    targetDisplayOffsetDb = lastResult.appliedLevelOffsetDb;
+    ctx.state.targetLevelOffsetDb = targetDisplayOffsetDb;
+    ctx.state.eqVersion.fetch_add (1);
+    levelAlignLabel.setText (strings::eqLevelAlignedPrefix + (targetDisplayOffsetDb >= 0 ? "+" : "")
+                                 + juce::String (targetDisplayOffsetDb, 1) + " dB",
+                             juce::dontSendNotification);
 
     // 提案を共有する（TFタブが予測カーブを重ね描きする。仕様 4.4）
     ctx.state.proposedBands = lastResult.bands;
@@ -689,6 +702,7 @@ void EQTab::resized()
 
     left.removeFromTop (8);
     convergenceLabel.setBounds (left.removeFromTop (18));
+    levelAlignLabel.setBounds (left.removeFromTop (18));
 
     // 右: EQグラフ + 帯域一覧と手動調整
     auto graphHeight = juce::jmin (240, right.getHeight() / 2);
