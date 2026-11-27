@@ -344,7 +344,8 @@ void RtaSplTab::timerTick()
     // RTAとSPLを1回のロックで取得する（issue #37）
     eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    analyzer.copyAll (frame, spl);
+    if (! analyzer.tryCopyAll (frame, spl))
+        return; // 解析中なら前回表示を維持し、UIスレッドは待たない
     rtaCenters = frame.centerFreq;
     rtaLevels = frame.levelDb;
     rtaPeakLevels = frame.peakHoldDb;
@@ -452,7 +453,8 @@ void RtaSplTab::processCalibrationPending()
 
     auto& analyzer = ctx.engine.getSplAnalyzer();
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    analyzer.copySpl (spl);
+    if (! analyzer.tryCopySpl (spl))
+        return; // calibration待ちもメッセージスレッドをブロックしない
 
     if (spl.hasSignal)
     {

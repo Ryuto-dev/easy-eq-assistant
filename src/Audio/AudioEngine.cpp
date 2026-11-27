@@ -236,17 +236,34 @@ void AudioEngine::clearClipLatches() noexcept
 void AudioEngine::startExcitation() noexcept
 {
     // ログは呼び出し側（UI）が取る（issue #57: エンジンの public メソッドを RT 安全に保つ）
+    uiWatchdogStopPending.store (false, std::memory_order_relaxed);
+    uiWatchdogDeadlineSamples.store (audioSampleCounter.load (std::memory_order_relaxed)
+                                         + uiWatchdogTimeoutSamples.load (std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
+    uiWatchdogArmed.store (true, std::memory_order_release);
     noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
 }
 
 void AudioEngine::stopExcitation() noexcept
 {
+    uiWatchdogArmed.store (false, std::memory_order_release);
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
+}
+
+void AudioEngine::kickUiWatchdog() noexcept
+{
+    if (! uiWatchdogArmed.load (std::memory_order_acquire))
+        return;
+
+    const auto deadline = audioSampleCounter.load (std::memory_order_relaxed)
+                        + uiWatchdogTimeoutSamples.load (std::memory_order_relaxed);
+    uiWatchdogDeadlineSamples.store (deadline, std::memory_order_release);
 }
 
 void AudioEngine::emergencyStop() noexcept
 {
     eeq::log::write ("EMERGENCY STOP (Esc): stopping output and measurement");
+    uiWatchdogArmed.store (false, std::memory_order_release);
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
     measurement.stopMeasurement();
 }
@@ -374,6 +391,11 @@ void AudioEngine::startCalibrationSignal (CalibrationSignal signal)
     }
 
     // 校正信号は現在の出力レベル設定（既定 −20 dBFS）で出す
+    uiWatchdogStopPending.store (false, std::memory_order_relaxed);
+    uiWatchdogDeadlineSamples.store (audioSampleCounter.load (std::memory_order_relaxed)
+                                         + uiWatchdogTimeoutSamples.load (std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
+    uiWatchdogArmed.store (true, std::memory_order_release);
     noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
     eeq::log::write ("calibration signal: started");
 }
@@ -424,6 +446,21 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                                                     float* const* outputChannelData, int numOutputChannels,
                                                     int numSamples, const juce::AudioIODeviceCallbackContext&)
 {
+    const auto callbackSample = audioSampleCounter.fetch_add ((std::uint64_t) juce::jmax (0, numSamples),
+                                                               std::memory_order_relaxed)
+                             + (std::uint64_t) juce::jmax (0, numSamples);
+
+    // UI timerが止まった場合、stopコマンドをRT側で発行し、既存のフェード処理へ流す。
+    // 時計・ロック・ログ・メモリ確保は使わない（issue #60）。
+    if (uiWatchdogArmed.load (std::memory_order_acquire)
+        && callbackSample >= uiWatchdogDeadlineSamples.load (std::memory_order_acquire)
+        && uiWatchdogArmed.exchange (false, std::memory_order_acq_rel))
+    {
+        uiWatchdogStopPending.store (true, std::memory_order_release);
+        measurement.stopMeasurement();
+        noiseCommand.store (NoiseCommand::stop, std::memory_order_release);
+    }
+
     const auto refIndex = refChannel.load (std::memory_order_relaxed);
     const auto measIndex = measChannel.load (std::memory_order_relaxed);
     const auto refIsInternal = refIndex == internalRefChannel;
@@ -700,6 +737,9 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     fadeInLength.store ((int) (fadeInSeconds * sampleRate), std::memory_order_relaxed);
     fadeOutLength.store ((int) (fadeOutSeconds * sampleRate), std::memory_order_relaxed);
+    uiWatchdogTimeoutSamples.store (uiWatchdogTimeoutSamplesFor (
+                                        sampleRate, device->getCurrentBufferSizeSamples()),
+                                    std::memory_order_release);
     deviceGeneration.fetch_add (1, std::memory_order_relaxed);
 
     // デバイスが変わると前のデバイスのチャンネル番号が範囲外になることがある。
@@ -752,11 +792,19 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     {
         noiseState.store (NoiseState::fadeOut, std::memory_order_relaxed);
         fadePosition.store (0, std::memory_order_relaxed);
+        uiWatchdogStopPending.store (false, std::memory_order_relaxed);
+        uiWatchdogDeadlineSamples.store (audioSampleCounter.load (std::memory_order_relaxed)
+                                             + uiWatchdogTimeoutSamples.load (std::memory_order_relaxed),
+                                         std::memory_order_relaxed);
+        uiWatchdogArmed.store (true, std::memory_order_release);
         noiseCommand.store (NoiseCommand::start, std::memory_order_relaxed);
     }
 }
 
-void AudioEngine::audioDeviceStopped() {}
+void AudioEngine::audioDeviceStopped()
+{
+    uiWatchdogArmed.store (false, std::memory_order_release);
+}
 
 void AudioEngine::audioDeviceError (const juce::String& errorMessage)
 {
@@ -764,6 +812,7 @@ void AudioEngine::audioDeviceError (const juce::String& errorMessage)
     // だけにする（issue #57: エラー処理でのファイルI/O・ロックを撤去）。
     // ログ出力と測定の停止は consumeDeviceError() を呼ぶメッセージスレッド側で行う
     noiseCommand.store (NoiseCommand::stop, std::memory_order_relaxed);
+    uiWatchdogArmed.store (false, std::memory_order_release);
     measurement.stopMeasurement(); // atomic フラグのみで RT 安全
 
     {

@@ -5,6 +5,9 @@
 #include "FrequencyGraphView.h"
 #include "UiContext.h"
 
+#include <cstdint>
+#include <memory>
+
 namespace eeq::ui
 {
 
@@ -16,6 +19,7 @@ class TransferFunctionTab : public juce::Component,
 {
 public:
     explicit TransferFunctionTab (UiContext& context);
+    ~TransferFunctionTab() override;
 
     /** 30Hzタイマーから呼ぶ */
     void timerTick();
@@ -32,6 +36,8 @@ public:
     void exportGraphPng();
 
 private:
+    class LiveSmoothingWorker;
+
     // ListBoxModel
     int getNumRows() override;
     void paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int height,
@@ -55,10 +61,15 @@ private:
     uint32_t lastSeenEqVersion = 0;
     juce::Rectangle<int> graphBounds;
 
-    // ---- キャッシュ: スムージング済みグリッドポイント（paintスレッド外で計算）----
-    std::vector<eeq::dsp::GridPoint> cachedLivePoints;
-    eeq::dsp::SpectrumFrame cachedFrame; // フレームの指紋（averages/fftSize/sampleRate等）で変化検出
-    bool cachedFrameValid = false;
+    // ---- 表示用平滑化はワーカーで計算し、UIと共有ポインタで受け渡す ----
+    std::unique_ptr<LiveSmoothingWorker> liveSmoothingWorker;
+    std::shared_ptr<const eeq::dsp::SpectrumFrame> lastRequestedFrame;
+    std::shared_ptr<const eeq::dsp::SpectrumFrame> displayedFrame;
+    std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> displayedPoints;
+    std::uint64_t renderGeneration = 0;
+    std::uint64_t requestedCorrectionGeneration = 0;
+    bool requestedCorrectionEnabled = false;
+    int requestedSmoothing = -1;
     double cachedViewMin = 0.0;
     double cachedViewMax = 0.0;
     int cachedPlotWidth = 0;

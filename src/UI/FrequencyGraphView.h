@@ -7,6 +7,7 @@
 #include "LogFrequencyGraph.h"
 
 #include <complex>
+#include <memory>
 #include <vector>
 
 namespace eeq::ui
@@ -39,9 +40,10 @@ public:
     void setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
                        double appliedDelaySamples, bool showRawPhase);
 
-    /** 軽量版: timerTick で事前計算済みの GridPoint を受け取る（paint では単に columns へコピー） */
-    void setLiveFrameCached (const std::vector<eeq::dsp::GridPoint>& points,
-                             const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
+    /** ワーカーの事前計算結果を共有し、新しい点列が届いたときだけ描画列へ変換する */
+    void setLiveFrameCached (std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> points,
+                             std::shared_ptr<const eeq::dsp::SpectrumFrame> frame,
+                             int smoothingOctDenom,
                              double appliedDelaySamples, bool showRawPhase);
 
     /** plotArea の幅を返す（キャッシュ計算用） */
@@ -79,6 +81,8 @@ private:
 
     void rebuildLive();
     void rebuildOverlays();
+    const eeq::dsp::SpectrumFrame& currentFrame() const noexcept
+    { return currentFrameShared != nullptr ? *currentFrameShared : current; }
 
     juce::Rectangle<float> plotArea() const;
     juce::Rectangle<float> amplitudeArea (const juce::Rectangle<float>& plot) const;
@@ -87,6 +91,8 @@ private:
     LogFrequencyAxis axis;
 
     eeq::dsp::SpectrumFrame current;
+    std::shared_ptr<const eeq::dsp::SpectrumFrame> currentFrameShared;
+    std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> cachedLivePoints;
     std::vector<DisplayColumn> columns;
     double appliedDelaySamples = 0.0;
     bool showRawPhase = false;

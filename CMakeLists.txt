@@ -12,6 +12,10 @@ endif()
 
 project(EasyEQAssistant VERSION 0.1.0 LANGUAGES C CXX)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 if(APPLE)
     enable_language(OBJC OBJCXX)
 endif()
@@ -66,6 +70,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/DSP/RtaSplAnalyzer.cpp
     src/DSP/RtaSplAnalyzer.h
     src/DSP/OctaveSmoother.h
+    src/DSP/CoherenceSummary.h
     src/DSP/PEQ.h
     src/DSP/SweepGenerator.h
     src/DSP/Waterfall.h
@@ -172,6 +177,8 @@ if(EASYEQ_BUILD_TESTS)
     add_executable(EasyEQTests
         tests/AcousticsTests.cpp
         tests/TransferFunctionTests.cpp
+        tests/MeasurementEngineTests.cpp
+        tests/CoherenceSummaryTests.cpp
         tests/DelayEstimatorTests.cpp
         tests/ImpulseResponseTests.cpp
         tests/PEQTests.cpp
@@ -183,6 +190,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
         src/DSP/TransferFunctionAccumulator.cpp
+        src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp
         src/DSP/ImpulseResponseBuilder.cpp
         src/DSP/EQProposer.cpp

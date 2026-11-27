@@ -2,6 +2,7 @@
 
 #include "../Core/Log.h"
 #include "../Core/Utilities.h"
+#include "../DSP/CoherenceSummary.h"
 #include "../DSP/SweepGenerator.h"
 #include "../DSP/ThdAnalyzer.h"
 #include "Buttons.h"
@@ -230,7 +231,13 @@ LimitTestTab::~LimitTestTab()
 {
     // テスト中に閉じられたら必ず止める（安全設計: 仕様 3.7）
     if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning)
+    {
+        ctx.engine.getMeasurement().stopMeasurement();
         ctx.engine.stopExcitation();
+    }
+
+    if (thdAnalysisThread.joinable())
+        thdAnalysisThread.join();
 
     restoreCeilingAfterTest();
 }
@@ -258,8 +265,32 @@ void LimitTestTab::restoreCeilingAfterTest()
 double LimitTestTab::currentSplFast()
 {
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    ctx.engine.getSplAnalyzer().copySpl (spl);
-    return spl.hasSignal ? spl.currentDb : -300.0;
+
+    if (ctx.engine.getSplAnalyzer().tryCopySpl (spl))
+        cachedSplDb = spl.hasSignal ? spl.currentDb : -300.0;
+
+    return cachedSplDb;
+}
+
+void LimitTestTab::updateCoherenceNote (const eeq::dsp::SpectrumFrame* frame)
+{
+    juce::String text;
+
+    if (frame != nullptr)
+    {
+        const auto summary = eeq::dsp::summarizeLowBandCoherence (*frame);
+
+        if (summary.hasData && summary.worstCoherence < 0.8f)
+        {
+            text = juce::String (u8"低域のコヒーレンス低下: 約 ")
+                 + juce::String (summary.worstFrequencyHz, 0) + juce::String (u8" Hz で γ² ")
+                 + juce::String (summary.worstCoherence, 2)
+                 + juce::String (u8"（歪みの兆候の可能性）");
+        }
+    }
+
+    if (coherenceNoteLabel.getText() != text)
+        coherenceNoteLabel.setText (text, juce::dontSendNotification);
 }
 
 void LimitTestTab::startStepTest()
@@ -299,6 +330,7 @@ void LimitTestTab::startStepTest()
 
 void LimitTestTab::stopTest (bool automatic)
 {
+    ++thdGeneration; // 進行中のバックグラウンド解析結果を無効化
     stepPhase = Phase::idle;
     thdPhase = ThdPhase::idle;
     thermalRunning = false;
@@ -318,14 +350,15 @@ void LimitTestTab::stopTest (bool automatic)
 void LimitTestTab::startThdTest()
 {
     if (stepPhase != Phase::idle || thdPhase != ThdPhase::idle || thermalRunning
+        || thdAnalysisInFlight.load (std::memory_order_acquire)
         || ! acknowledgeToggle.getToggleState())
         return;
 
     // 対数スイープを鳴らしてIRから高調波を分離する（仕様 3.7）
     // ピーク1.0で生成（issue #29: レベルはオーディオスレッドがRMS基準で掛ける）
     thdLevel = ctx.engine.getNoiseLevelDb();
-    const auto sampleRate = ctx.engine.getCurrentSampleRate();
-    auto sweep = eeq::dsp::LogSweepGenerator::generate (sampleRate, 10.0, 20.0, 20000.0, 1.0f);
+    thdSampleRate = ctx.engine.getCurrentSampleRate();
+    auto sweep = eeq::dsp::LogSweepGenerator::generate (thdSampleRate, 10.0, 20.0, 20000.0, 1.0f);
     ctx.engine.setSweep (std::move (sweep));
     ctx.engine.startExcitation();
     ctx.engine.getMeasurement().startMeasurement();
@@ -366,18 +399,28 @@ void LimitTestTab::updateControlState()
 {
     const auto thdActive = thdPhase != ThdPhase::idle;
     const auto stepActive = stepPhase != Phase::idle;
+    const auto analysisActive = thdAnalysisInFlight.load (std::memory_order_acquire);
 
     // Keep only the active test's stop control available; no other test may
     // replace its excitation or measurement while it is running.
-    startButton.setEnabled (! thdActive);
-    thermalButton.setEnabled (! thdActive && (! stepActive || thermalRunning));
-    thdButton.setEnabled (thdActive || (! stepActive && ! thermalRunning));
+    startButton.setEnabled (! thdActive && ! analysisActive);
+    thermalButton.setEnabled (! thdActive && ! analysisActive && (! stepActive || thermalRunning));
+    thdButton.setEnabled (thdActive || (! analysisActive && ! stepActive && ! thermalRunning));
 }
 
 void LimitTestTab::timerTick()
 {
     // 各測定の進行（メッセージスレッドで時分割。仕様 2. の (4) に沿い、重い処理は測定後に行う）
     const auto now = juce::Time::getCurrentTime();
+
+    // 新しい解析フレームの到着時だけ要約する。paint()は描画だけに保つ（issue #61）。
+    auto frame = ctx.engine.getMeasurement().getLatestFrame();
+
+    if (frame != lastCoherenceFrame)
+    {
+        lastCoherenceFrame = frame;
+        updateCoherenceNote (frame.get());
+    }
 
     // ---- レベルステップ ----
     if (stepPhase != Phase::idle)
@@ -442,59 +485,106 @@ void LimitTestTab::timerTick()
     // ---- THD ----
     if (thdPhase == ThdPhase::playing && now > thdDeadline)
     {
-        thdPhase = ThdPhase::idle;
+        thdPhase = ThdPhase::waiting;
         ctx.engine.stopExcitation();
         ctx.engine.getMeasurement().stopMeasurement();
-        thdButton.setButtonText (strings::limitThdButton);
         updateControlState();
 
-        // 録音したスイープを逆フィルタでデコンボリューションし、高調波を分離する
-        //（Farina法。issue #30: Welch平均のH1からは高調波は原理的に分離できない）
-        std::vector<float> recordedRef, recordedMeas;
-        const auto sampleRate = ctx.engine.getCurrentSampleRate();
+        // 録音コピー（最大約1.1Mサンプル）とFarina法のFFTをUIから外す。
+        // MeasurementEngineはLimitTestTabより長生きし、デストラクタでこのthreadをjoinする。
+        if (thdAnalysisThread.joinable())
+            thdAnalysisThread.join();
+
+        const auto sampleRate = thdSampleRate;
         const auto captureSamples = (int) std::llround (11.5 * std::max (8000.0, sampleRate));
-        ctx.engine.getMeasurement().copyRecentSamplesExact (captureSamples, recordedRef, recordedMeas);
+        auto* measurement = &ctx.engine.getMeasurement();
+        auto* inFlight = &thdAnalysisInFlight;
+        const auto level = thdLevel;
+        const auto generation = ++thdGeneration;
+        juce::Component::SafePointer<LimitTestTab> safeThis { this };
+        thdAnalysisInFlight.store (true, std::memory_order_release);
+        thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
+                              + juce::String (u8" dBFS — 解析中…"),
+                          juce::dontSendNotification);
 
-        float refPeak = 0.0f;
-
-        for (const auto sample : recordedRef)
-            refPeak = std::max (refPeak, std::abs (sample));
-
-        if (refPeak < 1.0e-4f)
+        try
         {
-            thdLabel.setText (juce::String (u8"基準信号（Ref）が録音できていません。内部参照またはRef入力の割り当てを確認してください"),
-                              juce::dontSendNotification);
-            eeq::log::write ("limit test: THD FAILED (reference not captured)");
+            thdAnalysisThread = std::thread ([safeThis, measurement, inFlight, captureSamples,
+                                               sampleRate, level, generation]
+            {
+                std::vector<float> recordedRef, recordedMeas;
+                const auto copied = measurement->copyRecentSamplesExact (captureSamples,
+                                                                          recordedRef, recordedMeas);
+                float refPeak = 0.0f;
+
+                for (const auto sample : recordedRef)
+                    refPeak = std::max (refPeak, std::abs (sample));
+
+                const auto referenceCaptured = copied && refPeak >= 1.0e-4f;
+                eeq::dsp::ThdResult result;
+
+                if (referenceCaptured)
+                    result = eeq::dsp::analyzeThdFromSweepRecording (recordedRef, recordedMeas,
+                                                                     sampleRate, 10.0, 20.0, 20000.0);
+
+                inFlight->store (false, std::memory_order_release);
+                juce::MessageManager::callAsync ([safeThis, generation, level, referenceCaptured,
+                                                   result = std::move (result)] () mutable
+                {
+                    if (safeThis == nullptr)
+                        return;
+
+                    if (safeThis->thdGeneration != generation)
+                    {
+                        safeThis->updateControlState();
+                        return;
+                    }
+
+                    safeThis->thdPhase = ThdPhase::idle;
+                    safeThis->thdButton.setButtonText (strings::limitThdButton);
+                    safeThis->updateControlState();
+
+                    if (! referenceCaptured)
+                    {
+                        safeThis->thdLabel.setText (
+                            juce::String (u8"基準信号（Ref）が録音できていません。内部参照またはRef入力の割り当てを確認してください"),
+                            juce::dontSendNotification);
+                        eeq::log::write ("limit test: THD FAILED (reference not captured)");
+                        return;
+                    }
+
+                    if (! result.valid)
+                    {
+                        safeThis->thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
+                                                        + juce::String (u8" dBFS   ") + result.failureReason,
+                                                    juce::dontSendNotification);
+                        eeq::log::write ("limit test: THD FAILED: " + result.failureReason);
+                        return;
+                    }
+
+                    juce::String harmonicText;
+
+                    for (int k = 2; k <= 5; ++k)
+                        harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ")
+                                      + juce::String (result.harmonicPercent[(size_t) (k - 2)], 2) + "%";
+
+                    safeThis->thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
+                                                    + " dBFS   THD: " + juce::String (result.thdPercent, 2)
+                                                    + "%   (" + harmonicText + ")",
+                                                juce::dontSendNotification);
+                    eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)
+                                     + "% at " + juce::String (level, 1) + " dBFS");
+                });
+            });
         }
-        else
+        catch (...)
         {
-            const auto result = eeq::dsp::analyzeThdFromSweepRecording (recordedRef, recordedMeas,
-                                                                        sampleRate, 10.0, 20.0, 20000.0);
-
-            if (! result.valid)
-            {
-                thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1)
-                                      + juce::String (u8" dBFS   ") + result.failureReason,
-                                  juce::dontSendNotification);
-                eeq::log::write ("limit test: THD FAILED: " + result.failureReason);
-            }
-            else
-            {
-                juce::String harmonicText;
-
-                for (int k = 2; k <= 5; ++k)
-                    harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ")
-                                  + juce::String (result.harmonicPercent[(size_t) (k - 2)], 2) + "%";
-
-                thdLabel.setText (strings::limitThdLevel + ": " + juce::String (thdLevel, 1)
-                                      + " dBFS   THD: " + juce::String (result.thdPercent, 2) + "%   ("
-                                      + harmonicText + ")",
-                                  juce::dontSendNotification);
-
-                // 歪みが急に増えるレベルも上限の目安に加える（仕様 3.7）。ここでは表示まで
-                eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)
-                                 + "% at " + juce::String (thdLevel, 1) + " dBFS");
-            }
+            thdAnalysisInFlight.store (false, std::memory_order_release);
+            thdPhase = ThdPhase::idle;
+            thdButton.setButtonText (strings::limitThdButton);
+            thdLabel.setText (juce::String (u8"THD解析用スレッドを開始できませんでした"),
+                              juce::dontSendNotification);
+            updateControlState();
         }
     }
 
@@ -573,47 +663,6 @@ void LimitTestTab::updateSuggestion()
 void LimitTestTab::paint (juce::Graphics& g)
 {
     g.fillAll (theme::get (theme::ColourId::windowBackground));
-
-    // コヒーレンス低下の併記（仕様 3.7: 落ち始める帯域とレベル）
-    auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
-    if (! framePtr)
-        return;
-    const eeq::dsp::SpectrumFrame& frame = *framePtr;
-
-    if (frame.averages > 0 && ! frame.coherence.empty())
-    {
-        const auto binWidth = frame.sampleRate / (double) frame.fftSize;
-        double worstCoherence = 1.0;
-        double worstFreq = 0.0;
-
-        for (int k = 1; k < (int) frame.coherence.size(); ++k)
-        {
-            const auto freq = (double) k * binWidth;
-
-            if (freq < 40.0 || freq > 500.0)
-                continue;
-
-            if (frame.coherence[(size_t) k] < worstCoherence)
-            {
-                worstCoherence = frame.coherence[(size_t) k];
-                worstFreq = freq;
-            }
-        }
-
-        if (worstCoherence < 0.8)
-        {
-            coherenceNoteLabel.setText (juce::String (u8"低域のコヒーレンス低下: 約 ")
-                                            + juce::String (worstFreq, 0) + juce::String (u8" Hz で γ² ")
-                                            + juce::String (worstCoherence, 2)
-                                            + juce::String (u8"（歪みの兆候の可能性）"),
-                                        juce::dontSendNotification);
-        }
-        else
-        {
-            // 回復したら警告を消す（消す経路がないと一度出た警告が残り続ける）
-            coherenceNoteLabel.setText ({}, juce::dontSendNotification);
-        }
-    }
 }
 
 void LimitTestTab::resized()

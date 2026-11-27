@@ -6,6 +6,7 @@
 #include <juce_core/juce_core.h>
 
 #include <complex>
+#include <cstdint>
 
 namespace eeq::core
 {
@@ -25,6 +26,7 @@ public:
         delaySamples = roundtripDelaySamples;
         active = true;
         measuredAt = juce::Time::getCurrentTime();
+        generationCounter.fetch_add (1, std::memory_order_release);
     }
 
     void clear()
@@ -33,9 +35,11 @@ public:
         frame = {};
         delaySamples = 0.0;
         active = false;
+        generationCounter.fetch_add (1, std::memory_order_release);
     }
 
     bool isActive() const noexcept { return active.load (std::memory_order_relaxed); }
+    std::uint64_t getGeneration() const noexcept { return generationCounter.load (std::memory_order_acquire); }
     double getRoundtripDelaySamples() const noexcept { return delaySamples.load (std::memory_order_relaxed); }
     juce::Time getMeasuredAt() const { return measuredAt; }
 
@@ -125,6 +129,7 @@ private:
     eeq::dsp::SpectrumFrame frame;
     std::atomic<double> delaySamples { 0.0 };
     std::atomic<bool> active { false };
+    std::atomic<std::uint64_t> generationCounter { 0 };
     juce::Time measuredAt;
 };
 

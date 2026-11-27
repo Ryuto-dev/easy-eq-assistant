@@ -21,13 +21,16 @@ FrequencyGraphView::FrequencyGraphView()
 void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
                                        double delaySamples, bool rawPhase)
 {
-    const bool changed = frame.averages != current.averages
-                      || frame.fftSize != current.fftSize
-                      || std::abs (frame.sampleRate - current.sampleRate) > 0.5
+    const auto& previous = currentFrame();
+    const bool changed = frame.averages != previous.averages
+                      || frame.fftSize != previous.fftSize
+                      || std::abs (frame.sampleRate - previous.sampleRate) > 0.5
                       || rawPhase != showRawPhase
-                      || delaySamples != appliedDelaySamples;
+                      || std::abs (delaySamples - appliedDelaySamples) > 1.0e-9;
 
     current = frame;
+    currentFrameShared.reset();
+    cachedLivePoints.reset();
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
     const auto switchedFromCached = livePointsAreCached;
@@ -43,16 +46,26 @@ void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int
     repaint();
 }
 
-void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoint>& points,
-                                             const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
+void FrequencyGraphView::setLiveFrameCached (std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> points,
+                                             std::shared_ptr<const eeq::dsp::SpectrumFrame> frame,
+                                             int smoothingOctDenom,
                                              double delaySamples, bool rawPhase)
 {
-    // 軽量版: 事前計算済み points を columns へコピーするだけ（smoothToLogGrid は呼ばない）
-    // dataDirty=false にする（columns は既にキャッシュから埋まっている）
-    // viewDirty は維持（ズーム/パンの再描画用）
+    if (points == nullptr || frame == nullptr)
+        return;
 
+    const auto& previous = currentFrame();
+    const bool frameChanged = currentFrameShared != frame
+                           || frame->fftSize != previous.fftSize
+                           || std::abs (frame->sampleRate - previous.sampleRate) > 0.5;
+    const bool pointsChanged = cachedLivePoints != points;
+    const bool changed = frameChanged || pointsChanged || smoothingOctDenom != smoothingDenom
+                      || rawPhase != showRawPhase
+                      || std::abs (delaySamples - appliedDelaySamples) > 1.0e-9;
+
+    currentFrameShared = std::move (frame);
+    cachedLivePoints = std::move (points);
     livePointsAreCached = true;
-    current = frame;
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
 
@@ -62,17 +75,23 @@ void FrequencyGraphView::setLiveFrameCached (const std::vector<eeq::dsp::GridPoi
         lastOverlayVersion = -1;
     }
 
-    columns.resize (points.size());
-    for (size_t i = 0; i < points.size(); ++i)
+    if (pointsChanged || columns.size() != cachedLivePoints->size())
     {
-        columns[i].freq = points[i].freq;
-        columns[i].h = { (float) points[i].h.real(), (float) points[i].h.imag() };
-        columns[i].coherence = points[i].coherence;
+        columns.resize (cachedLivePoints->size());
+
+        for (size_t i = 0; i < cachedLivePoints->size(); ++i)
+        {
+            const auto& point = (*cachedLivePoints)[i];
+            columns[i].freq = point.freq;
+            columns[i].h = { (float) point.h.real(), (float) point.h.imag() };
+            columns[i].coherence = point.coherence;
+        }
     }
 
     dataDirty = false;  // columns はキャッシュから埋まっているので再計算不要
-    // viewDirty は維持（ズーム/パンの再描画用）
-    repaint();
+    lastWidth = getWidth();
+    if (changed)
+        repaint();
 }
 
 void FrequencyGraphView::setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom)
@@ -103,16 +122,17 @@ juce::Rectangle<float> FrequencyGraphView::lowerArea (const juce::Rectangle<floa
 
 void FrequencyGraphView::rebuildLive()
 {
+    const auto& liveFrame = currentFrame();
     dataDirty = false;
     lastWidth = getWidth();
     columns.clear();
 
-    if (current.fftSize == 0 || current.sampleRate <= 0.0 || current.averages == 0
-        || current.magnitudeDb.empty() || current.transfer.size() != current.magnitudeDb.size())
+    if (liveFrame.fftSize == 0 || liveFrame.sampleRate <= 0.0 || liveFrame.averages == 0
+        || liveFrame.magnitudeDb.empty() || liveFrame.transfer.size() != liveFrame.magnitudeDb.size())
         return;
 
-    const auto effectiveMax = std::min (axis.viewMax, current.sampleRate * 0.5);
-    const auto points = eeq::dsp::smoothToLogGrid (current, smoothingDenom, axis.viewMin, effectiveMax,
+    const auto effectiveMax = std::min (axis.viewMax, liveFrame.sampleRate * 0.5);
+    const auto points = eeq::dsp::smoothToLogGrid (liveFrame, smoothingDenom, axis.viewMin, effectiveMax,
                                                    juce::jmax (2, (int) plotArea().getWidth()));
 
     columns.resize (points.size());
@@ -127,11 +147,12 @@ void FrequencyGraphView::rebuildLive()
 
 void FrequencyGraphView::rebuildOverlays()
 {
+    const auto& liveFrame = currentFrame();
     lastOverlayVersion = overlayVersion;
     overlayColumns.assign (overlaySources.size(), {});
 
     const auto width = juce::jmax (2, (int) plotArea().getWidth());
-    const auto effectiveMax = current.sampleRate > 0 ? std::min (axis.viewMax, current.sampleRate * 0.5)
+    const auto effectiveMax = liveFrame.sampleRate > 0 ? std::min (axis.viewMax, liveFrame.sampleRate * 0.5)
                                                      : axis.viewMax;
 
     for (size_t s = 0; s < overlaySources.size(); ++s)
@@ -277,6 +298,8 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     if (lastOverlayVersion != overlayVersion || (int) overlayColumns.size() != (int) overlaySources.size())
         rebuildOverlays();
 
+    const auto& liveFrame = currentFrame();
+
     const auto bounds = getLocalBounds().toFloat();
     const auto plot = plotArea();
     const auto ampArea = amplitudeArea (plot);
@@ -293,7 +316,7 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     axis.drawGrid (g, plot, grid, gridMajor, gridText);
 
     // ---- 振幅エリア: dBグリッド ----
-    if (ampAuto && current.averages > 0 && ! columns.empty())
+    if (ampAuto && liveFrame.averages > 0 && ! columns.empty())
     {
         // 自動スケール（滑らかに追従）
         float minAmp = 1.0e9f, maxAmp = -1.0e9f;
@@ -354,7 +377,7 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     const float dashes[] = { 4.0f, 4.0f };
     g.drawDashedLine ({ lower.getX(), thY, lower.getRight(), thY }, dashes, 2, 1.0f);
 
-    if (current.averages == 0 || columns.empty())
+    if (liveFrame.averages == 0 || columns.empty())
     {
         g.setColour (gridText);
         g.setFont (juce::Font (juce::FontOptions (15.0f)));
@@ -455,15 +478,15 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     { return 20.0f * std::log10 (juce::jmax (std::abs (column.h), 1.0e-9f)); };
 
     // 遅延補正済み位相（仕様 3.1 / 3.3）: arg(H) − 2πf·τ
-    auto phaseOfLive = [this] (const DisplayColumn& column)
+    auto phaseOfLive = [this, &liveFrame] (const DisplayColumn& column)
     {
         auto deg = std::arg (std::complex<double> (column.h.real(), column.h.imag()))
                  * 180.0 / juce::MathConstants<double>::pi;
 
-        if (! showRawPhase && appliedDelaySamples != 0.0 && current.sampleRate > 0.0)
+        if (! showRawPhase && std::abs (appliedDelaySamples) > 1.0e-9 && liveFrame.sampleRate > 0.0)
         {
             // Meas が Ref より遅れるとき H = e^(-j2πfτ/fs)、位相を打ち消すには +360·f·τ/fs を足す
-            const auto correction = 360.0 * column.freq * appliedDelaySamples / current.sampleRate;
+            const auto correction = 360.0 * column.freq * appliedDelaySamples / liveFrame.sampleRate;
             deg += correction;
         }
 

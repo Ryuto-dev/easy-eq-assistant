@@ -45,6 +45,8 @@ public:
     };
 
     void copyRta (RtaFrame& out) const;
+    /** UIタイマー用。解析中なら待たずに false を返し、outは変更しない */
+    bool tryCopyRta (RtaFrame& out) const;
     void resetPeakHold();
 
     struct SplSnapshot
@@ -59,10 +61,14 @@ public:
     };
 
     void copySpl (SplSnapshot& out) const;
+    /** UIタイマー用。解析中なら待たずに false を返し、outは変更しない */
+    bool tryCopySpl (SplSnapshot& out) const;
     void resetSpl();
 
     /** RTAとSPLを1回のロックで取得する（UIタイマー用。ロック回数を減らす: issue #37） */
     void copyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const;
+    /** UIタイマー用。解析中なら待たずに false を返し、出力は変更しない */
+    bool tryCopyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const;
 
     // 単体テスト用: IEC 61672 の A/C 重み付けの定義式（1 kHz で 0 dB に正規化）
     [[nodiscard]] static double aWeightingDb (double frequency);

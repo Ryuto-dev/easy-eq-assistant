@@ -289,6 +289,17 @@ void RtaSplAnalyzer::copyRta (RtaFrame& out) const
     out = rtaOut;
 }
 
+bool RtaSplAnalyzer::tryCopyRta (RtaFrame& out) const
+{
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+        return false;
+
+    out = rtaOut;
+    return true;
+}
+
 void RtaSplAnalyzer::resetPeakHold()
 {
     const juce::ScopedLock sl (lock);
@@ -346,12 +357,35 @@ void RtaSplAnalyzer::copySpl (SplSnapshot& out) const
     copySplUnlocked (out);
 }
 
+bool RtaSplAnalyzer::tryCopySpl (SplSnapshot& out) const
+{
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+        return false;
+
+    copySplUnlocked (out);
+    return true;
+}
+
 void RtaSplAnalyzer::copyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const
 {
     // RTAとSPLを1回のロックで取る（issue #37）。同一時点の値が取れるという副次効果もある
     const juce::ScopedLock sl (lock);
     rtaFrameOut = rtaOut;
     copySplUnlocked (splOut);
+}
+
+bool RtaSplAnalyzer::tryCopyAll (RtaFrame& rtaFrameOut, SplSnapshot& splOut) const
+{
+    const juce::ScopedTryLock sl (lock);
+
+    if (! sl.isLocked())
+        return false;
+
+    rtaFrameOut = rtaOut;
+    copySplUnlocked (splOut);
+    return true;
 }
 
 void RtaSplAnalyzer::resetSpl()

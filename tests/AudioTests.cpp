@@ -142,4 +142,23 @@ TEST (Audio, StoppingDuringFadeInKeepsEnvelopeContinuous)
     EXPECT_NEAR (AudioEngine::fadeEnvelopeAt (3, 0, fadeOutLength, 1.0f), 1.0f, 1e-4);
 }
 
+TEST (Audio, UiWatchdogReservesFadeAndOneAudioBlockWithin500Ms)
+{
+    using eeq::audio::AudioEngine;
+
+    for (const auto sampleRate : { 44100.0, 48000.0, 96000.0 })
+    {
+        const auto budget = (std::uint64_t) (sampleRate * AudioEngine::uiWatchdogSilenceBudgetSeconds);
+        const auto fade = (std::uint64_t) (sampleRate * AudioEngine::fadeOutSeconds);
+
+        for (const auto bufferSize : { 64, 512, 2048 })
+        {
+            const auto timeout = AudioEngine::uiWatchdogTimeoutSamplesFor (sampleRate, bufferSize);
+            EXPECT_GT (timeout, 0u);
+            EXPECT_LE (timeout + fade + (std::uint64_t) bufferSize, budget)
+                << "sampleRate=" << sampleRate << " bufferSize=" << bufferSize;
+        }
+    }
+}
+
 } // namespace
