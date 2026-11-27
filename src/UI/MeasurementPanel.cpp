@@ -21,57 +21,74 @@ MeasurementPanel::MeasurementPanel()
     }
 
     fftLabel.setText (strings::fftSizeLabel, juce::dontSendNotification);
-    fftCombo.addItem ("8192", 1);
-    fftCombo.addItem ("16384", 2);
-    fftCombo.addItem ("32768", 3);
-    fftCombo.addItem ("65536", 4);
-    fftCombo.setSelectedId (1, juce::dontSendNotification); // 既定 8192（応答重視）
+
+    for (int i = 0; i < (int) std::size (fftSizes); ++i)
+        fftCombo.addItem (juce::String (fftSizes[i]), i + 1);
+
+    fftCombo.setSelectedId (Defaults::fftId, juce::dontSendNotification);
 
     windowLabel.setText (strings::windowLabel, juce::dontSendNotification);
     windowCombo.addItem ("Hann", 1);
     windowCombo.addItem ("Blackman-Harris", 2);
     windowCombo.addItem ("Flat-top", 3);
-    windowCombo.setSelectedId (1, juce::dontSendNotification); // 既定 Hann
+    windowCombo.setSelectedId (Defaults::windowId, juce::dontSendNotification);
 
     avgModeLabel.setText (strings::averagingModeLabel, juce::dontSendNotification);
     avgModeCombo.addItem (strings::averagingModeCumulative, 1);
     avgModeCombo.addItem (strings::averagingModeExponential, 2);
-    avgModeCombo.setSelectedId (2, juce::dontSendNotification); // 既定 指数平均（応答重視）
+    avgModeCombo.addItem (strings::averagingModeFifo, 3);
+    avgModeCombo.setSelectedId (Defaults::avgModeId, juce::dontSendNotification);
 
     smoothingLabel.setText (strings::smoothingLabel, juce::dontSendNotification);
     smoothingCombo.addItem (strings::noSmoothingItem, 1);
-    smoothingCombo.addItem ("1/48", 2);
-    smoothingCombo.addItem ("1/24", 3);
-    smoothingCombo.addItem ("1/12", 4);
-    smoothingCombo.addItem ("1/6", 5);
-    smoothingCombo.addItem ("1/3", 6);
-    smoothingCombo.setSelectedId (5, juce::dontSendNotification); // 既定 1/6 oct
+
+    for (int i = 1; i < (int) std::size (smoothingDenominators); ++i)
+        smoothingCombo.addItem ("1/" + juce::String (smoothingDenominators[i]) + " oct", i + 1);
+
+    smoothingCombo.setSelectedId (Defaults::smoothingId, juce::dontSendNotification);
 
     avgCountLabel.setText (strings::averagingCountLabel, juce::dontSendNotification);
-    avgCountSlider.setRange (1.0, 256.0, 1.0);
-    avgCountSlider.setValue (16.0, juce::dontSendNotification); // 既定 16（応答重視）
-    avgCountSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
-    avgCountSlider.setColour (juce::Slider::backgroundColourId, theme::get (theme::ColourId::control));
-    avgCountSlider.setColour (juce::Slider::trackColourId, theme::get (theme::ColourId::accent));
-    avgCountSlider.setColour (juce::Slider::thumbColourId, theme::get (theme::ColourId::text));
-    avgCountSlider.setColour (juce::Slider::textBoxTextColourId, theme::get (theme::ColourId::text));
-    avgCountSlider.setColour (juce::Slider::textBoxBackgroundColourId, theme::get (theme::ColourId::control));
-    avgCountSlider.setColour (juce::Slider::textBoxOutlineColourId, theme::get (theme::ColourId::controlOutline));
+    updateCountItems();
+
+    for (int i = 0; i < (int) std::size (averageCounts); ++i)
+        if (averageCounts[i] == Defaults::avgCount)
+            avgCountCombo.setSelectedId (i + 1, juce::dontSendNotification);
 
     averagesDisplay.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     averagesDisplay.setFont (juce::Font (juce::FontOptions (11.5f)));
     averagesDisplay.setText (juce::String (u8"平均: 0 回"), juce::dontSendNotification);
 
-    for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo })
+    for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo, &avgCountCombo })
     {
         styleCombo (*combo);
         combo->addListener (this);
         addAndMakeVisible (combo);
     }
 
-    avgCountSlider.addListener (this);
-    addAndMakeVisible (avgCountSlider);
     addAndMakeVisible (averagesDisplay);
+}
+
+void MeasurementPanel::updateCountItems()
+{
+    // FIFO はフレームを保持するので上限を設ける（メモリ: bins × 16 byte × N）
+    const auto selectedId = avgCountCombo.getSelectedId();
+    const bool fifo = avgModeCombo.getSelectedId() == 3;
+    avgCountCombo.clear (juce::dontSendNotification);
+
+    for (int i = 0; i < (int) std::size (averageCounts); ++i)
+    {
+        avgCountCombo.addItem (juce::String (averageCounts[i]), i + 1);
+
+        if (fifo && averageCounts[i] > eeq::dsp::AveragingConfig::maxFifoFrames)
+            avgCountCombo.setItemEnabled (i + 1, false);
+    }
+
+    auto id = selectedId > 0 ? selectedId : 5;
+
+    while (fifo && id > 1 && averageCounts[id - 1] > eeq::dsp::AveragingConfig::maxFifoFrames)
+        --id;
+
+    avgCountCombo.setSelectedId (id, juce::dontSendNotification);
 }
 
 void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
@@ -81,18 +98,30 @@ void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
     if (settings == nullptr)
         return;
 
-    // 前回の測定設定を復元する
+    // 前回の測定設定を復元する（既定値は Defaults の1か所: issue #134）
     const juce::ScopedValueSetter<bool> guard (loadingSettings, true);
 
-    fftCombo.setSelectedId (juce::jlimit (1, 4, settings->getIntValue ("measurementFftId", 3)),
+    fftCombo.setSelectedId (juce::jlimit (1, 4, settings->getIntValue ("measurementFftId", Defaults::fftId)),
                             juce::dontSendNotification);
-    windowCombo.setSelectedId (juce::jlimit (1, 3, settings->getIntValue ("measurementWindowId", 1)),
+    windowCombo.setSelectedId (juce::jlimit (1, 3, settings->getIntValue ("measurementWindowId", Defaults::windowId)),
                                juce::dontSendNotification);
-    avgModeCombo.setSelectedId (juce::jlimit (1, 2, settings->getIntValue ("measurementAvgModeId", 1)),
+    avgModeCombo.setSelectedId (juce::jlimit (1, 3, settings->getIntValue ("measurementAvgModeId", Defaults::avgModeId)),
                                 juce::dontSendNotification);
-    smoothingCombo.setSelectedId (juce::jlimit (1, 6, settings->getIntValue ("measurementSmoothingId", 5)),
+    smoothingCombo.setSelectedId (juce::jlimit (1, (int) std::size (smoothingDenominators),
+                                                settings->getIntValue ("measurementSmoothingId", Defaults::smoothingId)),
                                   juce::dontSendNotification);
-    avgCountSlider.setValue (settings->getDoubleValue ("measurementAvgCount", 64.0), juce::dontSendNotification);
+
+    // 平均回数は保存値に最も近いプリセットへ寄せる（旧バージョンの連続値にも対応）
+    const auto savedCount = settings->getDoubleValue ("measurementAvgCount", (double) Defaults::avgCount);
+    int bestId = 1;
+
+    for (int i = 0; i < (int) std::size (averageCounts); ++i)
+        if (std::abs (std::log2 ((double) averageCounts[i]) - std::log2 (juce::jmax (1.0, savedCount)))
+            < std::abs (std::log2 ((double) averageCounts[bestId - 1]) - std::log2 (juce::jmax (1.0, savedCount))))
+            bestId = i + 1;
+
+    avgCountCombo.setSelectedId (bestId, juce::dontSendNotification);
+    updateCountItems();
 }
 
 void MeasurementPanel::saveSettings()
@@ -104,15 +133,14 @@ void MeasurementPanel::saveSettings()
     settings->setValue ("measurementWindowId", windowCombo.getSelectedId());
     settings->setValue ("measurementAvgModeId", avgModeCombo.getSelectedId());
     settings->setValue ("measurementSmoothingId", smoothingCombo.getSelectedId());
-    settings->setValue ("measurementAvgCount", avgCountSlider.getValue());
+    settings->setValue ("measurementAvgCount", getAveragingConfig().maxAverages);
     settings->saveIfNeeded();
 }
 
 int MeasurementPanel::getFftSize() const noexcept
 {
     const auto id = fftCombo.getSelectedId();
-    static const int fftSizes[] = { 8192, 16384, 32768, 65536 };
-    return (id >= 1 && id <= 4) ? fftSizes[id - 1] : 8192;
+    return (id >= 1 && id <= (int) std::size (fftSizes)) ? fftSizes[id - 1] : fftSizes[Defaults::fftId - 1];
 }
 
 juce::dsp::WindowingFunction<float>::WindowingMethod MeasurementPanel::getWindowMethod() const noexcept
@@ -127,35 +155,49 @@ juce::dsp::WindowingFunction<float>::WindowingMethod MeasurementPanel::getWindow
 
 eeq::dsp::AveragingConfig MeasurementPanel::getAveragingConfig() const noexcept
 {
-    return { avgModeCombo.getSelectedId() == 2 ? eeq::dsp::AveragingConfig::Mode::exponential
-                                               : eeq::dsp::AveragingConfig::Mode::cumulative,
-             juce::jlimit (1, 256, (int) avgCountSlider.getValue()) };
+    eeq::dsp::AveragingConfig config;
+
+    switch (avgModeCombo.getSelectedId())
+    {
+        case 1:  config.mode = eeq::dsp::AveragingConfig::Mode::cumulative; break;
+        case 2:  config.mode = eeq::dsp::AveragingConfig::Mode::exponential; break;
+        default: config.mode = eeq::dsp::AveragingConfig::Mode::fifo; break;
+    }
+
+    const auto id = avgCountCombo.getSelectedId();
+    config.maxAverages = (id >= 1 && id <= (int) std::size (averageCounts)) ? averageCounts[id - 1] : Defaults::avgCount;
+
+    if (config.mode == eeq::dsp::AveragingConfig::Mode::fifo)
+        config.maxAverages = juce::jmin (config.maxAverages, eeq::dsp::AveragingConfig::maxFifoFrames);
+
+    return config;
 }
 
 int MeasurementPanel::getSmoothingOctaveDenominator() const noexcept
 {
     const auto id = smoothingCombo.getSelectedId();
-    return id >= 2 && id <= 6 ? smoothingDenominators[id - 2] : 0; // id 1 = なし
+    return (id >= 1 && id <= (int) std::size (smoothingDenominators)) ? smoothingDenominators[id - 1] : 6;
 }
 
 void MeasurementPanel::setAverageCountDisplay (int averages)
 {
-    const auto newText = juce::String (u8"平均: ") + juce::String (averages) + juce::String (u8" 回");
+    const auto config = getAveragingConfig();
+    auto newText = juce::String (u8"平均: ") + juce::String (averages);
+
+    if (config.mode != eeq::dsp::AveragingConfig::Mode::cumulative)
+        newText << " / " << config.maxAverages;
+
+    newText << juce::String (u8" 回");
 
     if (averagesDisplay.getText() != newText)
         averagesDisplay.setText (newText, juce::dontSendNotification);
 }
 
-void MeasurementPanel::comboBoxChanged (juce::ComboBox*)
+void MeasurementPanel::comboBoxChanged (juce::ComboBox* combo)
 {
-    saveSettings();
+    if (combo == &avgModeCombo)
+        updateCountItems();
 
-    if (onSettingsChanged)
-        onSettingsChanged();
-}
-
-void MeasurementPanel::sliderValueChanged (juce::Slider*)
-{
     saveSettings();
 
     if (onSettingsChanged)
@@ -186,8 +228,8 @@ void MeasurementPanel::resized()
     row (fftLabel, fftCombo);
     row (windowLabel, windowCombo);
     row (avgModeLabel, avgModeCombo);
+    row (avgCountLabel, avgCountCombo);
     row (smoothingLabel, smoothingCombo);
-    row (avgCountLabel, avgCountSlider);
 
     averagesDisplay.setBounds (bounds.removeFromTop (16));
 }

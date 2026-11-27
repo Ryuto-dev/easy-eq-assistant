@@ -8,61 +8,69 @@
 namespace eeq::ui
 {
 
+namespace
+{
+juce::Colour markerColour (int index)
+{
+    static const juce::uint32 colours[] = { 0xffff5d5d, 0xff5dd36b, 0xff4fc3f7, 0xffffd54f,
+                                            0xffce93d8, 0xffffa040, 0xffb0bec5, 0xff80deea };
+    return juce::Colour (colours[index % 8]);
+}
+
+float ampDbOf (std::complex<float> h)
+{
+    return 20.0f * std::log10 (juce::jmax (std::abs (h), 1.0e-9f));
+}
+
+float phaseDegOf (std::complex<float> h, double freq, double delaySamples, double sampleRate)
+{
+    auto deg = std::arg (std::complex<double> (h.real(), h.imag())) * 180.0 / juce::MathConstants<double>::pi;
+
+    // Meas が Ref より τ 遅れると H = e^(-j2πfτ/fs)。打ち消すには +360·f·τ/fs を足す
+    if (std::abs (delaySamples) > 1.0e-9 && sampleRate > 0.0)
+        deg += 360.0 * freq * delaySamples / sampleRate;
+
+    return (float) std::remainder (deg, 360.0);
+}
+
+// 読み取り枠などの半透明背景。テーマに追従させる（issue #132: ライトテーマで黒地に黒文字にしない）
+juce::Colour overlayBoxColour (float alpha)
+{
+    return theme::get (theme::ColourId::panelBackground).withAlpha (alpha);
+}
+} // namespace
+
 FrequencyGraphView::FrequencyGraphView()
 {
     setOpaque (false);
     setMouseCursor (juce::MouseCursor::CrosshairCursor);
     axis.limitMin = freqLimitMin;
     axis.limitMax = freqLimitMax;
-    dataDirty = true;
-    viewDirty = false;
-
-    startAnimationTimer();
 }
 
-void FrequencyGraphView::startAnimationTimer()
+bool FrequencyGraphView::hasAnythingToDraw() const noexcept
 {
-    // 60fps (16.67ms) で再描画し、ヌルヌル感を出す
-    startTimerHz (60);
-}
+    if (! columns.empty() && currentFrame().averages > 0)
+        return true;
 
-void FrequencyGraphView::timerCallback()
-{
-    // アニメーション位相を進める（2秒周期のパルス）
-    animationPhase += 1.0 / 60.0;
-    if (animationPhase >= 2.0)
-        animationPhase -= 2.0;
+    for (const auto& trace : overlays)
+        if (trace.columns != nullptr && ! trace.columns->empty())
+            return true;
 
-    // 常に再描画（データが更新されていなくても60fpsでリフレッシュ）
-    repaint();
+    return false;
 }
 
 void FrequencyGraphView::setLiveFrame (const eeq::dsp::SpectrumFrame& frame, int smoothingOctDenom,
                                        double delaySamples, bool rawPhase)
 {
-    const auto& previous = currentFrame();
-    const bool changed = frame.averages != previous.averages
-                      || frame.fftSize != previous.fftSize
-                      || std::abs (frame.sampleRate - previous.sampleRate) > 0.5
-                      || rawPhase != showRawPhase
-                      || std::abs (delaySamples - appliedDelaySamples) > 1.0e-9;
-
     current = frame;
     currentFrameShared.reset();
     cachedLivePoints.reset();
     appliedDelaySamples = delaySamples;
     showRawPhase = rawPhase;
-    const auto switchedFromCached = livePointsAreCached;
     livePointsAreCached = false;
-
-    if (changed || smoothingOctDenom != smoothingDenom || switchedFromCached)
-    {
-        smoothingDenom = smoothingOctDenom;
-        dataDirty = true;  // データ変更で再計算必要
-        lastOverlayVersion = -1;
-    }
-
-    hasLiveData = (frame.averages > 0);
+    smoothingDenom = smoothingOctDenom;
+    dataDirty = true;
     repaint();
 }
 
@@ -74,62 +82,50 @@ void FrequencyGraphView::setLiveFrameCached (std::shared_ptr<const std::vector<e
     if (points == nullptr || frame == nullptr)
         return;
 
-    const auto& previous = currentFrame();
-    const bool frameChanged = currentFrameShared != frame
-                           || frame->fftSize != previous.fftSize
-                           || std::abs (frame->sampleRate - previous.sampleRate) > 0.5;
-    const bool pointsChanged = cachedLivePoints != points;
-    const bool changed = frameChanged || pointsChanged || smoothingOctDenom != smoothingDenom
-                      || rawPhase != showRawPhase
-                      || std::abs (delaySamples - appliedDelaySamples) > 1.0e-9;
+    const bool changed = cachedLivePoints != points || currentFrameShared != frame
+                      || smoothingOctDenom != smoothingDenom || rawPhase != showRawPhase
+                      || std::abs (delaySamples - appliedDelaySamples) > 1.0e-9 || ! livePointsAreCached;
 
-    currentFrameShared = std::move (frame);
-    cachedLivePoints = std::move (points);
-    livePointsAreCached = true;
-    appliedDelaySamples = delaySamples;
-    showRawPhase = rawPhase;
+    if (! changed)
+        return; // 何も変わっていなければ再描画しない（issue #135）
 
-    if (smoothingOctDenom != smoothingDenom)
+    if (cachedLivePoints != points)
     {
-        smoothingDenom = smoothingOctDenom;
-        lastOverlayVersion = -1;
-    }
+        columns.resize (points->size());
 
-    if (pointsChanged || columns.size() != cachedLivePoints->size())
-    {
-        columns.resize (cachedLivePoints->size());
-
-        for (size_t i = 0; i < cachedLivePoints->size(); ++i)
+        for (size_t i = 0; i < points->size(); ++i)
         {
-            const auto& point = (*cachedLivePoints)[i];
+            const auto& point = (*points)[i];
             columns[i].freq = point.freq;
             columns[i].h = { (float) point.h.real(), (float) point.h.imag() };
             columns[i].coherence = point.coherence;
         }
     }
 
-    dataDirty = false;  // columns はキャッシュから埋まっているので再計算不要
-    lastWidth = getWidth();
-    hasLiveData = (frame != nullptr && frame->averages > 0);
-    if (changed || (ampAuto && ampScaleConverging))
-        repaint();
-}
-
-void FrequencyGraphView::setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom)
-{
-    overlaySources = sources;
-    overlayVersion = version;
+    currentFrameShared = std::move (frame);
+    cachedLivePoints = std::move (points);
+    livePointsAreCached = true;
+    appliedDelaySamples = delaySamples;
+    showRawPhase = rawPhase;
     smoothingDenom = smoothingOctDenom;
-    lastOverlayVersion = -1;
-    dataDirty = true;  // オーバーレイ変更もデータ再計算が必要
+    dataDirty = false;
     repaint();
 }
 
-void FrequencyGraphView::setOverlayColumns (const std::vector<std::vector<OverlayColumn>>& columns, int version)
+void FrequencyGraphView::clearLive()
 {
-    overlayColumns = columns;
-    overlayVersion = version;
-    // columns はワーカーで計算済みなので再計算不要
+    current = {};
+    currentFrameShared.reset();
+    cachedLivePoints.reset();
+    columns.clear();
+    livePointsAreCached = false;
+    dataDirty = false;
+    repaint();
+}
+
+void FrequencyGraphView::setOverlayTraces (std::vector<OverlayTrace> traces)
+{
+    overlays = std::move (traces);
     repaint();
 }
 
@@ -139,14 +135,46 @@ juce::Rectangle<float> FrequencyGraphView::plotArea() const
                .withTrimmedTop (6).withTrimmedBottom (22);
 }
 
+// 段の配分（issue #144）: 3段 = 振幅 55% / 位相 27% / コヒーレンス 18%、2段 = 振幅 60% / 位相 40%
 juce::Rectangle<float> FrequencyGraphView::amplitudeArea (const juce::Rectangle<float>& plot) const
 {
-    return plot.withTrimmedBottom (plot.getHeight() * 0.38f + 4.0f);
+    constexpr float gap = 6.0f;
+
+    switch (viewMode)
+    {
+        case ViewMode::ampOnly:  return plot;
+        case ViewMode::ampPhase: return plot.withHeight (plot.getHeight() * 0.60f - gap * 0.5f);
+        case ViewMode::ampPhaseCoh:
+        default:                 return plot.withHeight (plot.getHeight() * 0.55f - gap * 0.5f);
+    }
 }
 
-juce::Rectangle<float> FrequencyGraphView::lowerArea (const juce::Rectangle<float>& plot) const
+juce::Rectangle<float> FrequencyGraphView::phaseArea (const juce::Rectangle<float>& plot) const
 {
-    return plot.withTrimmedTop (plot.getHeight() * 0.62f + 4.0f);
+    constexpr float gap = 6.0f;
+
+    switch (viewMode)
+    {
+        case ViewMode::ampOnly:  return {};
+        case ViewMode::ampPhase: return plot.withTrimmedTop (plot.getHeight() * 0.60f + gap * 0.5f);
+        case ViewMode::ampPhaseCoh:
+        default:
+        {
+            const auto top = plot.getY() + plot.getHeight() * 0.55f + gap * 0.5f;
+            const auto bottom = plot.getY() + plot.getHeight() * 0.82f - gap * 0.5f;
+            return { plot.getX(), top, plot.getWidth(), juce::jmax (0.0f, bottom - top) };
+        }
+    }
+}
+
+juce::Rectangle<float> FrequencyGraphView::coherenceArea (const juce::Rectangle<float>& plot) const
+{
+    constexpr float gap = 6.0f;
+
+    if (viewMode != ViewMode::ampPhaseCoh)
+        return {};
+
+    return plot.withTrimmedTop (plot.getHeight() * 0.82f + gap * 0.5f);
 }
 
 void FrequencyGraphView::rebuildLive()
@@ -162,7 +190,7 @@ void FrequencyGraphView::rebuildLive()
 
     const auto effectiveMax = std::min (axis.viewMax, liveFrame.sampleRate * 0.5);
     const auto points = eeq::dsp::smoothToLogGrid (liveFrame, smoothingDenom, axis.viewMin, effectiveMax,
-                                                   juce::jmax (2, (int) plotArea().getWidth()));
+                                                   getPlotWidthForCache());
 
     columns.resize (points.size());
 
@@ -174,69 +202,68 @@ void FrequencyGraphView::rebuildLive()
     }
 }
 
-void FrequencyGraphView::rebuildOverlays()
+void FrequencyGraphView::resized()
 {
-    const auto& liveFrame = currentFrame();
-    lastOverlayVersion = overlayVersion;
-    overlayColumns.assign (overlaySources.size(), {});
+    if (! livePointsAreCached)
+        dataDirty = true;
+}
 
-    const auto width = juce::jmax (2, (int) plotArea().getWidth());
-    const auto effectiveMax = liveFrame.sampleRate > 0 ? std::min (axis.viewMax, liveFrame.sampleRate * 0.5)
-                                                     : axis.viewMax;
+void FrequencyGraphView::viewChanged()
+{
+    if (! livePointsAreCached)
+        dataDirty = true;
 
-    for (size_t s = 0; s < overlaySources.size(); ++s)
-    {
-        const auto& source = overlaySources[s];
+    if (onViewChanged)
+        onViewChanged();
 
-        if (source.frame != nullptr)
-        {
-            const auto points = eeq::dsp::smoothToLogGrid (*source.frame, smoothingDenom,
-                                                           axis.viewMin, effectiveMax, width);
-            auto& out = overlayColumns[s];
-            out.resize (points.size());
+    repaint();
+}
 
-            for (size_t i = 0; i < points.size(); ++i)
-                out[i] = { points[i].freq, { (float) points[i].h.real(), (float) points[i].h.imag() } };
-        }
-        else if (source.points != nullptr)
-        {
-            // 点列（ターゲット/予測）はグリッドにそのまま乗る
-            const auto& in = *source.points;
-            auto& out = overlayColumns[s];
-            out.clear();
+int FrequencyGraphView::nearestColumn (double freq) const
+{
+    if (columns.empty() || freq <= 0.0)
+        return -1;
 
-            for (const auto& point : in)
-            {
-                if (point.freq < axis.viewMin || point.freq > effectiveMax)
-                    continue;
+    // columns は周波数の昇順
+    const auto it = std::lower_bound (columns.begin(), columns.end(), freq,
+                                      [] (const DisplayColumn& c, double f) { return c.freq < f; });
 
-                out.push_back ({ point.freq, { (float) point.h.real(), (float) point.h.imag() } });
-            }
-        }
-    }
+    if (it == columns.end())
+        return (int) columns.size() - 1;
+
+    const auto index = (int) std::distance (columns.begin(), it);
+
+    if (index > 0 && std::abs (std::log (columns[(size_t) index - 1].freq / freq))
+                         < std::abs (std::log (it->freq / freq)))
+        return index - 1;
+
+    return index;
+}
+
+float FrequencyGraphView::livePhaseDeg (const DisplayColumn& column) const
+{
+    return phaseDegOf (column.h, column.freq, showRawPhase ? 0.0 : appliedDelaySamples, currentFrame().sampleRate);
 }
 
 void FrequencyGraphView::mouseMove (const juce::MouseEvent& event)
 {
     const auto area = plotArea();
+    const auto newHover = area.contains (event.position) ? axis.xToFreq (event.position.x, area) : -1.0;
 
-    if (columns.empty() || ! area.contains (event.position))
+    if (std::abs (newHover - hoverFreq) > 1.0e-9)
     {
-        hoverColumn = -1;
+        hoverFreq = newHover;
+        repaint();
     }
-    else
-    {
-        const auto t = (event.position.x - area.getX()) / area.getWidth();
-        hoverColumn = juce::jlimit (0, (int) columns.size() - 1, (int) (t * (float) columns.size()));
-    }
-
-    repaint();
 }
 
 void FrequencyGraphView::mouseExit (const juce::MouseEvent&)
 {
-    hoverColumn = -1;
-    repaint();
+    if (hoverFreq > 0.0)
+    {
+        hoverFreq = -1.0;
+        repaint();
+    }
 }
 
 void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -245,49 +272,57 @@ void FrequencyGraphView::mouseWheelMove (const juce::MouseEvent& event, const ju
     const auto amp = amplitudeArea (plot);
 
     // dBラベル帯の上では dB 軸をズーム、それ以外は周波数軸（仕様 5.2）
-    if (wheel.deltaY != 0.0f && event.position.x < (float) dBLabelStripWidth
-        && amp.getHeight() > 0.0f)
+    if (wheel.deltaY != 0.0f && event.position.x < (float) dBLabelStripWidth && amp.getHeight() > 0.0f)
     {
         ampAuto = false;
         const auto anchor = ampTop - (event.position.y - amp.getY()) / amp.getHeight() * ampSpan;
         const auto factor = wheel.deltaY > 0 ? 0.85f : 1.18f;
-        ampSpan = juce::jlimit (12.0f, 300.0f, ampSpan * factor);
+        ampSpan = juce::jlimit (6.0f, 300.0f, ampSpan * factor);
         ampTop = anchor + (event.position.y - amp.getY()) / amp.getHeight() * ampSpan;
+        repaint();
     }
     else if (wheel.deltaY != 0.0f && plot.contains (event.position))
     {
         if (axis.zoom (event.position.x, plot, wheel.deltaY))
-        {
-            viewDirty = true;
-            if (! livePointsAreCached)
-                dataDirty = true;
-            lastOverlayVersion = -1;
-        }
+            viewChanged();
     }
-
-    repaint();
 }
 
 void FrequencyGraphView::mouseDown (const juce::MouseEvent& event)
 {
     dragStart = event.position;
     dragStartAmpTop = ampTop;
+    dragStartViewMin = axis.viewMin;
+    dragStartViewMax = axis.viewMax;
+    dragging = false;
+
+    const auto plot = plotArea();
+
+    if (event.mods.isPopupMenu() && plot.contains (event.position))
+        showContextMenu (axis.xToFreq (event.position.x, plot));
 }
 
 void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
 {
-    const auto plot = plotArea();
+    if (event.mods.isPopupMenu())
+        return;
 
-    // 横ドラッグ: 周波数のパン（仕様 5.2）
-    if (std::abs (event.position.x - dragStart.x) > std::abs (event.position.y - dragStart.y))
+    const auto plot = plotArea();
+    const auto dx = event.position.x - dragStart.x;
+    const auto dy = event.position.y - dragStart.y;
+
+    if (! dragging && std::abs (dx) < 3.0f && std::abs (dy) < 3.0f)
+        return;
+
+    dragging = true;
+
+    // 横ドラッグ: 周波数のパン（仕様 5.2）。開始時の表示範囲からの総移動量で決める（issue #129）
+    if (std::abs (dx) > std::abs (dy))
     {
-        if (axis.pan (event.position.x - dragStart.x, plot))
-        {
-            viewDirty = true;
-            if (! livePointsAreCached)
-                dataDirty = true;
-            lastOverlayVersion = -1;
-        }
+        axis.viewMin = dragStartViewMin;
+        axis.viewMax = dragStartViewMax;
+        axis.pan (dx, plot);
+        viewChanged();
     }
     else if (! ampAuto)
     {
@@ -296,129 +331,348 @@ void FrequencyGraphView::mouseDrag (const juce::MouseEvent& event)
 
         if (amp.getHeight() > 0.0f)
         {
-            const auto shift = (event.position.y - dragStart.y) / amp.getHeight() * ampSpan;
-            ampTop = dragStartAmpTop + shift;
+            ampTop = dragStartAmpTop + dy / amp.getHeight() * ampSpan;
+            repaint();
         }
     }
+}
 
-    repaint();
+void FrequencyGraphView::mouseUp (const juce::MouseEvent& event)
+{
+    // Shift+クリックでマーカーを置く（issue #145）
+    if (! dragging && event.mods.isShiftDown() && ! event.mods.isPopupMenu())
+    {
+        const auto plot = plotArea();
+
+        if (plot.contains (event.position))
+            addMarker (axis.xToFreq (event.position.x, plot));
+    }
+
+    dragging = false;
 }
 
 void FrequencyGraphView::mouseDoubleClick (const juce::MouseEvent&)
 {
+    resetView();
+}
+
+void FrequencyGraphView::resetView()
+{
     axis.resetView();
-    ampAuto = true;
-    viewDirty = true;
-    if (! livePointsAreCached)
-        dataDirty = true;
-    lastOverlayVersion = -1;
+
+    if (scalePreset == ScalePreset::autoScale)
+        ampAuto = true;
+    else
+        setScalePreset (scalePreset);
+
+    viewChanged();
+}
+
+void FrequencyGraphView::showContextMenu (double freq)
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, strings::markerAddHere);
+    menu.addItem (2, strings::markerAddPeak);
+    menu.addItem (3, strings::markerRemoveNear, ! markers.empty());
+    menu.addItem (4, strings::markerClearAll, ! markers.empty());
+    menu.addSeparator();
+    menu.addItem (5, strings::graphResetView);
+
+    juce::Component::SafePointer<FrequencyGraphView> safeThis { this };
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
+                        [safeThis, freq] (int result)
+                        {
+                            if (safeThis == nullptr)
+                                return;
+
+                            switch (result)
+                            {
+                                case 1: safeThis->addMarker (freq); break;
+                                case 2: safeThis->addMarkerAtPeak(); break;
+                                case 3: safeThis->removeMarkerNear (freq); break;
+                                case 4: safeThis->clearMarkers(); break;
+                                case 5: safeThis->resetView(); break;
+                                default: break;
+                            }
+                        });
+}
+
+void FrequencyGraphView::setViewMode (ViewMode mode)
+{
+    if (viewMode != mode)
+    {
+        viewMode = mode;
+        repaint();
+    }
+}
+
+void FrequencyGraphView::setScalePreset (ScalePreset preset)
+{
+    scalePreset = preset;
+
+    if (preset == ScalePreset::autoScale)
+    {
+        ampAuto = true;
+        repaint();
+        return;
+    }
+
+    const auto range = preset == ScalePreset::preset6dB ? 6.0f
+                     : preset == ScalePreset::preset12dB ? 12.0f
+                     : preset == ScalePreset::preset24dB ? 24.0f
+                                                         : 48.0f;
+
+    // 中心は表示範囲内のライブ曲線の平均レベル（6 dB 単位に丸める）。データがなければ 0 dB
+    float centre = 0.0f;
+    double sum = 0.0;
+    int count = 0;
+
+    for (const auto& column : columns)
+    {
+        if (column.freq < axis.viewMin || column.freq > axis.viewMax)
+            continue;
+
+        const auto db = ampDbOf (column.h);
+
+        if (std::isfinite (db) && db > -200.0f)
+        {
+            sum += db;
+            ++count;
+        }
+    }
+
+    if (count > 0)
+        centre = std::round ((float) (sum / count) / 6.0f) * 6.0f;
+
+    ampAuto = false;
+    ampSpan = range * 2.0f;
+    ampTop = centre + range;
     repaint();
+}
+
+void FrequencyGraphView::setCoherenceBlanking (bool enabled)
+{
+    if (coherenceBlankingEnabled != enabled)
+    {
+        coherenceBlankingEnabled = enabled;
+        repaint();
+    }
+}
+
+void FrequencyGraphView::setCoherenceThreshold (float threshold)
+{
+    threshold = juce::jlimit (0.0f, 1.0f, threshold);
+
+    if (std::abs (threshold - coherenceThreshold) > 1.0e-6f)
+    {
+        coherenceThreshold = threshold;
+        repaint();
+    }
+}
+
+void FrequencyGraphView::setClipWarning (bool clipped)
+{
+    if (clipWarning != clipped)
+    {
+        clipWarning = clipped;
+        repaint();
+    }
+}
+
+void FrequencyGraphView::addMarker (double freq)
+{
+    if (freq < axis.limitMin || freq > axis.limitMax)
+        return;
+
+    markers.push_back ({ freq, markerColour (nextMarkerColourIndex++) });
+    repaint();
+}
+
+void FrequencyGraphView::addMarkerAtPeak()
+{
+    int best = -1;
+    float bestDb = -1.0e9f;
+
+    for (int i = 0; i < (int) columns.size(); ++i)
+    {
+        const auto& column = columns[(size_t) i];
+
+        if (column.freq < axis.viewMin || column.freq > axis.viewMax)
+            continue;
+
+        const auto db = ampDbOf (column.h);
+
+        if (std::isfinite (db) && db > bestDb)
+        {
+            bestDb = db;
+            best = i;
+        }
+    }
+
+    if (best >= 0)
+        addMarker (columns[(size_t) best].freq);
+}
+
+void FrequencyGraphView::removeMarkerNear (double freq)
+{
+    if (markers.empty() || freq <= 0.0)
+        return;
+
+    size_t nearest = 0;
+
+    for (size_t i = 1; i < markers.size(); ++i)
+        if (std::abs (std::log (markers[i].freq / freq)) < std::abs (std::log (markers[nearest].freq / freq)))
+            nearest = i;
+
+    markers.erase (markers.begin() + (std::ptrdiff_t) nearest);
+    repaint();
+}
+
+void FrequencyGraphView::clearMarkers()
+{
+    if (! markers.empty())
+    {
+        markers.clear();
+        repaint();
+    }
+}
+
+void FrequencyGraphView::updateAutoScale()
+{
+    if (! ampAuto)
+        return;
+
+    float minAmp = 1.0e9f, maxAmp = -1.0e9f;
+
+    auto consider = [&] (float amp)
+    {
+        if (std::isfinite (amp) && amp > -200.0f)
+        {
+            minAmp = std::min (minAmp, amp);
+            maxAmp = std::max (maxAmp, amp);
+        }
+    };
+
+    if (currentFrame().averages > 0)
+        for (const auto& column : columns)
+            consider (ampDbOf (column.h));
+
+    // ライブがないときは重ね描きの範囲で合わせる（保存済みスナップショットの見返し: issue #130）
+    if (maxAmp < minAmp)
+        for (const auto& trace : overlays)
+            if (trace.columns != nullptr)
+                for (const auto& column : *trace.columns)
+                    if (column.freq >= axis.viewMin && column.freq <= axis.viewMax)
+                        consider (ampDbOf (column.h) + (float) trace.dbOffset);
+
+    if (maxAmp > minAmp)
+    {
+        // オートスケールは目盛りが揺れないよう 10 dB 単位で決め、余裕を持って切り替える
+        const auto targetTop = std::ceil ((maxAmp + 6.0f) / 10.0f) * 10.0f;
+        const auto targetSpan = juce::jlimit (40.0f, 160.0f, std::ceil (((maxAmp - minAmp) + 20.0f) / 10.0f) * 10.0f);
+
+        if (std::abs (targetTop - ampTop) >= 10.0f || maxAmp > ampTop - 2.0f || minAmp < ampTop - ampSpan + 2.0f)
+            ampTop = targetTop;
+
+        if (targetSpan > ampSpan || targetSpan < ampSpan - 30.0f)
+            ampSpan = targetSpan;
+    }
 }
 
 void FrequencyGraphView::paint (juce::Graphics& g)
 {
-    // キャッシュ済みライブ曲線はタブ側timerで再計算し、直接計算モードのみここで更新する。
     if (! livePointsAreCached && (dataDirty || getWidth() != lastWidth))
         rebuildLive();
 
-    // ビュー変更（ズーム/パン）時は rebuildLive() 呼ばず、既存 columns を新しい axis で描画
-    // viewDirty は再描画だけで済む
-
-    if (lastOverlayVersion != overlayVersion || (int) overlayColumns.size() != (int) overlaySources.size())
-        rebuildOverlays();
-
     const auto& liveFrame = currentFrame();
+    const bool haveLive = liveFrame.averages > 0 && ! columns.empty();
 
     const auto bounds = getLocalBounds().toFloat();
     const auto plot = plotArea();
     const auto ampArea = amplitudeArea (plot);
-    const auto lower = lowerArea (plot);
-    const auto background = theme::get (theme::ColourId::graphBackground);
+    const auto phaseRect = phaseArea (plot);
+    const auto cohRect = coherenceArea (plot);
     const auto grid = theme::get (theme::ColourId::grid);
     const auto gridMajor = theme::get (theme::ColourId::gridMajor);
     const auto gridText = theme::get (theme::ColourId::gridText);
 
-    g.setColour (background);
+    g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (bounds, 6.0f);
 
-    // ---- 周波数グリッド（上下で共有: 仕様 5.1）----
+    // ---- 周波数グリッド（全段で共有: 仕様 5.1）----
     axis.drawGrid (g, plot, grid, gridMajor, gridText);
 
+    updateAutoScale();
+
+    // 段の区切り
+    g.setColour (gridMajor.withAlpha (0.6f));
+    if (! phaseRect.isEmpty())
+        g.drawHorizontalLine ((int) (ampArea.getBottom() + 3.0f), plot.getX(), plot.getRight());
+    if (! cohRect.isEmpty())
+        g.drawHorizontalLine ((int) (phaseRect.getBottom() + 3.0f), plot.getX(), plot.getRight());
+
     // ---- 振幅エリア: dBグリッド ----
-    ampScaleConverging = false;
-    if (ampAuto && liveFrame.averages > 0 && ! columns.empty())
-    {
-        // 自動スケール（滑らかに追従）
-        float minAmp = 1.0e9f, maxAmp = -1.0e9f;
-
-        for (const auto& column : columns)
-        {
-            const auto amp = 20.0f * std::log10 (juce::jmax (std::abs (column.h), 1.0e-9f));
-
-            if (! std::isfinite (amp))
-                continue;
-
-            minAmp = std::min (minAmp, amp);
-            maxAmp = std::max (maxAmp, amp);
-        }
-
-        if (maxAmp > minAmp)
-        {
-            const auto targetTop = maxAmp + 10.0f;
-            const auto targetSpan = juce::jlimit (60.0f, 160.0f, (maxAmp - minAmp) + 20.0f);
-            const auto approach = [this] (float& value, float target)
-            {
-                constexpr auto toleranceDb = 0.01f;
-                if (std::abs (target - value) <= toleranceDb)
-                    value = target;
-                else
-                {
-                    value += (target - value) * 0.15f;
-                    ampScaleConverging = true;
-                }
-            };
-            approach (ampTop, targetTop);
-            approach (ampSpan, targetSpan);
-        }
-    }
-
-    const auto mapAmpY = [&ampArea] (float db, float top, float span)
+    const auto ampY = [&ampArea, top = ampTop, span = ampSpan] (float db)
     { return ampArea.getY() + (top - db) / span * ampArea.getHeight(); };
 
-    const auto dbStep = ampSpan > 150.0f ? 20 : ampSpan > 60.0f ? 10 : 5;
+    const auto dbStep = ampSpan > 150.0f ? 20 : ampSpan > 60.0f ? 10 : ampSpan > 24.0f ? 6 : 3;
+    g.setFont (juce::Font (juce::FontOptions (10.5f)));
 
-    for (int db = -160; db <= 80; db += dbStep)
+    for (int db = -240; db <= 120; db += dbStep)
     {
-        const auto y = mapAmpY ((float) db, ampTop, ampSpan);
+        const auto y = ampY ((float) db);
 
         if (y < ampArea.getY() - 1 || y > ampArea.getBottom() + 1)
             continue;
 
         g.setColour (grid);
         g.drawLine (ampArea.getX(), y, ampArea.getRight(), y, 1.0f);
-
         g.setColour (gridText);
-        g.drawText (juce::String (db), 4, (int) y - 7, dBLabelStripWidth - 4, 14, juce::Justification::centredRight);
+        g.drawText (juce::String (db), 2, (int) y - 7, dBLabelStripWidth - 2, 14, juce::Justification::centredRight);
     }
 
-    // ---- 下段: 位相グリッド ----
-    for (int deg = -180; deg <= 180; deg += 90)
+    // ---- 位相エリア ----
+    const auto phaseY = [&phaseRect] (float deg)
+    { return phaseRect.getY() + (180.0f - deg) / 360.0f * phaseRect.getHeight(); };
+
+    if (! phaseRect.isEmpty())
     {
-        const auto y = lower.getY() + (180.0f - (float) deg) / 360.0f * lower.getHeight();
-        g.setColour (grid);
-        g.drawLine (lower.getX(), y, lower.getRight(), y, 1.0f);
+        for (int deg = -180; deg <= 180; deg += 90)
+        {
+            const auto y = phaseY ((float) deg);
+            g.setColour (grid);
+            g.drawLine (phaseRect.getX(), y, phaseRect.getRight(), y, 1.0f);
 
-        g.setColour (gridText);
-        g.drawText (juce::String (deg), 4, (int) y - 7, dBLabelStripWidth - 4, 14, juce::Justification::centredRight);
+            if (phaseRect.getHeight() > 50.0f || deg % 180 == 0)
+            {
+                g.setColour (gridText);
+                g.drawText (juce::String (deg), 2, (int) y - 7, dBLabelStripWidth - 2, 14, juce::Justification::centredRight);
+            }
+        }
     }
 
-    // コヒーレンスしきい値（点線）
-    g.setColour (theme::get (theme::ColourId::text).withAlpha (0.22f));
-    const auto thY = lower.getBottom() - coherenceThreshold * lower.getHeight();
-    const float dashes[] = { 4.0f, 4.0f };
-    g.drawDashedLine ({ lower.getX(), thY, lower.getRight(), thY }, dashes, 2, 1.0f);
+    // ---- コヒーレンスエリア ----
+    const auto cohY = [&cohRect] (float c) { return cohRect.getBottom() - c * cohRect.getHeight(); };
 
-    if (liveFrame.averages == 0 || columns.empty())
+    if (! cohRect.isEmpty())
+    {
+        for (const auto c : { 0.0f, 0.5f, 1.0f })
+        {
+            const auto y = cohY (c);
+            g.setColour (grid);
+            g.drawLine (cohRect.getX(), y, cohRect.getRight(), y, 1.0f);
+            g.setColour (gridText);
+            g.drawText (c == 1.0f ? strings::gammaSquared + " 1" : juce::String (c, 1),
+                        2, (int) y - 7, dBLabelStripWidth - 2, 14, juce::Justification::centredRight);
+        }
+
+        g.setColour (theme::get (theme::ColourId::warn).withAlpha (0.45f));
+        const float dashes[] = { 4.0f, 4.0f };
+        const auto thY = cohY (coherenceThreshold);
+        g.drawDashedLine ({ cohRect.getX(), thY, cohRect.getRight(), thY }, dashes, 2, 1.0f);
+    }
+
+    if (! hasAnythingToDraw())
     {
         g.setColour (gridText);
         g.setFont (juce::Font (juce::FontOptions (15.0f)));
@@ -426,303 +680,353 @@ void FrequencyGraphView::paint (juce::Graphics& g)
         return;
     }
 
-    // ---- カーブ描画ヘルパ（コヒーレンスがしきい値未満の区間は薄く: 仕様 3.1 / 5.5）----
-    auto strokeColumnCurve = [&] (juce::Graphics& graphics, const auto& curveColumns,
-                                  const juce::Rectangle<float>& area, const juce::Colour& colour,
-                                  float thickness, bool brightRunsOnly, bool dashed, float alphaDim,
-                                  auto&& valueOf, auto&& yOf, auto&& isBright)
+    // ---- カーブ描画ヘルパ ----
+    // isBright が false の区間: ブランキング有効なら描かない、無効なら薄く描く（仕様 3.1 / 5.5）
+    auto strokeCurve = [&] (const auto& curveColumns, const juce::Rectangle<float>& area, juce::Colour colour,
+                            float thickness, bool dashed, bool wrapAware, auto&& valueOf, auto&& yOf, auto&& isBright)
     {
-        const juce::Graphics::ScopedSaveState save (graphics);
-        graphics.reduceClipRegion (area.toNearestInt());
+        if (area.isEmpty() || curveColumns.empty())
+            return;
+
+        const juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (area.toNearestInt());
 
         juce::Path dimPath, brightPath;
         bool inDim = false, inBright = false;
-        float prevDimValue = 0.0f, prevBrightValue = 0.0f;
-        bool haveDimValue = false, haveBrightValue = false;
+        float prevValue = 0.0f;
+        bool havePrev = false;
 
-        const auto count = (int) curveColumns.size();
-
-        for (int i = 0; i < count; ++i)
+        for (const auto& column : curveColumns)
         {
-            const auto& column = curveColumns[(size_t) i];
+            if (column.freq < axis.viewMin * 0.98 || column.freq > axis.viewMax * 1.02)
+            {
+                inDim = inBright = havePrev = false;
+                continue;
+            }
+
             const auto value = valueOf (column);
 
             if (! std::isfinite (value))
             {
-                inDim = inBright = false;
-                haveDimValue = haveBrightValue = false;
+                inDim = inBright = havePrev = false;
                 continue;
             }
 
-            const auto x = count > 1 ? area.getX() + (float) i / (float) (count - 1) * area.getWidth() : area.getX();
+            const auto x = axis.freqToX (column.freq, area);
             const auto y = yOf (value);
             const bool bright = isBright (column);
+            // 位相の ±180° 折り返しでは線をつながない（issue #56）
+            const bool wraps = wrapAware && havePrev && std::abs (value - prevValue) > 180.0f;
 
-            // 不連続の検出（issue #56）: 位相カーブは ±180° の折り返しで値が
-            // 約360°ジャンプする。そのまま lineTo すると縦線だらけになるため、
-            // 前の点との差が 180° を超えたら新しいサブパスを開始する。
-            // 振幅（dB）やコヒーレンスではこの大きさのジャンプは起きない
-            if (bright && brightRunsOnly)
-            {
-                const auto wraps = haveBrightValue && std::abs (value - prevBrightValue) > 180.0f;
+            auto& path = bright ? brightPath : dimPath;
+            auto& inPath = bright ? inBright : inDim;
 
-                if (! inBright || wraps)
-                {
-                    brightPath.startNewSubPath (x, y);
-                    inBright = true;
-                }
-                else
-                    brightPath.lineTo (x, y);
-
-                prevBrightValue = value;
-                haveBrightValue = true;
-                inDim = false;
-            }
+            if (! inPath || wraps)
+                path.startNewSubPath (x, y);
             else
-            {
-                const auto wraps = haveDimValue && std::abs (value - prevDimValue) > 180.0f;
+                path.lineTo (x, y);
 
-                if (! inDim || wraps)
-                {
-                    dimPath.startNewSubPath (x, y);
-                    inDim = true;
-                }
-                else
-                    dimPath.lineTo (x, y);
-
-                prevDimValue = value;
-                haveDimValue = true;
-                inBright = false;
-            }
+            inPath = true;
+            (bright ? inDim : inBright) = false;
+            prevValue = value;
+            havePrev = true;
         }
 
         if (dashed)
         {
-            // 点線は createDashedStroke で描く（破線パスをfillPathする）
             juce::Path combined = brightPath;
             combined.addPath (dimPath);
             juce::Path dashedPath;
-            const float dashPattern[] = { 5.0f, 4.0f };
-            juce::PathStrokeType (thickness).createDashedStroke (dashedPath, combined, dashPattern, 2);
-            graphics.setColour (colour.withAlpha (alphaDim));
-            graphics.fillPath (dashedPath);
+            const float pattern[] = { 5.0f, 4.0f };
+            juce::PathStrokeType (thickness).createDashedStroke (dashedPath, combined, pattern, 2);
+            g.setColour (colour);
+            g.fillPath (dashedPath);
             return;
         }
 
-        graphics.setColour (colour.withAlpha (alphaDim));
-        graphics.strokePath (dimPath, juce::PathStrokeType (thickness));
-        graphics.setColour (colour);
-        graphics.strokePath (brightPath, juce::PathStrokeType (thickness + 0.4f));
-    };
-
-    const auto ampOf = [] (const auto& column)
-    { return 20.0f * std::log10 (juce::jmax (std::abs (column.h), 1.0e-9f)); };
-
-    // 遅延補正済み位相（仕様 3.1 / 3.3）: arg(H) − 2πf·τ
-    auto phaseOfLive = [this, &liveFrame] (const DisplayColumn& column)
-    {
-        auto deg = std::arg (std::complex<double> (column.h.real(), column.h.imag()))
-                 * 180.0 / juce::MathConstants<double>::pi;
-
-        if (! showRawPhase && std::abs (appliedDelaySamples) > 1.0e-9 && liveFrame.sampleRate > 0.0)
+        if (! coherenceBlankingEnabled)
         {
-            // Meas が Ref より遅れるとき H = e^(-j2πfτ/fs)、位相を打ち消すには +360·f·τ/fs を足す
-            const auto correction = 360.0 * column.freq * appliedDelaySamples / liveFrame.sampleRate;
-            deg += correction;
+            g.setColour (colour.withAlpha (dimmedAlpha));
+            g.strokePath (dimPath, juce::PathStrokeType (thickness));
         }
 
-        return (float) std::remainder ((double) deg, 360.0);
+        g.setColour (colour);
+        g.strokePath (brightPath, juce::PathStrokeType (thickness + 0.4f));
     };
 
-    const auto ampY = [&ampArea, top = ampTop, span = ampSpan] (float db)
-    { return ampArea.getY() + (top - db) / span * ampArea.getHeight(); };
-    const auto phaseY = [&lower] (float deg) { return lower.getY() + (180.0f - deg) / 360.0f * lower.getHeight(); };
-    const auto cohY = [&lower] (float c) { return lower.getBottom() - c * lower.getHeight(); };
+    const auto always = [] (const auto&) { return true; };
 
-    // ---- オーバーレイ（先に描いて主役を目立たせる）----
-    for (size_t s = 0; s < overlayColumns.size(); ++s)
+    // ---- 重ね描き（先に描いてライブを目立たせる）----
+    for (const auto& trace : overlays)
     {
-        const auto& source = overlaySources[s];
-        const auto& curve = overlayColumns[s];
-
-        if (curve.empty())
+        if (trace.columns == nullptr || trace.columns->empty())
             continue;
 
-        const auto overlayAmpOf = ampOf;
-        const auto overlayPhaseOf = [] (const OverlayColumn& column)
-        { return (float) (std::arg (std::complex<double> (column.h.real(), column.h.imag()))
-                          * 180.0 / juce::MathConstants<double>::pi); };
+        const auto offset = (float) trace.dbOffset;
+        strokeCurve (*trace.columns, ampArea, trace.colour, trace.thickness, trace.dashed, false,
+                     [offset] (const OverlayColumn& c) { return ampDbOf (c.h) + offset; }, ampY, always);
 
-        strokeColumnCurve (g, curve, ampArea, source.colour, source.thickness, false, source.dashed, 1.0f,
-                           overlayAmpOf, ampY, [] (const OverlayColumn&) { return true; });
-
-        if (source.showPhase)
-            strokeColumnCurve (g, curve, lower, source.colour, source.thickness, false, source.dashed, 0.8f,
-                               overlayPhaseOf, phaseY, [] (const OverlayColumn&) { return true; });
-    }
-
-    // ---- コヒーレンス（下段の背景として）----
-    juce::Path coherencePath;
-
-    for (size_t i = 0; i < columns.size(); ++i)
-    {
-        const auto x = lower.getX() + (float) i / (float) (columns.size() - 1) * lower.getWidth();
-        const auto y = cohY (juce::jlimit (0.0f, 1.0f, columns[i].coherence));
-
-        if (i == 0)
-            coherencePath.startNewSubPath (x, y);
-        else
-            coherencePath.lineTo (x, y);
-    }
-
-    g.setColour (gridText.withAlpha (0.55f));
-    g.strokePath (coherencePath, juce::PathStrokeType (1.0f));
-
-    // ---- ライブの測定カーブ（パルスアニメーション付き）----
-    const auto liveColour = theme::get (theme::ColourId::accent);
-    const auto livePhaseColour = theme::get (theme::ColourId::accent2);
-
-    // パルスアニメーション: hasLiveData のときだけ明滅させる
-    float pulseAlpha = 1.0f;
-    float pulseThickness = 1.2f;
-    if (hasLiveData)
-    {
-        // 2秒周期のサイン波で 0.7〜1.0 の間を変動
-        const float pulse = 0.85f + 0.15f * std::sin (animationPhase * juce::MathConstants<float>::pi);
-        pulseAlpha = pulse;
-        pulseThickness = 1.2f + 0.3f * (1.0f - pulse); // 細くなるとき少し太く見せる
-    }
-
-    strokeColumnCurve (g, columns, ampArea, liveColour, pulseThickness, true, false, pulseAlpha * dimmedAlpha,
-                       ampOf, ampY,
-                       [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
-
-    strokeColumnCurve (g, columns, lower, livePhaseColour, pulseThickness, true, false, pulseAlpha * dimmedAlpha,
-                       phaseOfLive, phaseY,
-                       [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
-
-    // ライブ中は右上に小さな「LIVE」インジケータを表示
-    if (hasLiveData && ! columns.empty())
-    {
-        g.setColour (liveColour.withAlpha ((float)(0.6f + 0.4f * std::sin (animationPhase * juce::MathConstants<float>::pi * 2.0f))));
-        g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-        const auto indicatorX = ampArea.getRight() - 50.0f;
-        const auto indicatorY = ampArea.getY() + 16.0f;
-        g.drawText ("LIVE", (int) indicatorX, (int) indicatorY, 44, 14, juce::Justification::centredRight);
-    }
-
-    // ---- 凡例（左上に表示：より視認性高く）----
-    struct LegendEntry { juce::String name; juce::Colour colour; bool dashed; float thickness; bool isLive; };
-    std::vector<LegendEntry> legendEntries;
-
-    // ライブ測定（メイン） - 常に最初に表示
-    if (liveFrame.averages > 0 && ! columns.empty())
-    {
-        legendEntries.push_back ({ strings::liveMeasurementLabel,
-                                   theme::get (theme::ColourId::accent), false, 1.2f, true });
-    }
-
-    // オーバーレイ（スナップショット、ターゲット、予測、差分）
-    for (size_t s = 0; s < overlaySources.size(); ++s)
-    {
-        if (! overlayColumns[s].empty())
+        if (trace.showPhase && ! phaseRect.isEmpty())
         {
-            legendEntries.push_back ({ overlaySources[s].name,
-                                       overlaySources[s].colour,
-                                       overlaySources[s].dashed,
-                                       overlaySources[s].thickness, false });
+            const auto delay = trace.delayOffsetSamples;
+            const auto sr = trace.sampleRate;
+            strokeCurve (*trace.columns, phaseRect, trace.colour.withMultipliedAlpha (0.8f), trace.thickness,
+                         trace.dashed, true,
+                         [delay, sr] (const OverlayColumn& c) { return phaseDegOf (c.h, c.freq, delay, sr); },
+                         phaseY, always);
         }
     }
 
-    if (! legendEntries.empty())
+    // ---- ライブ ----
+    if (haveLive)
     {
-        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
-        float legendX = ampArea.getX() + 10.0f;
-        float legendY = ampArea.getY() + 6.0f;
-        const float lineLen = 28.0f;
-        const float lineGap = 8.0f;
-        const float textGap = 10.0f;
-        const float rowHeight = 20.0f;
+        const auto liveColour = theme::get (theme::ColourId::accent);
+        const auto livePhaseColour = theme::get (theme::ColourId::accent2);
+        const auto thr = coherenceThreshold;
+        const auto isBright = [thr] (const DisplayColumn& c) { return c.coherence >= thr; };
 
-        // 背景（半透明ダーク + 枠線）
+        if (! cohRect.isEmpty())
+            strokeCurve (columns, cohRect, gridText.withAlpha (0.8f), 1.0f, false, false,
+                         [] (const DisplayColumn& c) { return juce::jlimit (0.0f, 1.0f, c.coherence); }, cohY, always);
+
+        strokeCurve (columns, ampArea, liveColour, 1.3f, false, false,
+                     [] (const DisplayColumn& c) { return ampDbOf (c.h); }, ampY, isBright);
+
+        if (! phaseRect.isEmpty())
+            strokeCurve (columns, phaseRect, livePhaseColour, 1.2f, false, true,
+                         [this] (const DisplayColumn& c) { return livePhaseDeg (c); }, phaseY, isBright);
+
+        g.setColour (liveColour);
+        g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+        g.drawText ("LIVE", (int) ampArea.getRight() - 48, (int) ampArea.getY() + 28, 44, 14,
+                    juce::Justification::centredRight);
+    }
+
+    // ---- 凡例（左上）----
+    struct LegendEntry { juce::String name; juce::Colour colour; bool dashed; };
+    std::vector<LegendEntry> legend;
+
+    if (haveLive)
+        legend.push_back ({ strings::liveMeasurementLabel, theme::get (theme::ColourId::accent), false });
+
+    for (const auto& trace : overlays)
+        if (trace.columns != nullptr && ! trace.columns->empty())
+        {
+            auto name = trace.name;
+
+            if (std::abs (trace.dbOffset) > 1.0e-6)
+                name << " (" << (trace.dbOffset > 0 ? "+" : "") << juce::String (trace.dbOffset, 1) << " dB)";
+
+            legend.push_back ({ name, trace.colour, trace.dashed });
+        }
+
+    if (! legend.empty())
+    {
+        const juce::Font font (juce::FontOptions (11.5f));
+        g.setFont (font);
         float maxTextWidth = 0.0f;
-        const auto& font = g.getCurrentFont();
-        for (const auto& entry : legendEntries)
+
+        for (const auto& entry : legend)
             maxTextWidth = juce::jmax (maxTextWidth, juce::GlyphArrangement::getStringWidth (font, entry.name));
 
-        const float boxWidth = lineLen + lineGap + textGap + maxTextWidth + 16.0f;
-        const float boxHeight = legendEntries.size() * rowHeight + 10.0f;
+        constexpr float lineLen = 24.0f, rowHeight = 17.0f;
+        const auto boxWidth = juce::jmin (ampArea.getWidth() * 0.5f, lineLen + maxTextWidth + 26.0f);
+        const auto maxRows = juce::jmax (1, (int) ((ampArea.getHeight() - 12.0f) / rowHeight));
+        const auto rows = juce::jmin ((int) legend.size(), maxRows);
+        const juce::Rectangle<float> box (ampArea.getX() + 6.0f, ampArea.getY() + 6.0f, boxWidth, rows * rowHeight + 8.0f);
 
-        // 背景グラデーション風
-        g.setColour (juce::Colours::black.withAlpha (0.75f));
-        g.fillRoundedRectangle (legendX - 6.0f, legendY - 5.0f, boxWidth, boxHeight, 6.0f);
-        g.setColour (theme::get (theme::ColourId::controlOutline).withAlpha (0.5f));
-        g.drawRoundedRectangle (legendX - 6.0f, legendY - 5.0f, boxWidth, boxHeight, 6.0f, 1.5f);
+        g.setColour (overlayBoxColour (0.82f));
+        g.fillRoundedRectangle (box, 5.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline).withAlpha (0.6f));
+        g.drawRoundedRectangle (box, 5.0f, 1.0f);
 
-        for (size_t i = 0; i < legendEntries.size(); ++i)
+        for (int i = 0; i < rows; ++i)
         {
-            const auto& entry = legendEntries[i];
-            const float y = legendY + (float) i * rowHeight + rowHeight * 0.5f;
-            const float lineX = legendX;
+            const auto& entry = legend[(size_t) i];
+            const auto y = box.getY() + 4.0f + (float) i * rowHeight + rowHeight * 0.5f;
+            const auto x = box.getX() + 6.0f;
 
-            // ライブ測定はパルスアニメーション付きで強調
-            float entryAlpha = 1.0f;
-            float entryThickness = entry.thickness;
-            if (entry.isLive && hasLiveData)
-            {
-                const float pulse = 0.8f + 0.2f * std::sin (animationPhase * juce::MathConstants<float>::pi * 2.0f);
-                entryAlpha = pulse;
-                entryThickness = entry.thickness + 0.5f;
-            }
+            g.setColour (entry.colour);
 
-            // 線（実線/破線）
-            g.setColour (entry.colour.withAlpha (entryAlpha));
             if (entry.dashed)
             {
-                const float dashPattern[] = { 5.0f, 3.0f };
-                g.drawDashedLine ({ lineX, y, lineX + lineLen, y }, dashPattern, 2, entryThickness);
+                const float pattern[] = { 5.0f, 3.0f };
+                g.drawDashedLine ({ x, y, x + lineLen, y }, pattern, 2, 1.6f);
+            }
+            else
+                g.drawLine (x, y, x + lineLen, y, 2.0f);
+
+            g.setColour (theme::get (theme::ColourId::text));
+            const auto text = (i == rows - 1 && rows < (int) legend.size())
+                                  ? juce::String (u8"… ほか ") + juce::String ((int) legend.size() - rows + 1)
+                                  : entry.name;
+            g.drawText (text, (int) (x + lineLen + 6.0f), (int) (y - rowHeight * 0.5f),
+                        (int) (box.getRight() - x - lineLen - 10.0f), (int) rowHeight, juce::Justification::centredLeft);
+        }
+    }
+
+    drawMarkers (g, plot, ampArea);
+    drawCursor (g, plot, ampArea);
+
+    // ---- 入力クリップ警告（issue #146）----
+    if (clipWarning)
+    {
+        const auto box = juce::Rectangle<float> (ampArea.getCentreX() - 150.0f, ampArea.getY() + 6.0f, 300.0f, 22.0f);
+        g.setColour (theme::get (theme::ColourId::danger).withAlpha (0.9f));
+        g.fillRoundedRectangle (box, 4.0f);
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+        g.drawText (strings::graphClipWarning, box, juce::Justification::centred);
+    }
+}
+
+void FrequencyGraphView::drawCursor (juce::Graphics& g, const juce::Rectangle<float>& plot,
+                                     const juce::Rectangle<float>& ampArea)
+{
+    if (hoverFreq <= 0.0)
+        return;
+
+    const auto x = axis.freqToX (hoverFreq, plot);
+    g.setColour (theme::get (theme::ColourId::text).withAlpha (0.3f));
+    g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
+
+    // 読み取り: ライブ + 各重ね描き（issue #145: 全トレースの値と、ライブとの差）
+    juce::StringArray lines;
+    float liveDb = std::numeric_limits<float>::quiet_NaN();
+    const auto liveIndex = currentFrame().averages > 0 ? nearestColumn (hoverFreq) : -1;
+
+    if (liveIndex >= 0)
+    {
+        const auto& column = columns[(size_t) liveIndex];
+        liveDb = ampDbOf (column.h);
+        lines.add (LogFrequencyAxis::freqText (column.freq) + "   LIVE " + juce::String (liveDb, 1) + " dB   "
+                   + juce::String (livePhaseDeg (column), 0) + strings::degreeSymbol + "   "
+                   + strings::gammaSquared + " " + juce::String (column.coherence, 2));
+    }
+    else
+    {
+        lines.add (LogFrequencyAxis::freqText (hoverFreq));
+    }
+
+    for (const auto& trace : overlays)
+    {
+        if (trace.columns == nullptr || trace.columns->empty())
+            continue;
+
+        const auto& cols = *trace.columns;
+        const auto it = std::lower_bound (cols.begin(), cols.end(), hoverFreq,
+                                          [] (const OverlayColumn& c, double f) { return c.freq < f; });
+
+        if (it == cols.end() || it->freq > hoverFreq * 1.1 || (it != cols.begin() && (it - 1)->freq < hoverFreq * 0.9 && it->freq > hoverFreq * 1.1))
+            continue;
+
+        const auto db = ampDbOf (it->h) + (float) trace.dbOffset;
+        auto line = trace.name + "  " + juce::String (db, 1) + " dB";
+
+        if (std::isfinite (liveDb))
+            line << "  (" << strings::cursorDeltaLive << " " << (liveDb - db >= 0 ? "+" : "") << juce::String (liveDb - db, 1) << ")";
+
+        lines.add (line);
+
+        if (lines.size() >= 6)
+            break;
+    }
+
+    const juce::Font font (juce::FontOptions (11.5f));
+    float width = 0.0f;
+
+    for (const auto& line : lines)
+        width = juce::jmax (width, juce::GlyphArrangement::getStringWidth (font, line));
+
+    width = juce::jmin (width + 16.0f, ampArea.getWidth() - 8.0f);
+    const auto height = (float) lines.size() * 16.0f + 6.0f;
+    const juce::Rectangle<float> box (ampArea.getRight() - width - 4.0f, ampArea.getY() + 4.0f, width, height);
+
+    g.setColour (overlayBoxColour (0.85f));
+    g.fillRoundedRectangle (box, 4.0f);
+    g.setColour (theme::get (theme::ColourId::text));
+    g.setFont (font);
+
+    for (int i = 0; i < lines.size(); ++i)
+        g.drawText (lines[i], box.withTrimmedLeft (8.0f).withY (box.getY() + 3.0f + (float) i * 16.0f).withHeight (16.0f),
+                    juce::Justification::centredLeft);
+}
+
+void FrequencyGraphView::drawMarkers (juce::Graphics& g, const juce::Rectangle<float>& plot,
+                                      const juce::Rectangle<float>& ampArea)
+{
+    if (markers.empty())
+        return;
+
+    const bool haveLive = currentFrame().averages > 0 && ! columns.empty();
+    juce::StringArray lines;
+    float firstDb = 0.0f, firstPhase = 0.0f;
+    double firstFreq = 0.0;
+    bool haveFirst = false;
+
+    for (size_t m = 0; m < markers.size(); ++m)
+    {
+        const auto& marker = markers[m];
+
+        if (marker.freq >= axis.viewMin && marker.freq <= axis.viewMax)
+        {
+            const auto x = axis.freqToX (marker.freq, plot);
+            g.setColour (marker.colour.withAlpha (0.85f));
+            g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.2f);
+            g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+            g.drawText ("M" + juce::String ((int) m + 1), (int) x + 2, (int) plot.getBottom() - 14, 30, 12,
+                        juce::Justification::centredLeft);
+        }
+
+        // 値はライブ曲線から毎回読む（Smaart と同様にマーカーは周波数に固定）
+        auto line = "M" + juce::String ((int) m + 1) + "  " + LogFrequencyAxis::freqText (marker.freq);
+        const auto index = haveLive ? nearestColumn (marker.freq) : -1;
+
+        if (index >= 0)
+        {
+            const auto& column = columns[(size_t) index];
+            const auto db = ampDbOf (column.h);
+            const auto phase = livePhaseDeg (column);
+            line << "  " << juce::String (db, 1) << " dB  " << juce::String (phase, 0) << strings::degreeSymbol;
+
+            if (! haveFirst)
+            {
+                haveFirst = true;
+                firstDb = db;
+                firstPhase = phase;
+                firstFreq = marker.freq;
             }
             else
             {
-                g.drawLine (lineX, y, lineX + lineLen, y, entryThickness);
+                const auto dPhase = (float) std::remainder ((double) (phase - firstPhase), 360.0);
+                line << "   " << juce::String (u8"Δ") << juce::String (std::log2 (marker.freq / firstFreq), 2) << " oct "
+                     << (db - firstDb >= 0 ? "+" : "") << juce::String (db - firstDb, 1) << " dB "
+                     << juce::String (dPhase, 0) << strings::degreeSymbol;
             }
-
-            // テキスト（ライブは太字・パルス）
-            g.setFont (entry.isLive ? juce::Font (juce::FontOptions (12.0f, juce::Font::bold))
-                                    : juce::Font (juce::FontOptions (11.0f)));
-            g.setColour (theme::get (theme::ColourId::text).withAlpha (entry.isLive ? 1.0f : 0.85f));
-            g.drawText (entry.name,
-                        (int) (lineX + lineLen + lineGap),
-                        (int) (y - rowHeight * 0.5f),
-                        (int) (maxTextWidth + textGap),
-                        (int) rowHeight,
-                        juce::Justification::centredLeft);
         }
+
+        lines.add (line);
     }
 
-    // ---- カーソル読み取り（仕様 5.2）----
-    if (hoverColumn >= 0 && hoverColumn < (int) columns.size())
+    const juce::Font font (juce::FontOptions (11.0f));
+    float width = 0.0f;
+
+    for (const auto& line : lines)
+        width = juce::jmax (width, juce::GlyphArrangement::getStringWidth (font, line));
+
+    width = juce::jmin (width + 16.0f, ampArea.getWidth() - 8.0f);
+    const auto height = (float) lines.size() * 15.0f + 6.0f;
+    const juce::Rectangle<float> box (ampArea.getX() + 6.0f, ampArea.getBottom() - height - 4.0f, width, height);
+
+    g.setColour (overlayBoxColour (0.85f));
+    g.fillRoundedRectangle (box, 4.0f);
+    g.setFont (font);
+
+    for (int i = 0; i < lines.size(); ++i)
     {
-        const auto& column = columns[(size_t) hoverColumn];
-        const auto x = ampArea.getX() + (float) hoverColumn / (float) (columns.size() - 1) * ampArea.getWidth();
-
-        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.25f));
-        g.drawLine (x, plot.getY(), x, plot.getBottom(), 1.0f);
-
-        const auto ampDb = ampOf (column);
-        const auto phaseDeg = phaseOfLive (column);
-        const auto readout = LogFrequencyAxis::freqText (column.freq) + "   " + juce::String (ampDb, 1) + " dB   "
-                           + juce::String (phaseDeg, 1) + strings::degreeSymbol
-                           + "   " + strings::gammaSquared + " " + juce::String (column.coherence, 2);
-
-        g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        const auto boxWidth = juce::jmax (0.0f, juce::jmin (340.0f, ampArea.getWidth() - 8.0f));
-        const auto box = juce::Rectangle<float> (ampArea.getRight() - boxWidth, ampArea.getY() + 4,
-                                                 boxWidth, 20.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.65f));
-        g.fillRoundedRectangle (box, 4.0f);
-        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));
-        g.drawText (readout, box, juce::Justification::centred);
+        g.setColour (markers[(size_t) i].colour.interpolatedWith (theme::get (theme::ColourId::text), 0.35f));
+        g.drawText (lines[i], box.withTrimmedLeft (8.0f).withY (box.getY() + 3.0f + (float) i * 15.0f).withHeight (15.0f),
+                    juce::Justification::centredLeft);
     }
 }
 

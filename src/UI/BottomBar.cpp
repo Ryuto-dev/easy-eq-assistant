@@ -17,11 +17,9 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     {
         auto& measurement = engine.getMeasurement();
 
+        // Space キーと同じ動作（issue #131）: 測定だけを開始/停止し、発振器には触れない
         if (measurement.isMeasuring())
-        {
             measurement.stopMeasurement();
-            engine.stopExcitation();
-        }
         else
             measurement.startMeasurement();
     };
@@ -69,6 +67,11 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     excitationCombo.addItem (strings::excitationSweep, 2);
     excitationCombo.addItem (strings::excitationWav, 3);
     excitationCombo.addItem (strings::excitationExternal, 4);
+    // 校正用の信号は各タブが切り替える。表示だけに使い、ここからは選ばせない（issue #133）
+    excitationCombo.addItem (strings::excitationCalTone, 5);
+    excitationCombo.addItem (strings::excitationCalBandNoise, 6);
+    excitationCombo.setItemEnabled (5, false);
+    excitationCombo.setItemEnabled (6, false);
     excitationCombo.setSelectedId (1, juce::dontSendNotification);
     excitationCombo.onChange = [this] { applyExcitationSource (excitationCombo.getSelectedId()); };
     addAndMakeVisible (excitationCombo);
@@ -106,17 +109,32 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     levelSlider.addListener (this);
     addAndMakeVisible (levelSlider);
 
+    // 発振中インジケータ（issue #141）: 常時目立つ表示（赤地に白抜き）
+    oscillatorActiveLabel.setText (strings::oscillatorActiveLabel, juce::dontSendNotification);
+    oscillatorActiveLabel.setColour (juce::Label::textColourId, juce::Colours::white);
+    oscillatorActiveLabel.setColour (juce::Label::backgroundColourId, theme::get (theme::ColourId::danger));
+    oscillatorActiveLabel.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+    oscillatorActiveLabel.setJustificationType (juce::Justification::centred);
+    oscillatorActiveLabel.setInterceptsMouseClicks (false, false);
+    oscillatorActiveLabel.setVisible (false);
+    addAndMakeVisible (oscillatorActiveLabel);
+
+    // ショートカットヒント（issue #141）
+    shortcutsLabel.setText (strings::shortcutsHint, juce::dontSendNotification);
+    shortcutsLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    shortcutsLabel.setFont (juce::Font (juce::FontOptions (10.0f)));
+    shortcutsLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (shortcutsLabel);
+
     statusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     statusLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
-    statusLabel.setJustificationType (juce::Justification::centredRight);
+    statusLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (statusLabel);
 }
 
 void BottomBar::applyExcitationSource (int comboId)
 {
-    if (comboId == lastExcitationId)
-        return;
-
+    // 同じ項目の選び直しも受け付ける（表示とエンジンがずれていても選べば必ず反映される: issue #133）
     lastExcitationId = comboId;
     auto& measurement = engine.getMeasurement();
 
@@ -181,6 +199,26 @@ void BottomBar::update()
                            audible ? theme::get (theme::ColourId::danger)
                                    : theme::get (theme::ColourId::buttonOn));
 
+    // 発振中インジケータ（issue #141）: レベルとソースも出す
+    oscillatorActiveLabel.setVisible (audible);
+
+    if (audible)
+    {
+        const auto text = outputStatusText (engine);
+
+        if (oscillatorActiveLabel.getText() != text)
+            oscillatorActiveLabel.setText (text, juce::dontSendNotification);
+    }
+
+    // 各タブがソースを切り替えても表示を追従させる（issue #133）
+    const auto sourceId = comboIdForSource (engine.getExcitationSource());
+
+    if (sourceId != excitationCombo.getSelectedId() && ! excitationCombo.isPopupActive())
+    {
+        excitationCombo.setSelectedId (sourceId, juce::dontSendNotification);
+        lastExcitationId = sourceId;
+    }
+
     const auto measuring = engine.getMeasurement().isMeasuring();
     measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
     measurementButton.setColour (juce::TextButton::buttonColourId,
@@ -208,33 +246,76 @@ void BottomBar::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromTop (1));
 }
 
+int BottomBar::comboIdForSource (eeq::audio::AudioEngine::ExcitationSource source) noexcept
+{
+    using Source = eeq::audio::AudioEngine::ExcitationSource;
+
+    switch (source)
+    {
+        case Source::sweep:       return 2;
+        case Source::wavFile:     return 3;
+        case Source::external:    return 4;
+        case Source::tone1k:      return 5;
+        case Source::bandNoise1k: return 6;
+        case Source::pinkNoise:
+        default:                  return 1;
+    }
+}
+
+juce::String BottomBar::outputStatusText (const eeq::audio::AudioEngine& engine)
+{
+    using Source = eeq::audio::AudioEngine::ExcitationSource;
+    juce::String name;
+
+    switch (engine.getExcitationSource())
+    {
+        case Source::sweep:       name = strings::excitationSweep; break;
+        case Source::wavFile:     name = strings::excitationWav; break;
+        case Source::external:    name = strings::excitationExternal; break;
+        case Source::tone1k:      name = strings::excitationCalTone; break;
+        case Source::bandNoise1k: name = strings::excitationCalBandNoise; break;
+        case Source::pinkNoise:
+        default:                  name = strings::excitationPinkNoise; break;
+    }
+
+    return juce::String (u8"● ") + strings::oscillatorActiveLabel + "  " + juce::String (engine.getNoiseLevelDb(), 1)
+         + " dBFS  " + name;
+}
+
 void BottomBar::resized()
 {
-    auto bounds = getLocalBounds().reduced (8, 8);
+    auto bounds = getLocalBounds().reduced (8, 4);
 
-    measurementButton.setBounds (bounds.removeFromLeft (86).withSizeKeepingCentre (86, 30));
-    bounds.removeFromLeft (6);
-    resetButton.setBounds (bounds.removeFromLeft (96).withSizeKeepingCentre (96, 30));
-    bounds.removeFromLeft (10);
+    // 2段組（issue #137）: 上段=操作、下段=出力中バッジ・状態表示・ショートカット。
+    // 1段に詰めると最小幅で状態表示（UI停止→自動停止などの安全通知）が数十 px に潰れていた
+    auto row2 = bounds.removeFromBottom (18);
+    bounds.removeFromBottom (2);
+    auto row1 = bounds;
 
-    snapshotButton.setBounds (bounds.removeFromLeft (104).withSizeKeepingCentre (104, 30));
-    bounds.removeFromLeft (6);
-    delayButton.setBounds (bounds.removeFromLeft (72).withSizeKeepingCentre (72, 30));
-    bounds.removeFromLeft (6);
-    calibrationButton.setBounds (bounds.removeFromLeft (56).withSizeKeepingCentre (56, 30));
-    bounds.removeFromLeft (12);
+    auto place = [&row1] (juce::Component& c, int width, int height, int gapAfter)
+    {
+        c.setBounds (row1.removeFromLeft (width).withSizeKeepingCentre (width, height));
+        row1.removeFromLeft (gapAfter);
+    };
 
-    excitationCombo.setBounds (bounds.removeFromLeft (128).withSizeKeepingCentre (128, 26));
-    bounds.removeFromLeft (6);
-    noiseButton.setBounds (bounds.removeFromLeft (104).withSizeKeepingCentre (104, 30));
-    bounds.removeFromLeft (12);
+    place (measurementButton, 86, 30, 6);
+    place (resetButton, 96, 30, 10);
+    place (snapshotButton, 104, 30, 6);
+    place (delayButton, 72, 30, 6);
+    place (calibrationButton, 56, 30, 12);
+    place (excitationCombo, 128, 26, 6);
+    place (noiseButton, 104, 30, 12);
 
-    levelTitle.setBounds (bounds.removeFromLeft (70));
-    bounds.removeFromLeft (6);
-    levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (250, bounds.getWidth())).withSizeKeepingCentre (
-        juce::jmin (250, bounds.getWidth()), 30));
+    levelTitle.setBounds (row1.removeFromLeft (70));
+    row1.removeFromLeft (6);
+    const auto sliderWidth = juce::jlimit (0, 260, row1.getWidth());
+    levelSlider.setBounds (row1.removeFromLeft (sliderWidth).withSizeKeepingCentre (sliderWidth, 30));
 
-    statusLabel.setBounds (bounds.withTrimmedLeft (12));
+    oscillatorActiveLabel.setBounds (row2.removeFromLeft (juce::jmin (300, row2.getWidth() / 3)));
+    row2.removeFromLeft (10);
+    shortcutsLabel.setBounds (row2.removeFromRight (juce::jmin (430, row2.getWidth() / 2)));
+    row2.removeFromRight (10);
+    statusLabel.setBounds (row2);
 }
 
 void BottomBar::sliderValueChanged (juce::Slider* slider)

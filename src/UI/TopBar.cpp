@@ -36,6 +36,10 @@ TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
     for (auto* meter : { &refMeter, &measMeter, &outMeter })
         addAndMakeVisible (meter);
 
+    // メーターのクリックでクリップ表示を解除する（issue #146）。R（平均リセット）でも解除される
+    for (auto* meter : { &refMeter, &measMeter, &outMeter })
+        meter->onClick = [this] { engine.clearClipLatches(); };
+
     // 本番モード（5.4）へのワンボタン切替
     styleAccentButton (liveModeButton);
     liveModeButton.setButtonText (strings::tabLiveMode);
@@ -120,7 +124,7 @@ void TopBar::resized()
     place (bufferTitle, row1, 56);
     bufferCombo.setBounds (row1.removeFromLeft (105));
 
-    // 2行目: [Ref] [Meas] [出力] の各割当、右側にテーマ/本番モードのボタンと3本のメーター
+    // 2行目: [Ref] [Meas] [出力] の各割当、右側にテーマ/本番モードのボタン、クリップ解除、3本のメーター
     place (refTitle, row2, 32);
     place (refCombo, row2, 130);
     place (measTitle, row2, 42);
@@ -134,7 +138,7 @@ void TopBar::resized()
     liveModeButton.setBounds (rightArea.removeFromRight (96).withSizeKeepingCentre (96, 24));
     rightArea.removeFromRight (10);
 
-    const auto meterWidth = juce::jmin (110, (rightArea.getWidth() - 16) / 3);
+    const auto meterWidth = juce::jmin (120, (rightArea.getWidth() - 16) / 3);
     outMeter.setBounds (rightArea.removeFromRight (meterWidth));
     rightArea.removeFromRight (8);
     measMeter.setBounds (rightArea.removeFromRight (meterWidth));

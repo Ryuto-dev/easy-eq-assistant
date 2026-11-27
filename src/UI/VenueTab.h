@@ -38,6 +38,7 @@ private:
     void saveFieldsToVenue();
     void saveProject();
     void loadProject();
+    void loadProjectConfirmed();
     void exportReportPng();
 
     UiContext& ctx;
@@ -58,7 +59,7 @@ private:
     juce::ListBox sessionList { {}, nullptr };
     std::unique_ptr<juce::ListBoxModel> sessionModel;
 
-    juce::TextButton saveProjectButton, loadProjectButton, reportButton;
+    juce::TextButton saveProjectButton, loadProjectButton, reportButton, clearProjectButton;
     juce::Label statusLabel;
 
     int selectedVenueIndex = 0;

@@ -4,16 +4,26 @@
 
 #include "Core/JuceModules.h"
 
+#include <atomic>
+#include <cstdint>
 #include <vector>
 
 namespace eeq::core
 {
+
+/** スナップショットの識別子（表示キャッシュの鍵。保存はしない） */
+inline std::uint64_t nextSnapshotId() noexcept
+{
+    static std::atomic<std::uint64_t> counter { 1 };
+    return counter.fetch_add (1, std::memory_order_relaxed);
+}
 
 // 前方宣言（循環参照回避: SystemCorrection.h が ProjectStore.h を include するため）
 class SystemCorrection;
 
 // スナップショット（仕様 3.5 / 5.2）: 測定結果に名前・色・系統・マイクポイントを付けたもの。
 // データはマイクポイント単位で扱う前提（仕様 5.4.1）を守るため、micPoint を必ず持つ。
+// Issue #143: dBオフセット、遅延オフセット、スナップショットごとの平滑化オーバーライドを追加
 struct Snapshot
 {
     juce::String name;
@@ -28,6 +38,15 @@ struct Snapshot
     bool isSelectedA = false;  // 差分（A−B）表示用の選択（仕様 5.2）
     bool isSelectedB = false;
     bool correctionApplied = false; // システム補正済みのフレームか（issue #32）
+
+    // Issue #143: スナップショットごとの表示調整
+    double dbOffset = 0.0;         // dB オフセット（垂直シフト）
+    double delayOffset = 0.0;      // 位相表示の遅延オフセット（サンプル。frame.sampleRate 基準）
+    int smoothingOverride = -1;    // -1 = グローバル設定を使用、0 = なし、3 = 1/3 oct 等
+    bool showPhase = false;        // 位相も重ね描きする
+
+    // 表示キャッシュの識別子。frame を差し替えたら新しい id を振ること
+    std::uint64_t id = nextSnapshotId();
 
     eeq::dsp::SpectrumFrame frame;
 };

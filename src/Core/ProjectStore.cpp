@@ -278,6 +278,11 @@ juce::var ProjectStore::snapshotToVar (const Snapshot& snapshot)
     o->setProperty ("isSelectedA", snapshot.isSelectedA);
     o->setProperty ("isSelectedB", snapshot.isSelectedB);
     o->setProperty ("correctionApplied", snapshot.correctionApplied);
+    // Issue #143: 新しいフィールド
+    o->setProperty ("dbOffset", snapshot.dbOffset);
+    o->setProperty ("delayOffset", snapshot.delayOffset);
+    o->setProperty ("smoothingOverride", snapshot.smoothingOverride);
+    o->setProperty ("showPhase", snapshot.showPhase);
     o->setProperty ("frame", frameToVar (snapshot.frame));
 
     return object;
@@ -301,6 +306,11 @@ Snapshot ProjectStore::snapshotFromVar (const juce::var& v)
         snapshot.isSelectedA = getPropertyWithDefault (o, "isSelectedA", false);
         snapshot.isSelectedB = getPropertyWithDefault (o, "isSelectedB", false);
         snapshot.correctionApplied = getPropertyWithDefault (o, "correctionApplied", false);
+        // Issue #143: 新しいフィールド
+        snapshot.dbOffset = getPropertyWithDefault (o, "dbOffset", snapshot.dbOffset);
+        snapshot.delayOffset = getPropertyWithDefault (o, "delayOffset", snapshot.delayOffset);
+        snapshot.smoothingOverride = getPropertyWithDefault (o, "smoothingOverride", snapshot.smoothingOverride);
+        snapshot.showPhase = getPropertyWithDefault (o, "showPhase", snapshot.showPhase);
         snapshot.frame = frameFromVar (o->getProperty ("frame"));
     }
 

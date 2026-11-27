@@ -176,10 +176,15 @@ RtaSplTab::RtaSplTab (UiContext& context)
     calibrationResetButton.setButtonText (strings::calibrationClearButton);
     calibrationResetButton.onClick = [this]
     {
-        ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (0.0);
-        ctx.settings.setValue (settingsOffsetKey, 0.0);
-        ctx.settings.saveIfNeeded();
-        refreshFromSettings();
+        // 校正値は測り直さないと戻せないので確認する（issue #148）
+        confirmThen (this, strings::calibrationClearButton, strings::confirmClearCalibration,
+                     strings::okButton, strings::cancelButton, [this]
+                     {
+                         ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (0.0);
+                         ctx.settings.setValue (settingsOffsetKey, 0.0);
+                         ctx.settings.saveIfNeeded();
+                         refreshFromSettings();
+                     });
     };
     addAndMakeVisible (calibrationResetButton);
 

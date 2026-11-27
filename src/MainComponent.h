@@ -106,6 +106,8 @@ private:
     std::uint32_t uiWatchdogWarningUntilMs = 0;
     bool errorDialogOpen = false;
     bool wizardShown = false;
+    bool initialFocusTaken = false;
+    juce::TooltipWindow tooltipWindow { this };
     juce::Component::SafePointer<juce::Component> modalEscapeRoot;
     std::vector<juce::Component::SafePointer<juce::Component>> modalEscapeTargets;
     juce::Time lastAutoSave; // 定期オートセーブ用（issue #38）

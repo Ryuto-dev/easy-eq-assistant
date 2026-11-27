@@ -133,7 +133,8 @@ DelayIrTab::DelayIrTab (UiContext& context)
 
     styleAccentButton (measureButton);
     measureButton.setButtonText (strings::delayMeasureButton);
-    measureButton.onClick = [this] { runDelayMeasurement(); };
+    measureButton.onClick = [this] { runDelayMeasurement (false); };
+    measureButton.setTooltip (strings::delayMeasureTooltip);
     addAndMakeVisible (measureButton);
 
     styleButton (applyButton);
@@ -161,6 +162,42 @@ DelayIrTab::DelayIrTab (UiContext& context)
     };
     styleToggle (rawPhaseToggle);
     addAndMakeVisible (rawPhaseToggle);
+
+    // Issue #142: Delay Finder 改善
+    autoApplyToggle.setButtonText (strings::delayAutoApplyToggle);
+    autoApplyToggle.setTooltip (strings::delayAutoApplyTooltip);
+    autoApplyToggle.onClick = [this]
+    {
+        autoApplyDelay = autoApplyToggle.getToggleState();
+    };
+    styleToggle (autoApplyToggle);
+    addAndMakeVisible (autoApplyToggle);
+
+    trackFollowToggle.setButtonText (strings::delayTrackFollowToggle);
+    trackFollowToggle.setTooltip (strings::delayTrackTooltip);
+    trackFollowToggle.onClick = [this]
+    {
+        trackFollowEnabled = trackFollowToggle.getToggleState();
+        trackTickCounter = 0;
+        trackStatusLabel.setText (trackFollowEnabled ? strings::delayTrackWaiting : juce::String(),
+                                  juce::dontSendNotification);
+    };
+    styleToggle (trackFollowToggle);
+    addAndMakeVisible (trackFollowToggle);
+
+    irHoldToggle.setButtonText (strings::irClipHoldToggle);
+    irHoldToggle.setTooltip (strings::irHoldTooltip);
+
+    styleLabel (trackStatusLabel);
+    addAndMakeVisible (trackStatusLabel);
+    irHoldToggle.onClick = [this]
+    {
+        irClipHold = irHoldToggle.getToggleState();
+        if (! irClipHold)
+            heldIr.reset();
+    };
+    styleToggle (irHoldToggle);
+    addAndMakeVisible (irHoldToggle);
 
     delayProposalLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     addAndMakeVisible (delayProposalLabel);
@@ -301,10 +338,21 @@ DelayIrTab::DelayIrTab (UiContext& context)
     loopbackClearButton.setButtonText (strings::loopbackClearButton);
     loopbackClearButton.onClick = [this]
     {
-        ctx.correction.clear();
-        ctx.settings.setValue ("loopbackCorrection", juce::var());
-        ctx.settings.saveIfNeeded();
-        updateLoopbackUi();
+        // Issue #148: 削除確認ダイアログ
+        juce::Component::SafePointer<DelayIrTab> safeThis { this };
+        juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+            strings::loopbackSection, strings::confirmClearLoopback,
+            strings::okButton, strings::cancelButton, this,
+            juce::ModalCallbackFunction::create ([safeThis] (int result) mutable
+            {
+                if (safeThis == nullptr || result == 0)
+                    return;
+
+                safeThis->ctx.correction.clear();
+                safeThis->ctx.settings.setValue ("loopbackCorrection", juce::var());
+                safeThis->ctx.settings.saveIfNeeded();
+                safeThis->updateLoopbackUi();
+            }));
     };
     addAndMakeVisible (loopbackClearButton);
 
@@ -369,9 +417,24 @@ DelayIrTab::DelayIrTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) systems.size())
         {
-            systems.erase (systems.begin() + selected);
-            saveSystemsToVenue();
-            rebuildSystemList();
+            // Issue #148: 削除確認ダイアログ
+            juce::Component::SafePointer<DelayIrTab> safeThis { this };
+            juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+                strings::systemsSection, strings::confirmDeleteSystem,
+                strings::okButton, strings::cancelButton, this,
+                juce::ModalCallbackFunction::create ([safeThis, selected] (int result) mutable
+                {
+                    if (safeThis == nullptr || result == 0)
+                        return;
+
+                    auto& sys = safeThis->ctx.project.currentVenue().systems;
+                    if (selected >= 0 && selected < (int) sys.size())
+                    {
+                        sys.erase (sys.begin() + selected);
+                        safeThis->saveSystemsToVenue();
+                        safeThis->rebuildSystemList();
+                    }
+                }));
         }
     };
     addAndMakeVisible (systemsRemoveButton);
@@ -380,6 +443,19 @@ DelayIrTab::DelayIrTab (UiContext& context)
     systemsAllButton.setButtonText (strings::systemsAll);
     systemsAllButton.onClick = [this] { setExciteTarget (-1); };
     addAndMakeVisible (systemsAllButton);
+
+    // 選択中の系統を測定対象にする（ダブルクリックと同じ。見つけやすいようボタンも置く: issue #149）
+    styleAccentButton (systemsTargetButton);
+    systemsTargetButton.setButtonText (strings::systemsSetTarget);
+    systemsTargetButton.setTooltip (strings::systemsSetTargetTooltip);
+    systemsTargetButton.onClick = [this]
+    {
+        const auto selected = systemList.getSelectedRow();
+
+        if (selected >= 0 && selected < (int) ctx.project.currentVenue().systems.size())
+            setExciteTarget (selected);
+    };
+    addAndMakeVisible (systemsTargetButton);
 
     systemListModel = std::make_unique<SystemListModel> (*this);
     systemList.setModel (systemListModel.get());
@@ -514,6 +590,11 @@ void DelayIrTab::checkIrRebuildResult()
     if (irWorker.takeResult (result))
     {
         cachedIr = std::move (result.ir);
+
+        // Issue #142: IR保持
+        if (irClipHold && cachedIr)
+            heldIr = std::make_unique<eeq::dsp::ImpulseResponse> (*cachedIr);
+
         // cachedIrAverages 等は requestIrRebuild 側で更新するが、ここでも念のため
         auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
         if (framePtr)
@@ -535,6 +616,7 @@ void DelayIrTab::timerTick()
 
     // ループバック校正の自動進行（issue #17/#31/#55）
     processLoopbackRanging();
+    trackDelayStep();
 
     // IR再構築ワーカーの結果をチェック（issue #65: バックグラウンドで重いFFTを実行）
     checkIrRebuildResult();
@@ -642,7 +724,16 @@ void DelayIrTab::paint (juce::Graphics& g)
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (irArea, 6.0f);
 
-    if (cachedIr == nullptr || cachedIr->samples.empty())
+    // Issue #142: IR保持 - irClipHold 有効時は heldIr を優先表示
+    const eeq::dsp::ImpulseResponse* irToDraw = nullptr;
+    if (irClipHold && heldIr && heldIr->samples.empty() == false)
+        irToDraw = heldIr.get();
+    else if (cachedIr && cachedIr->samples.empty() == false)
+        irToDraw = cachedIr.get();
+
+    lastIrArea = {};
+
+    if (irToDraw == nullptr)
     {
         g.setColour (theme::get (theme::ColourId::textDim));
         g.drawText (strings::graphPlaceholder, irArea.toNearestInt(), juce::Justification::centred);
@@ -650,11 +741,28 @@ void DelayIrTab::paint (juce::Graphics& g)
     }
 
     // 時間軸: ピークを基準に ±irTimeRange。ETC（対数エンベロープ）か波形かを切替
-    const auto& ir = *cachedIr;
+    const auto& ir = *irToDraw;
     const auto sampleRate = ir.sampleRate;
     const auto peakMs = ir.peakTimeSamples * 1000.0 / sampleRate;
     const auto t0 = peakAligned ? peakMs + irTimeRangeMs.getStart() : irTimeRangeMs.getStart();
     const auto t1 = peakAligned ? peakMs + irTimeRangeMs.getEnd() : irTimeRangeMs.getEnd();
+    lastIrArea = irArea;
+    lastIrT0 = t0;
+    lastIrT1 = t1;
+
+    // 適用中の遅延を IR 上に縦線で示す（クリックで指定した位置が分かるように）
+    if (sampleRate > 0.0 && ctx.state.appliedDelaySamples.load() > 0.0)
+    {
+        const auto appliedMs = ctx.state.appliedDelaySamples.load() * 1000.0 / sampleRate;
+
+        if (appliedMs >= t0 && appliedMs <= t1)
+        {
+            const auto x = irArea.getX() + (float) ((appliedMs - t0) / (t1 - t0)) * irArea.getWidth();
+            g.setColour (theme::get (theme::ColourId::warn).withAlpha (0.8f));
+            const float dashes[] = { 3.0f, 3.0f };
+            g.drawDashedLine ({ x, irArea.getY(), x, irArea.getBottom() }, dashes, 2, 1.2f);
+        }
+    }
 
     auto timeToX = [&] (double timeMs)
     {
@@ -753,12 +861,85 @@ void DelayIrTab::paint (juce::Graphics& g)
     }
 }
 
-void DelayIrTab::runDelayMeasurement()
+void DelayIrTab::runDelayMeasurement (bool forceApply)
 {
     usePhat = phatToggle.getToggleState();
     lastEstimate = ctx.engine.getMeasurement().estimateCurrentDelay (usePhat);
     hasEstimate = true;
     updateDelayReadout();
+
+    // 検出して即適用（issue #142）。信頼できない結果は適用しない
+    if ((forceApply || autoApplyDelay) && lastEstimate.valid)
+        applyDelay();
+}
+
+void DelayIrTab::trackDelayStep()
+{
+    if (! trackFollowEnabled || ! ctx.engine.getMeasurement().isMeasuring())
+        return;
+
+    // 約2秒ごと（30Hz × 60）に再推定する。1回あたり 32768 点の相関なので UI への負担は小さい
+    if (++trackTickCounter < 60)
+        return;
+
+    trackTickCounter = 0;
+    const auto estimate = ctx.engine.getMeasurement().estimateCurrentDelay (phatToggle.getToggleState());
+    const auto sampleRate = ctx.engine.getCurrentSampleRate();
+
+    if (! estimate.valid || sampleRate <= 0.0)
+    {
+        trackStatusLabel.setText (strings::delayTrackLost, juce::dontSendNotification);
+        trackStatusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+        return;
+    }
+
+    const auto newMs = eeq::acoustics::delayMsForSamples (estimate.delaySamples, sampleRate);
+    const auto oldMs = eeq::acoustics::delayMsForSamples (ctx.state.appliedDelaySamples.load(), sampleRate);
+    trackStatusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+
+    // 0.05 ms（≒ 17 mm）以上動いたら追従する。それ未満は推定の揺れとして無視する
+    if (std::abs (newMs - oldMs) >= 0.05)
+    {
+        lastEstimate = estimate;
+        hasEstimate = true;
+        updateDelayReadout();
+        applyDelay();
+        trackStatusLabel.setText (strings::delayTrackFollowed + juce::String (oldMs, 2) + " → "
+                                      + juce::String (newMs, 2) + " ms",
+                                  juce::dontSendNotification);
+    }
+    else
+    {
+        trackStatusLabel.setText (strings::delayTrackStable + juce::String (newMs, 2) + " ms",
+                                  juce::dontSendNotification);
+    }
+}
+
+void DelayIrTab::setAppliedDelayMs (double ms, const juce::String& reason)
+{
+    const auto sampleRate = ctx.engine.getCurrentSampleRate();
+
+    if (sampleRate <= 0.0 || ! std::isfinite (ms))
+        return;
+
+    ctx.state.appliedDelaySamples.store (eeq::acoustics::samplesForDelayMs (ms, sampleRate));
+    tempAtDelayApply = ctx.state.airTemperatureC.load();
+    manualDelayEditor.setText (juce::String (ms, 2), juce::dontSendNotification);
+    refreshDistanceFromManualDelay();
+    eeq::log::write ("delay: " + reason + " " + juce::String (ms, 3) + " ms");
+}
+
+void DelayIrTab::mouseDown (const juce::MouseEvent& event)
+{
+    // IR グラフのクリックで、その時刻を遅延として適用する（issue #142）
+    if (lastIrArea.contains (event.position) && lastIrT1 > lastIrT0)
+    {
+        const auto t = (event.position.x - lastIrArea.getX()) / juce::jmax (1.0f, lastIrArea.getWidth());
+        const auto ms = lastIrT0 + (double) t * (lastIrT1 - lastIrT0);
+
+        if (ms >= 0.0)
+            setAppliedDelayMs (ms, "set from IR click");
+    }
 }
 
 void DelayIrTab::updateDelayReadout()
@@ -969,6 +1150,9 @@ void DelayIrTab::timerTickBackground()
     // 非表示タブ用の軽量ティック（issue #55）: ループバック測定の進行・自動停止だけを行う。
     // 励起を伴う処理がタブを離れたことで止まらず、ピンクノイズが鳴り続けることを防ぐ
     processLoopbackRanging();
+
+    // Track は伝達関数タブを見ながら使うので、非表示でも動かす（issue #142）
+    trackDelayStep();
 }
 
 void DelayIrTab::rebuildSystemList()
@@ -1232,6 +1416,13 @@ void DelayIrTab::resized()
     juce::ignoreUnused (toggles);
 
     auto delayPanel = left;
+
+    // Issue #142: Delay Finder 改善トグル
+    auto extraToggles = delayPanel.removeFromTop (22);
+    autoApplyToggle.setBounds (extraToggles.removeFromLeft (140));
+    trackFollowToggle.setBounds (extraToggles.removeFromLeft (110));
+    irHoldToggle.setBounds (extraToggles.removeFromLeft (100));
+    trackStatusLabel.setBounds (extraToggles);
     auto delayRow = delayPanel.removeFromTop (40);
     delayTitle.setBounds (delayRow.removeFromLeft (50));
     delayValueLabel.setBounds (delayRow);
@@ -1273,6 +1464,8 @@ void DelayIrTab::resized()
     systemsAddButton.setBounds (systemsButtons.removeFromRight (100));
     systemsButtons.removeFromRight (6);
     systemsAllButton.setBounds (systemsButtons.removeFromRight (110));
+    systemsButtons.removeFromRight (6);
+    systemsTargetButton.setBounds (systemsButtons.removeFromRight (juce::jmin (110, juce::jmax (0, systemsButtons.getWidth()))));
     systems.removeFromTop (4);
 
     // 系統名と出力chの編集行（issue #15）。chコンボは右端に固定で確保する

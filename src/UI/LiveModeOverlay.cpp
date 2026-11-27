@@ -1,5 +1,7 @@
 #include "LiveModeOverlay.h"
 
+#include "BottomBar.h"
+
 #include "../Core/Exporters.h"
 #include "../Core/Log.h"
 #include "Buttons.h"
@@ -77,10 +79,71 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
 
     // 履歴グラフのタイトルは paintHistory が描くため、専用ラベルは持たない
 
-    hintLabel.setText (strings::liveLongPressHint + " / " + strings::splUncalibrated,
-                       juce::dontSendNotification);
+    hintLabel.setText (strings::liveLongPressHint, juce::dontSendNotification);
+
+    // 警告しきい値（注意/上限）。規制値や会場ごとに変える（issue #149）
+    for (auto* title : { &warnThresholdTitle, &limitThresholdTitle })
+    {
+        styleLabel (*title);
+        addAndMakeVisible (title);
+    }
+
+    warnThresholdTitle.setText (strings::liveWarnThreshold, juce::dontSendNotification);
+    limitThresholdTitle.setText (strings::liveLimitThreshold, juce::dontSendNotification);
+
+    for (auto* combo : { &warnThresholdCombo, &limitThresholdCombo })
+    {
+        styleCombo (*combo);
+
+        for (int db = 80; db <= 120; ++db)
+            combo->addItem (juce::String (db) + " dB", db);
+
+        combo->onChange = [this] { applyThresholdsFromCombos(); };
+        addAndMakeVisible (combo);
+    }
+
+    warnThresholdCombo.setSelectedId (greenThresholdDb, juce::dontSendNotification);
+    limitThresholdCombo.setSelectedId (yellowThresholdDb, juce::dontSendNotification);
+
+    // 発振器の出力中バッジ（issue #141）: 本番モードでは下部バーが見えないため、ここにも出す
+    outputBadge.setColour (juce::Label::backgroundColourId, theme::get (theme::ColourId::danger));
+    outputBadge.setColour (juce::Label::textColourId, juce::Colours::white);
+    outputBadge.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    outputBadge.setJustificationType (juce::Justification::centred);
+    addChildComponent (outputBadge);
     hintLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     addAndMakeVisible (hintLabel);
+}
+
+void LiveModeOverlay::setSettings (juce::PropertiesFile* settingsToUse)
+{
+    settings = settingsToUse;
+
+    if (settings == nullptr)
+        return;
+
+    warnThresholdCombo.setSelectedId (juce::jlimit (80, 120, settings->getIntValue ("liveWarnThresholdDb", 95)),
+                                      juce::dontSendNotification);
+    limitThresholdCombo.setSelectedId (juce::jlimit (80, 120, settings->getIntValue ("liveLimitThresholdDb", 105)),
+                                       juce::dontSendNotification);
+    applyThresholdsFromCombos();
+}
+
+void LiveModeOverlay::applyThresholdsFromCombos()
+{
+    greenThresholdDb = warnThresholdCombo.getSelectedId();
+    yellowThresholdDb = juce::jmax (greenThresholdDb + 1, limitThresholdCombo.getSelectedId());
+
+    if (limitThresholdCombo.getSelectedId() != yellowThresholdDb)
+        limitThresholdCombo.setSelectedId (juce::jmin (120, yellowThresholdDb), juce::dontSendNotification);
+
+    if (settings != nullptr)
+    {
+        settings->setValue ("liveWarnThresholdDb", greenThresholdDb);
+        settings->setValue ("liveLimitThresholdDb", yellowThresholdDb);
+    }
+
+    repaint();
 }
 
 void LiveModeOverlay::beginLiveMode()
@@ -143,10 +206,34 @@ void LiveModeOverlay::timerTick()
     sessionLabel.setText (juce::String ((int) (spl.sessionSeconds / 60.0)) + " min",
                           juce::dontSendNotification);
 
-    // 1秒ごとのCSV保存と履歴（仕様 5.4）
+    // 校正済みなら「未校正」注記を出さない（issue #139）
+    {
+        const auto calibrated = std::abs (engine.getSplAnalyzer().getCalibrationOffsetDb()) > 1.0e-9;
+        auto hint = strings::liveLongPressHint;
+
+        if (! calibrated)
+            hint << " / " << strings::splUncalibrated;
+
+        if (! loggingActive)
+            hint << " / " << strings::liveLogInactive;
+
+        if (hintLabel.getText() != hint)
+            hintLabel.setText (hint, juce::dontSendNotification);
+    }
+
+    // 出力中バッジ（issue #141）
+    {
+        const auto audible = engine.isNoiseAudible();
+        outputBadge.setVisible (audible);
+
+        if (audible)
+            outputBadge.setText (BottomBar::outputStatusText (engine), juce::dontSendNotification);
+    }
+
+    // 1秒ごとの履歴とCSV保存（仕様 5.4）。履歴はログの成否と切り離す（issue #149: ログが失敗しても止めない）
     const auto now = juce::Time::getCurrentTime();
 
-    if (loggingActive && (now.toMilliseconds() - lastLogTime.toMilliseconds()) >= 1000)
+    if ((now.toMilliseconds() - lastLogTime.toMilliseconds()) >= 1000)
     {
         lastLogTime = now;
 
@@ -158,9 +245,10 @@ void LiveModeOverlay::timerTick()
                 historySpl.pop_front();
 
             // 書き込みが続けられない（移動/ディスク満杯など）場合は通知して止める
-            if (! eeq::core::exporters::appendSplLogLine (currentLogFile, now.formatted ("%H:%M:%S"),
-                                                          spl.currentDb, spl.leq1minDb, spl.leq15minDb,
-                                                          spl.leqSessionDb, spl.peakDb))
+            if (loggingActive
+                && ! eeq::core::exporters::appendSplLogLine (currentLogFile, now.formatted ("%H:%M:%S"),
+                                                             spl.currentDb, spl.leq1minDb, spl.leq15minDb,
+                                                             spl.leqSessionDb, spl.peakDb))
             {
                 loggingActive = false;
                 eeq::log::write ("live mode: SPL log write FAILED, logging stopped");
@@ -458,6 +546,14 @@ void LiveModeOverlay::resized()
     exitButton.setBounds (topRow.removeFromLeft (160));
     topRow.removeFromLeft (8);
     waterfallButton.setBounds (topRow.removeFromLeft (140));
+    topRow.removeFromLeft (16);
+    warnThresholdTitle.setBounds (topRow.removeFromLeft (44));
+    warnThresholdCombo.setBounds (topRow.removeFromLeft (90).reduced (0, 4));
+    topRow.removeFromLeft (8);
+    limitThresholdTitle.setBounds (topRow.removeFromLeft (44));
+    limitThresholdCombo.setBounds (topRow.removeFromLeft (90).reduced (0, 4));
+    topRow.removeFromLeft (16);
+    outputBadge.setBounds (topRow.removeFromRight (juce::jmin (360, topRow.getWidth())));
 
     auto content = bounds.reduced (8, 4);
 

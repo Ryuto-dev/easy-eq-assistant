@@ -33,10 +33,17 @@ struct GridPoint
     Ref パワーがピークより floorDbBelowPeak 以上低い bin は H1 が不定のため除外する
     （計算値は呼び出し元が保持し、表示/提案にのみ使う。仕様 3.1）。
 
-    octaveDenom: 0 = スムージングなし（bin をそのままグリッドへ） */
+    octaveDenom: 0 = スムージングなし（bin をそのままグリッドへ）
+
+    delayCompensationSamples: 位相の遅延補正（サンプル）。各 bin の H に e^{+j2πfτ/fs} を掛けて
+    から帯域平均する（issue #107）。平均後に中心周波数だけ回すと、帯域内で位相が回転して
+    円平均が崩れるため、必ず平均の「前」に補正する。返る位相は補正済み。
+
+    count == 0（有効な bin がない）の点は h = 0 になる。描画側は count で除外すること。 */
 [[nodiscard]] inline std::vector<GridPoint> smoothToLogGrid (const SpectrumFrame& frame, int octaveDenom,
                                                              double fMin, double fMax, int numPoints,
-                                                             float floorDbBelowPeak = 80.0f)
+                                                             float floorDbBelowPeak = 80.0f,
+                                                             double delayCompensationSamples = 0.0)
 {
     std::vector<GridPoint> points;
     points.resize ((size_t) juce::jmax (1, numPoints));
@@ -77,7 +84,11 @@ struct GridPoint
         const auto hi = octaveDenom > 0 ? fc * factor : f1;
 
         auto kLo = juce::jlimit (1, nBins - 1, (int) std::ceil (lo / binWidth));
-        auto kHi = juce::jlimit (1, nBins - 1, std::max (kLo, (int) std::floor (hi / binWidth)));
+        auto kHi = juce::jlimit (1, nBins - 1, (int) std::floor (hi / binWidth));
+
+        // 帯域が 1 bin より狭いときは中心に最も近い bin を使う（上側へ寄せない: issue #119）
+        if (kHi < kLo)
+            kLo = kHi = juce::jlimit (1, nBins - 1, (int) std::lround (fc / binWidth));
 
         double sumPower = 0.0;       // Σ|H|²
         double sumSin = 0.0, sumCos = 0.0; // アンラップ位相の円平均用
@@ -89,8 +100,13 @@ struct GridPoint
             if (frame.refPowerDb[(size_t) k] < refPeakDb - floorDbBelowPeak)
                 continue;
 
-            const auto h = std::complex<double> (frame.transfer[(size_t) k].real(),
-                                                 frame.transfer[(size_t) k].imag());
+            auto h = std::complex<double> (frame.transfer[(size_t) k].real(),
+                                           frame.transfer[(size_t) k].imag());
+
+            if (delayCompensationSamples != 0.0)
+                h *= std::polar (1.0, 2.0 * juce::MathConstants<double>::pi * (double) k
+                                          * delayCompensationSamples / (double) frame.fftSize);
+
             const auto phaseDeg = std::arg (h) * 180.0 / juce::MathConstants<double>::pi;
 
             // 前の bin からの位相を連続になるようアンラップする（帯域をまたいで継続）

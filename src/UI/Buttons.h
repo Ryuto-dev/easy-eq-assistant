@@ -77,6 +77,11 @@ inline void styleTextEditor (juce::TextEditor& editor)
     editor.setColour (juce::TextEditor::textColourId, theme::get (theme::ColourId::text));
     editor.setColour (juce::TextEditor::highlightedTextColourId, theme::get (theme::ColourId::text));
     editor.setWantsKeyboardFocus (true);
+
+    // Esc を入力欄で消費させない（issue #101）。既定の TextEditor は Esc/Return を飲み込むため、
+    // 入力欄にフォーカスがあると Esc の緊急停止がメイン画面へ届かなかった。
+    // false にすると Esc は親（MainComponent::keyPressed）へ伝わり、Return の onReturnKey は従来どおり呼ばれる
+    editor.setEscapeAndReturnKeysConsumed (false);
 }
 
 inline void styleToggle (juce::ToggleButton& toggle)
@@ -102,6 +107,20 @@ inline void styleSlider (juce::Slider& slider)
 /** コンポーネント1個へスタイルを再適用する（issue #9 / #50）。
     目印があるものはそのスタイルを再適用し、目印が無い標準ウィジェットにも
     テーマの標準色を再適用する（生成時に焼き込まれた色を残さない） */
+/** 破壊的な操作の前に確認する（issue #148）。OK のときだけ action を呼ぶ。
+    owner が破棄されていたら何もしない */
+inline void confirmThen (juce::Component* owner, const juce::String& title, const juce::String& message,
+                         const juce::String& okText, const juce::String& cancelText, std::function<void()> action)
+{
+    juce::Component::SafePointer<juce::Component> safeOwner { owner };
+    juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon, title, message, okText, cancelText, owner,
+        juce::ModalCallbackFunction::create ([safeOwner, action = std::move (action)] (int result)
+        {
+            if (result != 0 && safeOwner != nullptr && action)
+                action();
+        }));
+}
+
 inline void restyleComponent (juce::Component& component)
 {
     const auto& properties = component.getProperties();
