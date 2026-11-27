@@ -140,7 +140,7 @@ private:
         int numSections = 0;
         double gain = 1.0;
 
-        void design (Weighting weighting, double sampleRate);
+        void design (Weighting type, double fs);
         void reset() noexcept
         {
             for (auto& section : sections)

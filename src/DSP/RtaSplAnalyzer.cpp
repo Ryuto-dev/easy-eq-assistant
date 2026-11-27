@@ -15,10 +15,10 @@ constexpr double sineMeanSquare = 0.5; // フルスケール正弦波の二乗�
 constexpr int splSliceSamples = hop;   // Leq スライスの長さ
 
 // IEC 61672 の A/C 重み付けの極周波数 [Hz]（aWeightingDb / cWeightingDb と同じ値）
-constexpr double f1 = 20.6;
-constexpr double f2 = 107.7;
-constexpr double f3 = 737.9;
-constexpr double f4 = 12194.0;
+constexpr double poleF1 = 20.6;
+constexpr double poleF2 = 107.7;
+constexpr double poleF3 = 737.9;
+constexpr double poleF4 = 12194.0;
 
 double analogWeightingDb (RtaSplAnalyzer::Weighting weighting, double freq)
 {
@@ -91,13 +91,13 @@ double RtaSplAnalyzer::cWeightingDb (double frequency)
     return 20.0 * std::log10 (numerator / denominator / at1k);
 }
 
-void RtaSplAnalyzer::WeightingFilter::design (Weighting weighting, double fs)
+void RtaSplAnalyzer::WeightingFilter::design (Weighting type, double fs)
 {
     numSections = 0;
     gain = 1.0;
     reset();
 
-    if (weighting == Weighting::zWeighted || ! (fs > 0.0))
+    if (type == Weighting::zWeighted || ! (fs > 0.0))
         return;
 
     // アナログ伝達関数（IEC 61672-1 附属書 E）
@@ -107,7 +107,7 @@ void RtaSplAnalyzer::WeightingFilter::design (Weighting weighting, double fs)
     // 48 kHz で 10 kHz −1.2 dB / 16 kHz −6.4 dB と高域が落ちる。そこで余りの零点を
     // z = −r に置き、r を定義式との最大誤差が最小になるよう設計時に数値探索する
     // （48 kHz で 20 Hz〜16 kHz の誤差 ±0.4 dB 以内）。
-    const bool isA = weighting == Weighting::aWeighted;
+    const bool isA = type == Weighting::aWeighted;
 
     auto build = [&] (double r, WeightingFilter& out)
     {
@@ -143,14 +143,14 @@ void RtaSplAnalyzer::WeightingFilter::design (Weighting weighting, double fs)
 
         if (isA)
         {
-            out.sections[0] = makeSection (f1, f1, true);
-            out.sections[1] = makeSection (f2, f3, true);
-            out.sections[2] = makeSection (f4, f4, false);
+            out.sections[0] = makeSection (poleF1, poleF1, true);
+            out.sections[1] = makeSection (poleF2, poleF3, true);
+            out.sections[2] = makeSection (poleF4, poleF4, false);
         }
         else
         {
-            out.sections[0] = makeSection (f1, f1, true);
-            out.sections[1] = makeSection (f4, f4, false);
+            out.sections[0] = makeSection (poleF1, poleF1, true);
+            out.sections[1] = makeSection (poleF4, poleF4, false);
         }
 
         // 1 kHz で 0 dB に正規化
@@ -180,7 +180,7 @@ void RtaSplAnalyzer::WeightingFilter::design (Weighting weighting, double fs)
                 mag *= sectionMagnitude (candidate.sections[(size_t) i], f, fs);
 
             worst = std::max (worst, std::abs (20.0 * std::log10 (std::max (mag, 1.0e-30))
-                                               - analogWeightingDb (weighting, f)));
+                                               - analogWeightingDb (type, f)));
         }
 
         return worst;
