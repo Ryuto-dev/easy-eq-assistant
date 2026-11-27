@@ -20,10 +20,15 @@ namespace eeq::dsp
 
 struct AveragingConfig
 {
-    enum class Mode { cumulative, exponential };
+    // cumulative: リセット可能な累積平均（maxAverages 到達後は 1/N の指数平均に移行）
+    // exponential: 重み 1/maxAverages の指数平均
+    // fifo: 直近 maxAverages フレームの等重み平均（古いフレームは確実に抜ける。issue #147）
+    enum class Mode { cumulative, exponential, fifo };
 
-    Mode mode = Mode::cumulative;
-    int maxAverages = 64; // 1〜256（仕様 3.1）
+    Mode mode = Mode::exponential;
+    int maxAverages = 16; // 1〜256（仕様 3.1）。fifo は maxFifoFrames まで
+
+    static constexpr int maxFifoFrames = 128;
 };
 
 // 解析結果（binごと・未スムージング）。スムージングは表示側で行う（仕様 3.1）。
@@ -92,6 +97,20 @@ private:
     std::vector<std::complex<double>> gxy;
     long long averages = 0;
     std::atomic<int> publishedAverages { 0 };
+
+    // FIFO 平均用: フレームごとの自己/相互パワー（float で保持してメモリを抑える）
+    struct FifoSlot
+    {
+        std::vector<float> xx, yy;
+        std::vector<std::complex<float>> xy;
+    };
+    std::vector<FifoSlot> fifoSlots;
+    int fifoWrite = 0;
+    int fifoCount = 0;
+    std::vector<double> fifoSumXx, fifoSumYy;
+    std::vector<std::complex<double>> fifoSumXy;
+    int framesSinceFifoRecompute = 0;
+    void recomputeFifoSums();
 
     // FFT 作業バッファ（実FFTは 2N floats を使用）
     std::vector<float> fftBufRef, fftBufMeas;

@@ -34,6 +34,9 @@ public:
     /** 長押しで戻る操作が確定したときに呼ばれる（MainComponentがオーバーレイを閉じる） */
     std::function<void()> onHideRequested;
 
+    /** しきい値の保存先（会場や規制値に合わせて変える: issue #149） */
+    void setSettings (juce::PropertiesFile* settingsToUse);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -110,8 +113,12 @@ private:
     std::vector<double> rtaCenters;
     std::vector<float> rtaLevels;
 
-    static constexpr int greenThresholdDb = 95;  // しきい値（規制値に合わせて変更可）
-    static constexpr int yellowThresholdDb = 105;
+    int greenThresholdDb = 95;   // これ以上で黄（注意）。本番モード画面で変更できる（issue #149）
+    int yellowThresholdDb = 105; // これ以上で赤（上限）
+    juce::PropertiesFile* settings = nullptr;
+    juce::ComboBox warnThresholdCombo, limitThresholdCombo;
+    juce::Label warnThresholdTitle, limitThresholdTitle, outputBadge;
+    void applyThresholdsFromCombos();
     static constexpr int historySeconds = 60 * 60;
     static constexpr int waterfallSeconds = 300; // 表示長 5分（30秒〜10分の範囲内）
 };

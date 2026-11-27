@@ -192,8 +192,17 @@ VenueTab::VenueTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) points.size())
         {
-            points.erase (points.begin() + selected);
-            micPointList.updateContent();
+            confirmThen (this, strings::venueMicPoints, strings::confirmDeleteMicPoint + "\n" + points[(size_t) selected].name,
+                         strings::okButton, strings::cancelButton, [this, selected]
+                         {
+                             auto& current = ctx.project.currentVenue().micPoints;
+
+                             if (selected < (int) current.size())
+                             {
+                                 current.erase (current.begin() + selected);
+                                 micPointList.updateContent();
+                             }
+                         });
         }
     };
     addAndMakeVisible (micPointRemoveButton);
@@ -225,7 +234,7 @@ VenueTab::VenueTab (UiContext& context)
 
     // Issue #148: プロジェクトクリア確認
     styleButton (clearProjectButton);
-    clearProjectButton.setButtonText (juce::String (u8"プロジェクトをクリア"));
+    clearProjectButton.setButtonText (strings::clearProjectButton);
     clearProjectButton.onClick = [this]
     {
         juce::Component::SafePointer<VenueTab> safeThis { this };
@@ -362,6 +371,13 @@ void VenueTab::saveProject()
 }
 
 void VenueTab::loadProject()
+{
+    // 読み込むと現在のプロジェクトは置き換わる（未保存分は自動保存にしか残らない）ので確認する（issue #148）
+    confirmThen (this, strings::fileChooserOpen, strings::confirmLoadProject, strings::okButton, strings::cancelButton,
+                 [this] { loadProjectConfirmed(); });
+}
+
+void VenueTab::loadProjectConfirmed()
 {
     auto chooser = std::make_shared<juce::FileChooser> (strings::fileChooserOpen,
                                                         juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),

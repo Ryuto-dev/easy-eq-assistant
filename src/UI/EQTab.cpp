@@ -691,8 +691,6 @@ void EQTab::resized()
     convergenceLabel.setBounds (left.removeFromTop (18));
 
     // 右: EQグラフ + 帯域一覧と手動調整
-    auto graphTitle = right.removeFromTop (18);
-    // グラフエリアを確保
     auto graphHeight = juce::jmin (240, right.getHeight() / 2);
     eqGraph.setBounds (right.removeFromTop (graphHeight));
     right.removeFromTop (4);
@@ -720,69 +718,59 @@ void EQTab::resized()
     exportTextButton.setBounds (exportRow.removeFromLeft (140));
 }
 
-// Issue #149: EQ専用グラフを更新
+// EQ専用グラフ（issue #149）: EQ案の計算に使った測定カーブ・ターゲット・予測を同じ周波数軸で重ねる
 void EQTab::updateEqGraph()
 {
-    if (! hasResult)
-        return;
+    std::vector<FrequencyGraphView::OverlayTrace> traces;
 
-    // 測定カーブをライブフレームとして設定
-    eeq::dsp::SpectrumFrame frame;
-    frame.fftSize = 8192; // 仮の値
-    frame.sampleRate = ctx.engine.getCurrentSampleRate();
-    frame.averages = 1;
-
-    frame.transfer.resize (gridFrequencies.size());
-    frame.magnitudeDb.resize (gridFrequencies.size());
-    frame.phaseDeg.resize (gridFrequencies.size());
-    frame.coherence.resize (gridFrequencies.size());
-    frame.refPowerDb.resize (gridFrequencies.size());
-    frame.measPowerDb.resize (gridFrequencies.size());
-
-    for (size_t i = 0; i < gridFrequencies.size(); ++i)
+    auto toColumns = [] (const std::vector<eeq::dsp::GridPoint>& points)
     {
-        const auto mag = std::pow (10.0, measuredDb[i] / 20.0);
-        frame.transfer[i] = std::complex<float> ((float) mag, 0.0f);
-        frame.magnitudeDb[i] = (float) measuredDb[i];
-        frame.phaseDeg[i] = 0.0f;
-        frame.coherence[i] = 1.0f;
-        frame.refPowerDb[i] = (float) measuredDb[i];
-        frame.measPowerDb[i] = (float) measuredDb[i];
+        auto columns = std::make_shared<std::vector<FrequencyGraphView::OverlayColumn>>();
+        columns->reserve (points.size());
+
+        for (const auto& p : points)
+            columns->push_back ({ p.freq, { (float) p.h.real(), (float) p.h.imag() } });
+
+        return std::shared_ptr<const std::vector<FrequencyGraphView::OverlayColumn>> (std::move (columns));
+    };
+
+    if (hasResult && gridFrequencies.size() == measuredDb.size())
+    {
+        auto columns = std::make_shared<std::vector<FrequencyGraphView::OverlayColumn>>();
+
+        for (size_t i = 0; i < gridFrequencies.size(); ++i)
+            columns->push_back ({ gridFrequencies[i], { (float) std::pow (10.0, measuredDb[i] / 20.0), 0.0f } });
+
+        FrequencyGraphView::OverlayTrace trace;
+        trace.name = strings::eqGraphMeasured;
+        trace.colour = theme::get (theme::ColourId::accent);
+        trace.thickness = 1.4f;
+        trace.columns = std::move (columns);
+        traces.push_back (std::move (trace));
     }
 
-    // オーバーレイとしてターゲットと予測を設定
-    std::vector<FrequencyGraphView::OverlaySource> sources;
-
-    // ターゲット曲線
     if (! ctx.state.targetPoints.empty())
     {
-        FrequencyGraphView::OverlaySource source;
-        source.name = strings::eqGraphTarget;
-        source.colour = theme::get (theme::ColourId::ok);
-        source.points = &ctx.state.targetPoints;
-        source.thickness = 1.2f;
-        source.dashed = true;
-        source.showPhase = false;
-        sources.push_back (source);
+        FrequencyGraphView::OverlayTrace trace;
+        trace.name = strings::eqGraphTarget;
+        trace.colour = theme::get (theme::ColourId::ok);
+        trace.dashed = true;
+        trace.dbOffset = targetDisplayOffsetDb;
+        trace.columns = toColumns (ctx.state.targetPoints);
+        traces.push_back (std::move (trace));
     }
 
-    // 予測曲線
     if (! ctx.state.predictionPoints.empty())
     {
-        FrequencyGraphView::OverlaySource source;
-        source.name = strings::eqGraphPrediction;
-        source.colour = theme::get (theme::ColourId::warn);
-        source.points = &ctx.state.predictionPoints;
-        source.thickness = 1.0f;
-        source.dashed = false;
-        source.showPhase = false;
-        sources.push_back (source);
+        FrequencyGraphView::OverlayTrace trace;
+        trace.name = strings::eqGraphPrediction;
+        trace.colour = theme::get (theme::ColourId::warn);
+        trace.columns = toColumns (ctx.state.predictionPoints);
+        traces.push_back (std::move (trace));
     }
 
-    // 表示モードを振幅のみに設定（EQ調整用）
-    eqGraph.setViewMode (eeq::ui::ViewMode::ampOnly);
-    eqGraph.setOverlays (sources, ctx.state.eqVersion.load(), ctx.state.smoothingDenom);
-    eqGraph.setLiveFrame (frame, ctx.state.smoothingDenom, 0.0, true);
+    eqGraph.setViewMode (ViewMode::ampOnly);
+    eqGraph.setOverlayTraces (std::move (traces));
 }
 
 } // namespace eeq::ui

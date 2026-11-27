@@ -1,7 +1,7 @@
 #include "LevelMeter.h"
 
-#include "Theme.h"
 #include "Strings.h"
+#include "Theme.h"
 
 namespace eeq::ui
 {
@@ -10,12 +10,17 @@ LevelMeter::LevelMeter (const juce::String& labelText)
     : label (labelText)
 {
     setOpaque (false);
+    setTooltip (strings::meterTooltip);
 }
 
-void LevelMeter::setLevels (float newPeakDb, float newRmsDb, bool clippedNow)
+void LevelMeter::setLevels (float newPeakDb, float newRmsDb, bool clipLatched)
 {
+    const auto previousPeak = peakDb, previousRms = rmsDb, previousHold = holdDb;
+    const auto previousClip = clipping;
+
     peakDb = newPeakDb;
     rmsDb = newRmsDb;
+    clipping = clipLatched;
 
     if (peakDb >= holdDb)
     {
@@ -31,91 +36,77 @@ void LevelMeter::setLevels (float newPeakDb, float newRmsDb, bool clippedNow)
         holdDb = juce::jmax (peakDb, holdDb - holdDecayDbPerTick);
     }
 
-    if (clippedNow)
-    {
-        clipped = true;
-        clipTicks = clipTicksInitial;
-    }
-    else if (clipTicks > 0)
-    {
-        --clipTicks;
-        if (clipTicks == 0)
-            clipped = false;
-    }
-
-    repaint();
+    // 変化がなければ描き直さない（無音時の無駄な再描画を避ける）
+    if (std::abs (previousPeak - peakDb) > 0.05f || std::abs (previousRms - rmsDb) > 0.05f
+        || std::abs (previousHold - holdDb) > 0.05f || previousClip != clipping)
+        repaint();
 }
 
-void LevelMeter::clearClip()
+void LevelMeter::mouseUp (const juce::MouseEvent& event)
 {
-    clipped = false;
-    clipTicks = 0;
-    repaint();
+    if (! event.mouseWasDraggedSinceMouseDown() && onClick)
+        onClick();
 }
 
 void LevelMeter::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds();
-    const auto clipping = clipped || clipTicks > 0;
+    const auto danger = theme::get (theme::ColourId::danger);
 
-    // ラベル
-    g.setFont (juce::Font (juce::FontOptions (12.0f)));
-    g.setColour (clipping ? eeq::ui::theme::get (eeq::ui::theme::ColourId::danger)
-                           : eeq::ui::theme::get (eeq::ui::theme::ColourId::textDim));
-    g.drawText (label, bounds.removeFromTop (13), juce::Justification::centredLeft);
+    // 上段: ラベルと数値（ピークホールド値。-60 未満は "−∞" 扱い）
+    auto header = bounds.removeFromTop (14);
+    g.setFont (juce::Font (juce::FontOptions (11.5f, clipping ? juce::Font::bold : juce::Font::plain)));
+    g.setColour (clipping ? danger : theme::get (theme::ColourId::textDim));
+    g.drawText (label, header, juce::Justification::centredLeft);
 
-    // バー本体
-    const auto bar = bounds.removeFromTop (11).toFloat();
-    g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::panelBackground));
+    const auto valueText = clipping ? strings::inputMeterClipLabel
+                                    : (holdDb > -99.0f ? juce::String (holdDb, 1) : juce::String (u8"-∞"));
+    g.setColour (clipping ? danger : theme::get (theme::ColourId::text));
+    g.drawText (valueText, header, juce::Justification::centredRight);
+
+    // 下段: バー
+    const auto bar = bounds.removeFromTop (10).toFloat();
+    g.setColour (theme::get (theme::ColourId::control));
     g.fillRoundedRectangle (bar, 3.0f);
 
     const auto mapDb = [] (float db)
     { return (float) juce::jlimit (0.0, 1.0, (double) ((db + 60.0f) / 60.0f)); };
 
+    // RMS バー: −12 dBFS 以上は注意色、クリップ時は危険色
     const auto rmsWidth = bar.getWidth() * mapDb (rmsDb);
-
-    g.setColour (clipping ? eeq::ui::theme::get (eeq::ui::theme::ColourId::danger)
-                           : eeq::ui::theme::get (eeq::ui::theme::ColourId::accent));
+    g.setColour (clipping ? danger
+                          : peakDb > -6.0f ? theme::get (theme::ColourId::warn)
+                                           : theme::get (theme::ColourId::accent));
     g.fillRoundedRectangle (bar.withWidth (juce::jmax (rmsWidth, 0.0f)), 3.0f);
 
-    // 目盛り（-12, -6, -3, 0 dBFS）
-    g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::gridText).withAlpha (0.4f));
-    g.setFont (juce::Font (juce::FontOptions (8.0f)));
-    for (float db : { -12.0f, -6.0f, -3.0f, 0.0f })
+    // 目盛り（−24 / −12 / −6 / 0 dBFS の刻み）
+    g.setColour (theme::get (theme::ColourId::gridText).withAlpha (0.6f));
+
+    for (const auto db : { -24.0f, -12.0f, -6.0f, 0.0f })
     {
         const auto x = bar.getX() + bar.getWidth() * mapDb (db);
-        g.drawLine (x, bar.getBottom(), x, bar.getBottom() - 3.0f, 1.0f);
-        g.drawText (juce::String (db, 0), (int) x - 12, (int) bar.getBottom() + 1, 24, 10, juce::Justification::centred);
+        g.fillRect (x - 0.5f, bar.getBottom() - 3.0f, 1.0f, 3.0f);
     }
 
-    // ピークマーカー
+    // ピークマーカーとホールド
     if (peakDb > -59.0f)
     {
         const auto x = bar.getX() + bar.getWidth() * mapDb (peakDb);
-        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::text).withAlpha (0.9f));
+        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));
         g.fillRect (x - 1.0f, bar.getY(), 2.0f, bar.getHeight());
     }
 
-    // ピークホールド
     if (holdDb > -59.0f)
     {
         const auto x = bar.getX() + bar.getWidth() * mapDb (holdDb);
-        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::text).withAlpha (0.4f));
+        g.setColour (theme::get (theme::ColourId::text).withAlpha (0.45f));
         g.fillRect (x - 0.5f, bar.getY(), 1.0f, bar.getHeight());
     }
 
-    // 数値表示（右側）
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
-    g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::text).withAlpha (0.8f));
-    const auto textArea = bounds.removeFromRight (80);
-    g.drawText (juce::String (rmsDb, 1) + strings::dbfsUnit, textArea, juce::Justification::centredRight);
-
-    // クリップ表示（色だけでなく文字でも伝える: 仕様 5.5）
     if (clipping)
     {
-        g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-        g.setColour (eeq::ui::theme::get (eeq::ui::theme::ColourId::danger));
-        g.drawText (strings::inputMeterClipLabel, bar, juce::Justification::centredRight);
+        g.setColour (danger);
+        g.drawRoundedRectangle (bar, 3.0f, 1.5f);
     }
 }
 

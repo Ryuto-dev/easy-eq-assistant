@@ -199,6 +199,7 @@ if(EASYEQ_BUILD_TESTS)
         src/DSP/ImpulseResponseBuilder.cpp
         src/DSP/EQProposer.cpp
         src/DSP/RtaSplAnalyzer.cpp
+        src/UI/FrequencyGraphView.cpp
     )
     target_include_directories(EasyEQTests PRIVATE src)
     target_compile_definitions(EasyEQTests PRIVATE

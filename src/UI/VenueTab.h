@@ -38,6 +38,7 @@ private:
     void saveFieldsToVenue();
     void saveProject();
     void loadProject();
+    void loadProjectConfirmed();
     void exportReportPng();
 
     UiContext& ctx;

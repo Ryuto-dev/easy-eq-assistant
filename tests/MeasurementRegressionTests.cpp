@@ -1,249 +1,333 @@
+// 監査（issue #127〜#150）で見つかった「部品は正しいのにつなぐと間違う」種類の不具合の回帰テスト。
+// 値を範囲ではなく数値で固定する。
+
 #include "gtest/gtest.h"
 
-#include "../src/DSP/TransferFunctionAccumulator.h"
-#include "../src/DSP/OctaveSmoother.h"
-#include "../src/DSP/DelayEstimator.h"
-#include "../src/DSP/RtaSplAnalyzer.h"
-#include "../src/DSP/EQProposer.h"
 #include "../src/Core/ProjectStore.h"
-#include "../src/Audio/AudioEngine.h"
+#include "../src/DSP/OctaveSmoother.h"
+#include "../src/DSP/TransferFunctionAccumulator.h"
+#include "../src/UI/Buttons.h"
+#include "../src/UI/FrequencyGraphView.h"
 
-#include <complex>
-#include <vector>
 #include <cmath>
+#include <complex>
+#include <random>
+#include <vector>
 
 using namespace eeq::dsp;
-using namespace eeq::core;
 
-constexpr double PI = juce::MathConstants<double>::pi;
-
-TEST(MeasurementRegression, TransferFunctionKnownReference)
+namespace
 {
-    // Generate a known system: all-pass with 1ms delay
-    const int fftSize = 8192;
-    const double sampleRate = 48000.0;
-    const double delayMs = 1.0;
-    const double delaySamples = delayMs * sampleRate / 1000.0;
+constexpr double pi = juce::MathConstants<double>::pi;
 
-    TransferFunctionAccumulator acc;
-    AveragingConfig config;
-    config.mode = AveragingConfig::Mode::cumulative;
-    config.maxAverages = 100;
+// 遅延 D サンプル・ゲイン 1 の理想的な系のフレーム（bin ごとに H = e^{-j2πkD/N}）
+SpectrumFrame makeDelayFrame (int fftSize, double sampleRate, double delaySamples)
+{
+    SpectrumFrame frame;
+    frame.fftSize = fftSize;
+    frame.sampleRate = sampleRate;
+    frame.averages = 16;
+    const auto bins = (size_t) fftSize / 2 + 1;
+    frame.transfer.resize (bins);
+    frame.magnitudeDb.assign (bins, 0.0f);
+    frame.phaseDeg.resize (bins);
+    frame.coherence.assign (bins, 1.0f);
+    frame.refPowerDb.assign (bins, 0.0f);
+    frame.measPowerDb.assign (bins, 0.0f);
 
-    acc.configure(fftSize, sampleRate, config, juce::dsp::WindowingFunction<float>::hann);
-
-    // Generate reference and measurement signals
-    std::vector<float> ref(fftSize);
-    std::vector<float> meas(fftSize);
-
-    for (int i = 0; i < fftSize; ++i)
+    for (size_t k = 0; k < bins; ++k)
     {
-        ref[i] = std::sin(2.0 * PI * 1000.0 * i / sampleRate);
-        meas[i] = std::sin(2.0 * PI * 1000.0 * (i - delaySamples) / sampleRate);
+        const auto phase = -2.0 * pi * (double) k * delaySamples / (double) fftSize;
+        frame.transfer[k] = std::polar (1.0f, (float) phase);
+        frame.phaseDeg[k] = (float) (std::remainder (phase, 2.0 * pi) * 180.0 / pi);
     }
 
-    // Feed multiple frames
-    for (int frame = 0; frame < 10; ++frame)
+    return frame;
+}
+} // namespace
+
+// ---- issue #107: 位相は平滑化の「前」に遅延補正する ----
+TEST (MeasurementRegression, SmoothingWithDelayCompensationKeepsPhaseFlat)
+{
+    // 10 ms の遅延（1/6 oct 帯域の中で位相が何回転もする）
+    const auto frame = makeDelayFrame (32768, 48000.0, 480.0);
+    const auto compensated = smoothToLogGrid (frame, 6, 100.0, 16000.0, 200, 80.0f, 480.0);
+
+    for (const auto& p : compensated)
     {
-        acc.feedSamples(ref.data(), meas.data(), fftSize);
+        ASSERT_GT (p.count, 0);
+        EXPECT_NEAR (p.phaseDeg, 0.0f, 0.5f) << "f=" << p.freq;
+        EXPECT_NEAR (p.magnitudeDb, 0.0f, 0.01f) << "f=" << p.freq;
+        EXPECT_NEAR (std::abs (p.h), 1.0, 1.0e-3) << "f=" << p.freq;
+    }
+
+    // 補正しないで平均すると、10 kHz では単位ベクトルの平均がほぼ打ち消し合う
+    // （旧実装は平均後に中心周波数だけ回していたので、位相表示が崩れていた）
+    const auto raw = smoothToLogGrid (frame, 6, 9000.0, 11000.0, 4);
+    const auto& mid = raw[2];
+    const auto rotated = std::arg (mid.h * std::polar (1.0, 2.0 * pi * mid.freq * 480.0 / 48000.0)) * 180.0 / pi;
+    EXPECT_GT (std::abs (rotated), 2.0); // 後から回しても 0° に戻らない（=補正の順序が重要）
+}
+
+// ---- issue #119 (5): 帯域が 1 bin より狭いときは最も近い bin を使う ----
+TEST (MeasurementRegression, NarrowBandUsesNearestBin)
+{
+    SpectrumFrame frame = makeDelayFrame (8192, 48000.0, 0.0);
+    const auto binWidth = 48000.0 / 8192.0; // 5.86 Hz
+
+    // 振幅を bin 番号で区別できるようにする
+    for (size_t k = 0; k < frame.transfer.size(); ++k)
+        frame.transfer[k] = { (float) k, 0.0f };
+
+    // 1/48 oct・20〜40 Hz は帯域幅 < 1 bin。中心 fc に最も近い bin を使っていること
+    const auto points = smoothToLogGrid (frame, 48, 20.0, 40.0, 10);
+
+    for (const auto& p : points)
+    {
+        const auto expectedBin = std::lround (p.freq / binWidth);
+        const auto gotBin = std::lround (std::sqrt (std::pow (10.0, p.magnitudeDb / 10.0)));
+        EXPECT_EQ (gotBin, expectedBin) << "fc=" << p.freq;
+    }
+}
+
+// ---- issue #147: FIFO 平均は直近 N フレームの等重み平均 ----
+TEST (MeasurementRegression, FifoAveragingForgetsOldFramesExactly)
+{
+    constexpr int fftSize = 1024;
+    TransferFunctionAccumulator acc;
+    AveragingConfig config;
+    config.mode = AveragingConfig::Mode::fifo;
+    config.maxAverages = 4;
+    acc.configure (fftSize, 48000.0, config, juce::dsp::WindowingFunction<float>::hann);
+
+    std::mt19937 rng (1);
+    std::normal_distribution<float> noise (0.0f, 0.3f);
+    std::vector<float> ref (fftSize / 2), meas (fftSize / 2);
+
+    auto feedHop = [&] (float gain)
+    {
+        for (int i = 0; i < fftSize / 2; ++i)
+        {
+            ref[(size_t) i] = noise (rng);
+            meas[(size_t) i] = gain * ref[(size_t) i];
+        }
+
+        acc.feedSamples (ref.data(), meas.data(), fftSize / 2);
+    };
+
+    // ゲイン 0.25 のフレームを十分に流したあと、ゲイン 1 に切り替える
+    for (int i = 0; i < 20; ++i)
+        feedHop (0.25f);
+
+    SpectrumFrame before;
+    acc.copyResult (before);
+    EXPECT_EQ (before.averages, 4);
+    EXPECT_NEAR (std::abs (before.transfer[100]), 0.25, 1.0e-3);
+
+    // 切り替え後、窓がまたがるフレーム（1つ）を含めて N+1 回で古いフレームが完全に抜ける
+    for (int i = 0; i < 6; ++i)
+        feedHop (1.0f);
+
+    SpectrumFrame after;
+    acc.copyResult (after);
+    EXPECT_EQ (after.averages, 4);
+    EXPECT_NEAR (std::abs (after.transfer[100]), 1.0, 1.0e-3);
+    EXPECT_NEAR (after.coherence[100], 1.0f, 1.0e-3f);
+
+    // 指数平均では同じ回数では抜けきらない（FIFO との違いを固定する）
+    TransferFunctionAccumulator expo;
+    config.mode = AveragingConfig::Mode::exponential;
+    expo.configure (fftSize, 48000.0, config, juce::dsp::WindowingFunction<float>::hann);
+    rng.seed (1);
+
+    auto feedExpo = [&] (float gain)
+    {
+        for (int i = 0; i < fftSize / 2; ++i)
+        {
+            ref[(size_t) i] = noise (rng);
+            meas[(size_t) i] = gain * ref[(size_t) i];
+        }
+
+        expo.feedSamples (ref.data(), meas.data(), fftSize / 2);
+    };
+
+    for (int i = 0; i < 20; ++i)
+        feedExpo (0.25f);
+
+    for (int i = 0; i < 6; ++i)
+        feedExpo (1.0f);
+
+    SpectrumFrame expoAfter;
+    expo.copyResult (expoAfter);
+    EXPECT_LT (std::abs (expoAfter.transfer[100]), 0.9);
+}
+
+TEST (MeasurementRegression, FifoAveragingStaysExactOverManyFrames)
+{
+    // 加算と減算を繰り返しても丸め誤差が溜まらない（一巡ごとに総和を取り直す）
+    constexpr int fftSize = 512;
+    TransferFunctionAccumulator acc;
+    AveragingConfig config;
+    config.mode = AveragingConfig::Mode::fifo;
+    config.maxAverages = 8;
+    acc.configure (fftSize, 48000.0, config, juce::dsp::WindowingFunction<float>::hann);
+
+    std::mt19937 rng (7);
+    std::normal_distribution<float> noise (0.0f, 1.0f);
+    std::vector<float> ref (4096), meas (4096);
+
+    for (int block = 0; block < 200; ++block)
+    {
+        for (size_t i = 0; i < ref.size(); ++i)
+        {
+            ref[i] = noise (rng) * (block % 2 == 0 ? 100.0f : 0.01f); // 大きさが極端に違うフレームを交互に
+            meas[i] = 0.5f * ref[i];
+        }
+
+        acc.feedSamples (ref.data(), meas.data(), (int) ref.size());
     }
 
     SpectrumFrame result;
-    acc.copyResult(result);
+    acc.copyResult (result);
 
-    EXPECT_GT(result.averages, 0);
-
-    // Check that delay is detected correctly
-    // At 1kHz, 1ms delay = 360 deg phase shift
-    const int bin1k = static_cast<int>(std::round(1000.0 * fftSize / sampleRate));
-    const auto h = result.transfer[bin1k];
-    const double phaseDeg = std::arg(h) * 180.0 / PI;
-
-    // Should be approximately -360 deg (or 0 due to wrapping)
-    // For a proper test, we check magnitude is 1 and coherence is high
-    const double mag = std::abs(h);
-    EXPECT_NEAR(mag, 1.0, 0.1);
-
-    const double coh = result.coherence[bin1k];
-    EXPECT_GT(coh, 0.9);
+    for (size_t k = 5; k < result.transfer.size() - 5; k += 17)
+        EXPECT_NEAR (std::abs (result.transfer[k]), 0.5, 1.0e-3) << "bin " << k;
 }
 
-TEST(MeasurementRegression, SmoothingPowerAveragingPreservesMagnitude)
+// ---- issue #143: スナップショットの表示属性が .eea を往復する ----
+TEST (MeasurementRegression, SnapshotDisplayFieldsRoundTrip)
 {
-    // Create a frame with known magnitude response
-    SpectrumFrame frame;
-    frame.fftSize = 8192;
-    frame.sampleRate = 48000.0;
-    frame.averages = 100;
+    eeq::core::ProjectStore store;
+    eeq::core::Snapshot snap;
+    snap.name = "Main @FOH";
+    snap.colour = juce::Colours::red;
+    snap.dbOffset = 1.5;
+    snap.delayOffset = 48.0;
+    snap.smoothingOverride = 12;
+    snap.showPhase = true;
+    snap.visible = false;
+    snap.frame = makeDelayFrame (1024, 48000.0, 3.0);
+    store.snapshots().push_back (snap);
 
-    const int nBins = frame.fftSize / 2 + 1;
-    frame.transfer.resize(nBins);
-    frame.magnitudeDb.resize(nBins);
-    frame.phaseDeg.resize(nBins);
-    frame.coherence.resize(nBins);
-    frame.refPowerDb.resize(nBins);
-    frame.measPowerDb.resize(nBins);
+    const auto file = juce::File::createTempFile (".eea");
+    ASSERT_TRUE (store.saveToFile (file).isEmpty());
 
-    // Flat response with delay
-    const double delaySamples = 48.0; // 1ms at 48kHz
-    for (int k = 0; k < nBins; ++k)
+    eeq::core::ProjectStore loaded;
+    ASSERT_TRUE (loaded.loadFromFile (file).isEmpty());
+    file.deleteFile();
+
+    ASSERT_EQ (loaded.snapshots().size(), 1u);
+    const auto& s = loaded.snapshots().front();
+    EXPECT_EQ (s.name, snap.name);
+    EXPECT_EQ (s.colour, snap.colour);
+    EXPECT_DOUBLE_EQ (s.dbOffset, 1.5);
+    EXPECT_DOUBLE_EQ (s.delayOffset, 48.0);
+    EXPECT_EQ (s.smoothingOverride, 12);
+    EXPECT_TRUE (s.showPhase);
+    EXPECT_FALSE (s.visible);
+    EXPECT_EQ (s.frame.fftSize, 1024);
+    EXPECT_NE (s.id, snap.id); // 読み込んだスナップショットは新しい id（表示キャッシュを取り違えない）
+}
+
+// ---- UI: グラフの段構成（issue #144）と重ね描き（issue #127）、パン（issue #129） ----
+class GraphTest : public ::testing::Test
+{
+protected:
+    juce::ScopedJuceInitialiser_GUI gui;
+};
+
+TEST_F (GraphTest, ThreePanelLayoutHasNonEmptyPhaseAndCoherence)
+{
+    eeq::ui::FrequencyGraphView graph;
+    graph.setSize (800, 500);
+
+    graph.setViewMode (eeq::ui::ViewMode::ampPhaseCoh);
+    const auto amp = graph.getAmplitudeAreaForTest();
+    const auto phase = graph.getPhaseAreaForTest();
+    const auto coh = graph.getCoherenceAreaForTest();
+
+    EXPECT_GT (amp.getHeight(), 200.0f);
+    EXPECT_GT (phase.getHeight(), 80.0f); // 旧実装では高さ 0 になり位相が消えていた
+    EXPECT_GT (coh.getHeight(), 50.0f);
+    EXPECT_LE (amp.getBottom(), phase.getY());
+    EXPECT_LE (phase.getBottom(), coh.getY());
+
+    graph.setViewMode (eeq::ui::ViewMode::ampPhase);
+    EXPECT_GT (graph.getPhaseAreaForTest().getHeight(), 150.0f);
+    EXPECT_TRUE (graph.getCoherenceAreaForTest().isEmpty());
+
+    graph.setViewMode (eeq::ui::ViewMode::ampOnly);
+    EXPECT_TRUE (graph.getPhaseAreaForTest().isEmpty());
+    EXPECT_FLOAT_EQ (graph.getAmplitudeAreaForTest().getHeight(), graph.getPlotAreaForTest().getHeight());
+}
+
+TEST_F (GraphTest, OverlayTracesAreDrawableWithoutLiveData)
+{
+    eeq::ui::FrequencyGraphView graph;
+    graph.setSize (800, 500);
+    EXPECT_FALSE (graph.hasAnythingToDraw());
+
+    auto columns = std::make_shared<std::vector<eeq::ui::FrequencyGraphView::OverlayColumn>>();
+    columns->push_back ({ 100.0, { 1.0f, 0.0f } });
+    columns->push_back ({ 1000.0, { 0.5f, 0.0f } });
+
+    eeq::ui::FrequencyGraphView::OverlayTrace trace;
+    trace.name = "Before";
+    trace.colour = juce::Colours::orange;
+    trace.columns = columns;
+    graph.setOverlayTraces ({ trace });
+
+    // ライブ測定がなくても、保存済みスナップショットは表示される（issue #130）
+    EXPECT_EQ (graph.getNumOverlayTraces(), 1u);
+    EXPECT_TRUE (graph.hasAnythingToDraw());
+
+    // 描画しても落ちない（列は周波数で配置される）
+    juce::Image image (juce::Image::ARGB, 800, 500, true);
+    juce::Graphics g (image);
+    graph.paintEntireComponent (g, false);
+}
+
+TEST_F (GraphTest, HorizontalDragPansByTheDraggedDistanceOnly)
+{
+    eeq::ui::FrequencyGraphView graph;
+    graph.setSize (1000, 500);
+    auto& axis = graph.getAxisForTest();
+    axis.viewMin = 100.0;
+    axis.viewMax = 10000.0;
+
+    const auto plot = graph.getPlotAreaForTest();
+    auto source = juce::Desktop::getInstance().getMainMouseSource();
+    const auto y = plot.getCentreY();
+    const auto startX = plot.getCentreX();
+
+    auto event = [&] (float x)
     {
-        const double freq = k * frame.sampleRate / frame.fftSize;
-        const double phase = -2.0 * PI * freq * delaySamples / frame.sampleRate;
-        frame.transfer[k] = std::polar(1.0, phase);
-        frame.magnitudeDb[k] = 0.0;
-        frame.phaseDeg[k] = phase * 180.0 / PI;
-        frame.coherence[k] = 1.0f;
-        frame.refPowerDb[k] = 0.0f;
-        frame.measPowerDb[k] = 0.0f;
-    }
+        return juce::MouseEvent (source, { x, y }, juce::ModifierKeys::leftButtonModifier, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                 &graph, &graph, juce::Time::getCurrentTime(), { startX, y },
+                                 juce::Time::getCurrentTime(), 1, false);
+    };
 
-    // Apply 1/3 octave smoothing
-    const auto points = smoothToLogGrid(frame, 3, 20.0, 20000.0, 100);
+    graph.mouseDown (event (startX));
 
-    // All magnitudes should be ~0 dB (power averaging preserves magnitude despite delay)
-    for (const auto& p : points)
-    {
-        EXPECT_NEAR(p.magnitudeDb, 0.0, 0.5);
-    }
+    // 10 px ずつ 10 回ドラッグ = 合計 100 px。旧実装は毎回「開始点からの累積」を足していたので加速した
+    for (int i = 1; i <= 10; ++i)
+        graph.mouseDrag (event (startX + 10.0f * (float) i));
+
+    graph.mouseUp (event (startX + 100.0f));
+
+    const auto octavesPerPixel = std::log2 (100.0) / plot.getWidth();
+    const auto expectedShiftOctaves = -100.0 * octavesPerPixel;
+    EXPECT_NEAR (std::log2 (axis.viewMin / 100.0), expectedShiftOctaves, 1.0e-6);
+    EXPECT_NEAR (std::log2 (axis.viewMax / axis.viewMin), std::log2 (100.0), 1.0e-9);
 }
 
-TEST(MeasurementRegression, DelayEstimationGCCPHAT)
+// ---- issue #101: 入力欄は Esc を消費しない（緊急停止が親へ届く） ----
+TEST_F (GraphTest, StyledTextEditorDoesNotSwallowEscape)
 {
-    // Create a frame with known delay
-    SpectrumFrame frame;
-    frame.fftSize = 8192;
-    frame.sampleRate = 48000.0;
-    frame.averages = 100;
+    juce::TextEditor editor;
+    eeq::ui::styleTextEditor (editor);
+    editor.setText ("12.5");
 
-    const int nBins = frame.fftSize / 2 + 1;
-    frame.transfer.resize(nBins);
-    frame.coherence.resize(nBins);
-    frame.refPowerDb.resize(nBins);
-    frame.measPowerDb.resize(nBins);
-
-    // const double trueDelayMs = 2.5;
-    // const double trueDelaySamples = trueDelayMs * frame.sampleRate / 1000.0;
-
-    // Generate time-domain signals with known delay
-    // const int fftSize = frame.fftSize;
-    // std::vector<float> ref(fftSize);
-    // std::vector<float> meas(fftSize);
-
-    // for (int i = 0; i < fftSize; ++i)
-    // {
-    //     ref[i] = std::sin(2.0 * PI * 1000.0 * i / frame.sampleRate);
-    //     meas[i] = std::sin(2.0 * PI * 1000.0 * (i - trueDelaySamples) / frame.sampleRate);
-    // }
-
-    // // Use the free function estimateDelay directly
-    // auto result = estimateDelay(ref.data(), meas.data(), fftSize, true, 5.0);
-
-    // EXPECT_TRUE(result.valid);
-    // EXPECT_NEAR(result.delaySamples, trueDelaySamples, 5.0); // Within 5 samples
+    EXPECT_FALSE (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
+    EXPECT_FALSE (editor.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)));
 }
-
-TEST(MeasurementRegression, RtaSplCalibrationOffset)
-{
-    RtaSplAnalyzer analyzer;
-    analyzer.configure(48000.0, 1, 0.125); // 1/1 octave, 125ms averaging
-
-    // Test calibration logic
-    const double targetDb = 94.0; // 94 dB SPL reference
-    double measuredDbFS = -26.0; // Example: -26 dBFS corresponds to 94 dB SPL
-    double offset = targetDb - measuredDbFS; // Should be 120 dB
-
-    EXPECT_NEAR(offset, 120.0, 0.1);
-}
-
-TEST(MeasurementRegression, EqProposalKnownTarget)
-{
-    // Simple test: flat target with flat measurement should produce no bands
-    const int nPoints = 50;
-    std::vector<double> freq(nPoints);
-    std::vector<double> measured(nPoints, 0.0); // 0 dB flat
-    std::vector<double> target(nPoints, 0.0);   // 0 dB flat
-    std::vector<double> weight(nPoints, 1.0);
-
-    EQProposalInput input;
-    input.frequency = freq;
-    input.measuredDb = measured;
-    input.targetDb = target;
-    input.weight = weight;
-    input.sampleRate = 48000.0;
-    input.minFrequency = 20.0;
-    input.maxFrequency = 20000.0;
-    input.maxBands = 8;
-    input.allowValleyBoost = false;
-
-    auto result = proposeEQ(input);
-
-    // With perfect match, should need 0 or very few bands
-    EXPECT_LE(result.bands.size(), 2);
-}
-
-// TEST(MeasurementRegression, ProjectStoreSnapshotSerialization)
-// Temporarily disabled due to stack overflow during destruction
-// {
-//     ProjectStore store;
-//     Venue venue;
-//     venue.name = "Test Venue";
-//     venue.date = juce::Time::getCurrentTime();
-//
-//     Snapshot snap;
-//     snap.name = "Test Snapshot";
-//     snap.systemName = "Main";
-//     snap.micPoint = "FOH";
-//     snap.colour = juce::Colours::red;
-//     snap.timestamp = juce::Time::getCurrentTime();
-//     snap.temperatureC = 22.0;
-//     snap.note = "Test note";
-//     snap.delaySamples = 100.0;
-//     snap.visible = true;
-//     snap.correctionApplied = false;
-//     snap.dbOffset = 1.5;
-//     snap.delayOffset = 10.0;
-//     snap.smoothingOverride = 6;
-//
-//     // Create a minimal frame
-//     snap.frame.fftSize = 1024;
-//     snap.frame.sampleRate = 48000.0;
-//     snap.frame.averages = 16;
-//     const int nBins = snap.frame.fftSize / 2 + 1;
-//     snap.frame.transfer.assign(nBins, {1.0f, 0.0f});
-//     snap.frame.magnitudeDb.assign(nBins, 0.0f);
-//     snap.frame.phaseDeg.assign(nBins, 0.0f);
-//     snap.frame.coherence.assign(nBins, 1.0f);
-//     snap.frame.refPowerDb.assign(nBins, 0.0f);
-//     snap.frame.measPowerDb.assign(nBins, 0.0f);
-//
-//     venue.sessions.push_back({});
-//     venue.sessions.back().snapshots.push_back(snap);
-//
-//     store.venues().push_back(venue);
-//     store.setCurrentVenueIndex(0);
-//
-//     // Save to memory
-//     juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-//         .getChildFile("test_project.eea");
-//
-//     auto error = store.saveToFile(tempFile);
-//     EXPECT_TRUE(error.isEmpty());
-//
-//     // Load back
-//     ProjectStore store2;
-//     error = store2.loadFromFile(tempFile);
-//     EXPECT_TRUE(error.isEmpty());
-//
-//     // Verify snapshot data
-//     EXPECT_EQ(store2.venues().size(), 1);
-//     EXPECT_EQ(store2.venues()[0].sessions.size(), 1);
-//     EXPECT_EQ(store2.venues()[0].sessions[0].snapshots.size(), 1);
-//
-//     const auto& loadedSnap = store2.venues()[0].sessions[0].snapshots[0];
-//     EXPECT_EQ(loadedSnap.name, "Test Snapshot");
-//     EXPECT_NEAR(loadedSnap.dbOffset, 1.5, 0.001);
-//     EXPECT_NEAR(loadedSnap.delayOffset, 10.0, 0.001);
-//     EXPECT_EQ(loadedSnap.smoothingOverride, 6);
-//     EXPECT_EQ(loadedSnap.colour, juce::Colours::red);
-// }

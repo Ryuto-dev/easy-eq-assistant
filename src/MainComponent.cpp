@@ -44,13 +44,15 @@ MainComponent::MainComponent()
     };
 
     measurementPanel.setSettings (appPropertiesStorage.properties.getUserSettings());
+    transferTab.setSettings (appPropertiesStorage.properties.getUserSettings());
+    liveOverlay.setSettings (appPropertiesStorage.properties.getUserSettings());
     measurementPanel.onSettingsChanged = [this] { applyMeasurementSettings(); };
 
     bottomBar.onSnapshotRequested = [this] { transferTab.showSaveSnapshotDialog(); };
     bottomBar.onDelayMeasureRequested = [this]
     {
         tabs.setCurrentTabIndex (1);
-        delayTab.runDelayMeasurement();
+        delayTab.runDelayMeasurement (false);
     };
     bottomBar.onCalibrationRequested = [this] { tabs.setCurrentTabIndex (2); };
 
@@ -74,8 +76,12 @@ MainComponent::MainComponent()
     tabs.setTabBarDepth (30);
     tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
 
-    // キーボードショートカット（仕様 5.2 / 6.3）: Space=測定、S=スナップ、R=リセット、Esc=緊急停止
+    // キーボードショートカット（仕様 5.2 / 6.3）:
+    // Space=測定、N=発振器、D=遅延検出、S=スナップ、R=リセット、Esc=緊急停止
     setWantsKeyboardFocus (true);
+
+    // ツールチップ（issue #149）。TooltipWindow がないと setTooltip は表示されない
+    tooltipWindow.setMillisecondsBeforeTipAppears (600);
 
     setSize (1280, 820);
     applyMeasurementSettings();
@@ -303,6 +309,14 @@ void MainComponent::updateModalEscapeListener()
 void MainComponent::timerCallback()
 {
     engine.kickUiWatchdog();
+
+    // 起動直後にキーボードフォーカスを取る（クリックしなくても Space/Esc が効くように: issue #140）
+    if (! initialFocusTaken && isShowing())
+    {
+        initialFocusTaken = true;
+        grabKeyboardFocus();
+    }
+
     updateModalEscapeListener();
     const auto nowMs = juce::Time::getMillisecondCounter();
 
@@ -405,21 +419,36 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         return false;
     }
 
+    // Space = 測定の開始/停止だけ（発振器は鳴らさない: issue #131）。
+    // 止めるときも発振器は止めない（音楽ソースや校正音で測っている場合があるため）
     if (key.isKeyCode (juce::KeyPress::spaceKey))
     {
         auto& measurement = engine.getMeasurement();
 
         if (measurement.isMeasuring())
-        {
             measurement.stopMeasurement();
-            engine.stopExcitation();
-        }
         else
-        {
             measurement.startMeasurement();
-            engine.startExcitation();
-        }
 
+        return true;
+    }
+
+    // N = 発振器（励起信号）の開始/停止（issue #141）
+    if (key == 'n' || key == 'N')
+    {
+        if (engine.isNoiseAudible())
+            engine.stopExcitation();
+        else
+            engine.startExcitation();
+
+        return true;
+    }
+
+    // D = 遅延を検出して適用（Delay Finder: issue #142）
+    if (key == 'd' || key == 'D')
+    {
+        tabs.setCurrentTabIndex (1);
+        delayTab.runDelayMeasurement (true);
         return true;
     }
 

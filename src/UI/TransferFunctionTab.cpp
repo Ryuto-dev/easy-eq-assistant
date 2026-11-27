@@ -5,6 +5,8 @@
 #include "Strings.h"
 #include "Theme.h"
 
+#include <cmath>
+
 namespace eeq::ui
 {
 
@@ -19,6 +21,7 @@ public:
         double viewMin = 20.0;
         double viewMax = 20000.0;
         int plotWidth = 2;
+        double delayCompensationSamples = 0.0; // 位相の遅延補正（平滑化の前に回す: issue #107）
         bool applyCorrection = false;
         std::uint64_t correctionGeneration = 0;
         eeq::core::SystemCorrection* correction = nullptr;
@@ -104,7 +107,7 @@ private:
             auto calculated = std::make_shared<std::vector<eeq::dsp::GridPoint>> (
                 eeq::dsp::smoothToLogGrid (*displayFrame, request.smoothing, request.viewMin,
                                            std::min (request.viewMax, displayFrame->sampleRate * 0.5),
-                                           request.plotWidth));
+                                           request.plotWidth, 80.0f, request.delayCompensationSamples));
 
             Result result;
             result.generation = request.generation;
@@ -128,26 +131,37 @@ private:
 };
 
 
-// オーバーレイ（スナップショット/ターゲット/予測/差分）の平滑化用ワーカー（issue #66）
+// 重ね描き（スナップショット/ターゲット/予測/差分）の平滑化用ワーカー（issue #66 / #128）。
+// 要求には不変データ（shared_ptr<const>）だけを入れる。UI がスナップショットを削除・並べ替え・
+// 再読込しても、ワーカーが読んでいるデータは寿命が保証される。
 class TransferFunctionTab::OverlaySmoothingWorker final : private juce::Thread
 {
 public:
+    struct Item
+    {
+        juce::String key;
+        std::shared_ptr<const eeq::dsp::SpectrumFrame> frame;          // スナップショット
+        std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> points; // ターゲット/予測（点列）
+        std::shared_ptr<const eeq::dsp::SpectrumFrame> diffB;          // 差分: frame − diffB
+        int smoothing = 6;
+        double delayCompensationSamples = 0.0;
+    };
+
     struct Request
     {
         std::uint64_t generation = 0;
-        std::vector<FrequencyGraphView::OverlaySource> sources;
-        int smoothing = 6; // グローバル設定（フォールバック用）
+        std::vector<Item> items;
         double viewMin = 20.0;
         double viewMax = 20000.0;
         int plotWidth = 2;
-        double liveSampleRate = 48000.0;
     };
+
+    using Columns = std::vector<FrequencyGraphView::OverlayColumn>;
 
     struct Result
     {
         std::uint64_t generation = 0;
-        std::vector<std::vector<FrequencyGraphView::OverlayColumn>> columns;
-        int smoothing = 6;
+        std::map<juce::String, std::shared_ptr<const Columns>> columns;
     };
 
     OverlaySmoothingWorker() : juce::Thread ("Overlay smoothing") {}
@@ -160,15 +174,64 @@ public:
         const juce::ScopedLock sl (lock);
         pending = std::move (request);
         hasPending = true;
+        notify();
     }
 
     bool takeResult (Result& result)
     {
         const juce::ScopedLock sl (lock);
-        if (! hasResult) return false;
+
+        if (! hasResult)
+            return false;
+
         result = std::move (completed);
         hasResult = false;
         return true;
+    }
+
+    /** テストからも使う純粋関数: 1 項目ぶんの列を作る */
+    static std::shared_ptr<const Columns> compute (const Item& item, double viewMin, double viewMax, int width)
+    {
+        auto out = std::make_shared<Columns>();
+
+        auto appendPoints = [&out] (const std::vector<eeq::dsp::GridPoint>& points, double lo, double hi)
+        {
+            out->reserve (points.size());
+
+            for (const auto& point : points)
+                if (point.count > 0 && point.freq >= lo && point.freq <= hi)
+                    out->push_back ({ point.freq, { (float) point.h.real(), (float) point.h.imag() } });
+        };
+
+        if (item.frame != nullptr && item.diffB != nullptr)
+        {
+            const auto hi = std::min ({ viewMax, item.frame->sampleRate * 0.5, item.diffB->sampleRate * 0.5 });
+            const auto a = eeq::dsp::smoothToLogGrid (*item.frame, item.smoothing, viewMin, hi, width);
+            const auto b = eeq::dsp::smoothToLogGrid (*item.diffB, item.smoothing, viewMin, hi, width);
+            out->reserve (a.size());
+
+            for (size_t i = 0; i < std::min (a.size(), b.size()); ++i)
+            {
+                if (a[i].count == 0 || b[i].count == 0)
+                    continue;
+
+                const auto diffDb = (double) a[i].magnitudeDb - (double) b[i].magnitudeDb;
+                out->push_back ({ a[i].freq, { (float) std::pow (10.0, diffDb / 20.0), 0.0f } });
+            }
+        }
+        else if (item.frame != nullptr)
+        {
+            const auto hi = std::min (viewMax, item.frame->sampleRate * 0.5);
+            appendPoints (eeq::dsp::smoothToLogGrid (*item.frame, item.smoothing, viewMin, hi, width, 80.0f,
+                                                     item.delayCompensationSamples),
+                          viewMin, hi);
+        }
+        else if (item.points != nullptr)
+        {
+            appendPoints (*item.points, viewMin * 0.999, viewMax * 1.001);
+        }
+
+        return out;
     }
 
 private:
@@ -178,8 +241,10 @@ private:
         {
             Request request;
             bool haveRequest = false;
+
             {
                 const juce::ScopedLock sl (lock);
+
                 if (hasPending)
                 {
                     request = std::move (pending);
@@ -187,57 +252,27 @@ private:
                     haveRequest = true;
                 }
             }
+
             if (! haveRequest)
             {
-                juce::Thread::sleep (4);
+                wait (50);
                 continue;
             }
-            if (request.sources.empty() || threadShouldExit())
-                continue;
 
             Result result;
             result.generation = request.generation;
-            result.smoothing = request.smoothing;
-            result.columns.resize (request.sources.size());
 
-            const auto effectiveMax = std::min (request.viewMax, request.liveSampleRate * 0.5);
-            const auto width = request.plotWidth;
-
-            for (size_t s = 0; s < request.sources.size(); ++s)
+            for (const auto& item : request.items)
             {
-                const auto& source = request.sources[s];
-                auto& out = result.columns[s];
+                if (threadShouldExit())
+                    return;
 
-                // Issue #143: スナップショットごとの平滑化オーバーライドを使用
-                const auto sourceSmoothing = source.smoothingOverride >= 0 ? source.smoothingOverride : request.smoothing;
-
-                if (source.frame != nullptr)
-                {
-                    const auto points = eeq::dsp::smoothToLogGrid (*source.frame, sourceSmoothing,
-                                                                   request.viewMin, effectiveMax, width);
-                    out.resize (points.size());
-                    for (size_t i = 0; i < points.size(); ++i)
-                        out[i] = { points[i].freq, { (float) points[i].h.real(), (float) points[i].h.imag() } };
-                }
-                else if (source.points != nullptr)
-                {
-                    // 点列（ターゲット/予測）はグリッドにそのまま乗る
-                    const auto& in = *source.points;
-                    out.clear();
-                    for (const auto& point : in)
-                    {
-                        if (point.freq < request.viewMin || point.freq > effectiveMax)
-                            continue;
-                        out.push_back ({ point.freq, { (float) point.h.real(), (float) point.h.imag() } });
-                    }
-                }
+                result.columns[item.key] = compute (item, request.viewMin, request.viewMax, request.plotWidth);
             }
 
-            {
-                const juce::ScopedLock sl (lock);
-                completed = std::move (result);
-                hasResult = true;
-            }
+            const juce::ScopedLock sl (lock);
+            completed = std::move (result);
+            hasResult = true;
         }
     }
 
@@ -248,6 +283,13 @@ private:
     bool hasResult = false;
 };
 
+namespace
+{
+constexpr int smoothingOverrideDenoms[] = { -1, 0, 48, 24, 12, 6, 3, 2, 1 }; // コンボ id 1..9
+constexpr float coherenceThresholds[] = { 0.5f, 0.6f, 0.7f, 0.8f, 0.9f };    // コンボ id 1..5
+
+juce::String snapshotKey (std::uint64_t id) { return "s" + juce::String ((juce::int64) id); }
+} // namespace
 
 TransferFunctionTab::TransferFunctionTab (UiContext& context)
     : ctx (context)
@@ -260,8 +302,78 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 
     addAndMakeVisible (graph);
 
+    // ---- グラフのツールバー（issue #144 / #145）----
+    styleCombo (viewModeCombo);
+    viewModeCombo.addItem (strings::viewModeThree, 1);
+    viewModeCombo.addItem (strings::viewModeTwo, 2);
+    viewModeCombo.addItem (strings::viewModeAmpOnly, 3);
+    viewModeCombo.setSelectedId (1, juce::dontSendNotification);
+    viewModeCombo.setTooltip (strings::viewModeTooltip);
+    viewModeCombo.onChange = [this]
+    {
+        const auto id = viewModeCombo.getSelectedId();
+        graph.setViewMode (id == 2 ? ViewMode::ampPhase : id == 3 ? ViewMode::ampOnly : ViewMode::ampPhaseCoh);
+        saveViewSettings();
+    };
+    addAndMakeVisible (viewModeCombo);
+
+    styleCombo (scaleCombo);
+    scaleCombo.addItem (strings::scaleAuto, 1);
+    scaleCombo.addItem (juce::String (u8"±6 dB"), 2);
+    scaleCombo.addItem (juce::String (u8"±12 dB"), 3);
+    scaleCombo.addItem (juce::String (u8"±24 dB"), 4);
+    scaleCombo.addItem (juce::String (u8"±48 dB"), 5);
+    scaleCombo.setSelectedId (1, juce::dontSendNotification);
+    scaleCombo.setTooltip (strings::scaleTooltip);
+    scaleCombo.onChange = [this]
+    {
+        static constexpr ScalePreset presets[] = { ScalePreset::autoScale, ScalePreset::preset6dB,
+                                                   ScalePreset::preset12dB, ScalePreset::preset24dB,
+                                                   ScalePreset::preset48dB };
+        graph.setScalePreset (presets[juce::jlimit (1, 5, scaleCombo.getSelectedId()) - 1]);
+        saveViewSettings();
+    };
+    addAndMakeVisible (scaleCombo);
+
+    styleToggle (blankingToggle);
+    blankingToggle.setButtonText (strings::coherenceBlankingToggle);
+    blankingToggle.setTooltip (strings::coherenceBlankingTooltip);
+    blankingToggle.onClick = [this]
+    {
+        graph.setCoherenceBlanking (blankingToggle.getToggleState());
+        saveViewSettings();
+    };
+    addAndMakeVisible (blankingToggle);
+
+    styleCombo (coherenceThresholdCombo);
+
+    for (int i = 0; i < (int) std::size (coherenceThresholds); ++i)
+        coherenceThresholdCombo.addItem (strings::gammaSquared + " " + juce::String (coherenceThresholds[i], 1), i + 1);
+
+    coherenceThresholdCombo.setSelectedId (4, juce::dontSendNotification);
+    coherenceThresholdCombo.setTooltip (strings::coherenceThresholdTooltip);
+    coherenceThresholdCombo.onChange = [this]
+    {
+        graph.setCoherenceThreshold (coherenceThresholds[juce::jlimit (1, 5, coherenceThresholdCombo.getSelectedId()) - 1]);
+        saveViewSettings();
+    };
+    addAndMakeVisible (coherenceThresholdCombo);
+
+    styleButton (peakMarkerButton);
+    peakMarkerButton.setButtonText (strings::markerPeakButton);
+    peakMarkerButton.setTooltip (strings::markerTooltip);
+    peakMarkerButton.onClick = [this] { graph.addMarkerAtPeak(); };
+    addAndMakeVisible (peakMarkerButton);
+
+    styleButton (clearMarkersButton);
+    clearMarkersButton.setButtonText (strings::markerClearButton);
+    clearMarkersButton.onClick = [this] { graph.clearMarkers(); };
+    addAndMakeVisible (clearMarkersButton);
+
+    // ---- スナップショット一覧 ----
     snapshotList.setColour (juce::ListBox::backgroundColourId, theme::get (theme::ColourId::panelBackground));
     snapshotList.setRowHeight (22);
+    snapshotList.setMultipleSelectionEnabled (false);
     addAndMakeVisible (snapshotList);
 
     styleButton (saveButton);
@@ -271,38 +383,14 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 
     styleButton (deleteButton);
     deleteButton.setButtonText (strings::snapshotDeleteButton);
-    deleteButton.onClick = [this]
-    {
-        const auto selected = snapshotList.getSelectedRow();
-
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
-        {
-            // Issue #148: 削除確認ダイアログ
-            juce::Component::SafePointer<TransferFunctionTab> safeThis { this };
-            juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
-                strings::snapshotDialogTitle, strings::confirmDeleteSnapshot,
-                strings::okButton, strings::cancelButton, this,
-                juce::ModalCallbackFunction::create ([safeThis, selected] (int result) mutable
-                {
-                    if (safeThis == nullptr || result == 0)
-                        return;
-
-                    auto& snapshots = safeThis->ctx.project.snapshots();
-                    if (selected >= 0 && selected < (int) snapshots.size())
-                    {
-                        snapshots.erase (snapshots.begin() + selected);
-                        safeThis->ctx.state.snapshotVersion.fetch_add (1);
-                        safeThis->snapshotList.deselectAllRows();
-                        safeThis->snapshotList.updateContent();
-
-                        // 差分表示が消えたスナップショットを参照しないよう張り直す
-                        safeThis->computeDiffCurve();
-                        safeThis->refreshSnapshotList();
-                    }
-                }));
-        }
-    };
+    deleteButton.onClick = [this] { deleteSnapshot (snapshotList.getSelectedRow()); };
     addAndMakeVisible (deleteButton);
+
+    // 削除の取り消し（issue #148）: 削除から 15 秒間だけ表示する
+    styleAccentButton (undoButton);
+    undoButton.setButtonText (strings::undoDeleteButton);
+    undoButton.onClick = [this] { undoDelete(); };
+    addChildComponent (undoButton);
 
     styleButton (exportCsvButton);
     exportCsvButton.setButtonText (strings::snapshotExportCsv);
@@ -391,59 +479,41 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     for (auto* combo : { &diffComboA, &diffComboB })
     {
         styleCombo (*combo);
-        combo->setTextWhenNothingSelected (strings::snapshotSelectA);
-        combo->onChange = [this] { computeDiffCurve(); };
+        combo->onChange = [this]
+        {
+            auto& snapshots = ctx.project.snapshots();
+
+            for (int i = 0; i < (int) snapshots.size(); ++i)
+            {
+                snapshots[(size_t) i].isSelectedA = diffComboA.getSelectedId() == i + 2;
+                snapshots[(size_t) i].isSelectedB = diffComboB.getSelectedId() == i + 2;
+            }
+            // 鍵（差分の A/B）が変わるので次の tick で再計算される（issue #130）
+        };
         addAndMakeVisible (*combo);
     }
 
-    diffComboB.setTextWhenNothingSelected (strings::snapshotSelectB);
-
-    // Issue #143: スナップショット編集コントロール
-    styleButton (colorButton);
-    colorButton.setButtonText (strings::snapshotColorLabel);
-    colorButton.onClick = [this]
+    // ---- スナップショット編集（issue #143）----
+    styleButton (visibleButton);
+    visibleButton.setButtonText (strings::snapshotToggleVisible);
+    visibleButton.onClick = [this]
     {
-        const auto selected = snapshotList.getSelectedRow();
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        if (auto* snapshot = selectedSnapshot())
         {
-            editingSnapshotIndex = selected;
-            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
-            auto* selector = new juce::ColourSelector (
-                juce::ColourSelector::showAlphaChannel |
-                juce::ColourSelector::showColourAtTop);
-            selector->setCurrentColour (snapshot.colour);
-            selector->enterModalState (true, juce::ModalCallbackFunction::create (
-                [this, selected, safeThis = juce::Component::SafePointer<TransferFunctionTab> (this), selector] (int)
-                {
-                    if (safeThis == nullptr)
-                        return;
-                    auto colour = selector->getCurrentColour();
-                    auto& snapshots = safeThis->ctx.project.snapshots();
-                    if (selected >= 0 && selected < (int) snapshots.size())
-                    {
-                        if (colour != snapshots[(size_t) selected].colour)
-                        {
-                            snapshots[(size_t) selected].colour = colour;
-                            safeThis->ctx.state.snapshotVersion.fetch_add (1);
-                            safeThis->refreshSnapshotList();
-                        }
-                    }
-                    selector->setVisible (false);
-                }), true);
+            snapshot->visible = ! snapshot->visible;
+            ctx.state.snapshotVersion.fetch_add (1);
         }
     };
+    addAndMakeVisible (visibleButton);
+
+    styleButton (colorButton);
+    colorButton.setButtonText (strings::snapshotColorLabel);
+    colorButton.onClick = [this] { showColourPicker (snapshotList.getSelectedRow()); };
     addAndMakeVisible (colorButton);
 
     styleButton (editNameButton);
     editNameButton.setButtonText (strings::snapshotEditNameButton);
-    editNameButton.onClick = [this]
-    {
-        const auto selected = snapshotList.getSelectedRow();
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
-        {
-            showSnapshotEditDialog (selected);
-        }
-    };
+    editNameButton.onClick = [this] { showSnapshotEditDialog (snapshotList.getSelectedRow()); };
     addAndMakeVisible (editNameButton);
 
     styleButton (moveUpButton);
@@ -466,73 +536,103 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     };
     addAndMakeVisible (moveDownButton);
 
+    styleButton (averageButton);
+    averageButton.setButtonText (strings::snapshotAverageButton);
+    averageButton.setTooltip (strings::snapshotAverageTooltip);
+    averageButton.onClick = [this] { createAverageTrace(); };
+    addAndMakeVisible (averageButton);
+
+    styleToggle (phaseToggle);
+    phaseToggle.setButtonText (strings::snapshotShowPhase);
+    phaseToggle.onClick = [this]
+    {
+        if (syncingEditors)
+            return;
+
+        if (auto* snapshot = selectedSnapshot())
+        {
+            snapshot->showPhase = phaseToggle.getToggleState();
+            ctx.state.snapshotVersion.fetch_add (1);
+        }
+    };
+    addAndMakeVisible (phaseToggle);
+
+    for (auto* label : { &dbOffsetLabel, &delayOffsetLabel, &smoothingOverrideLabel })
+    {
+        styleLabel (*label);
+        addAndMakeVisible (label);
+    }
+
     dbOffsetLabel.setText (strings::snapshotDbOffsetLabel, juce::dontSendNotification);
-    styleLabel (dbOffsetLabel);
-    addAndMakeVisible (dbOffsetLabel);
-
-    styleTextEditor (dbOffsetEditor);
-    dbOffsetEditor.setText ("0.0", juce::dontSendNotification);
-    dbOffsetEditor.setInputRestrictions (8, "0123456789.-");
-    dbOffsetEditor.onTextChange = [this]
-    {
-        const auto selected = snapshotList.getSelectedRow();
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
-        {
-            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
-            snapshot.dbOffset = dbOffsetEditor.getText().getDoubleValue();
-            ctx.state.snapshotVersion.fetch_add (1);
-            rebuildOverlays();
-        }
-    };
-    addAndMakeVisible (dbOffsetEditor);
-
-    delayOffsetLabel.setText (strings::snapshotDelayOffsetLabel, juce::dontSendNotification);
-    styleLabel (delayOffsetLabel);
-    addAndMakeVisible (delayOffsetLabel);
-
-    styleTextEditor (delayOffsetEditor);
-    delayOffsetEditor.setText ("0", juce::dontSendNotification);
-    delayOffsetEditor.setInputRestrictions (10, "0123456789.-");
-    delayOffsetEditor.onTextChange = [this]
-    {
-        const auto selected = snapshotList.getSelectedRow();
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
-        {
-            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
-            snapshot.delayOffset = delayOffsetEditor.getText().getDoubleValue();
-            ctx.state.snapshotVersion.fetch_add (1);
-            rebuildOverlays();
-        }
-    };
-    addAndMakeVisible (delayOffsetEditor);
-
+    delayOffsetLabel.setText (strings::snapshotDelayOffsetMsLabel, juce::dontSendNotification);
     smoothingOverrideLabel.setText (strings::snapshotSmoothingLabel, juce::dontSendNotification);
-    styleLabel (smoothingOverrideLabel);
-    addAndMakeVisible (smoothingOverrideLabel);
+
+    for (auto* editor : { &dbOffsetEditor, &delayOffsetEditor })
+    {
+        styleTextEditor (*editor);
+        editor->setInputRestrictions (9, "0123456789.-");
+        editor->setText ("0", juce::dontSendNotification);
+        addAndMakeVisible (*editor);
+    }
+
+    // 空欄・"-" だけの途中入力は無視する（0 として扱わない）
+    auto parseNumber = [] (const juce::String& text, double& out)
+    {
+        const auto trimmed = text.trim();
+
+        if (trimmed.isEmpty() || trimmed == "-" || trimmed == "." || trimmed == "-.")
+            return false;
+
+        out = trimmed.getDoubleValue();
+        return std::isfinite (out);
+    };
+
+    dbOffsetEditor.onTextChange = [this, parseNumber]
+    {
+        double value = 0.0;
+
+        if (syncingEditors || ! parseNumber (dbOffsetEditor.getText(), value))
+            return;
+
+        if (auto* snapshot = selectedSnapshot())
+        {
+            snapshot->dbOffset = juce::jlimit (-60.0, 60.0, value);
+            ctx.state.snapshotVersion.fetch_add (1);
+        }
+    };
+
+    delayOffsetEditor.onTextChange = [this, parseNumber]
+    {
+        double ms = 0.0;
+
+        if (syncingEditors || ! parseNumber (delayOffsetEditor.getText(), ms))
+            return;
+
+        if (auto* snapshot = selectedSnapshot())
+        {
+            snapshot->delayOffset = juce::jlimit (-1000.0, 1000.0, ms) * snapshot->frame.sampleRate / 1000.0;
+            ctx.state.snapshotVersion.fetch_add (1);
+        }
+    };
 
     styleCombo (smoothingOverrideCombo);
-    smoothingOverrideCombo.addItem (strings::snapshotSelectGlobal, 1); // グローバル設定を使用
-    smoothingOverrideCombo.addItem (strings::noSmoothingItem, 2);       // なし
-    smoothingOverrideCombo.addItem ("1/48", 3);
-    smoothingOverrideCombo.addItem ("1/24", 4);
-    smoothingOverrideCombo.addItem ("1/12", 5);
-    smoothingOverrideCombo.addItem ("1/6", 6);
-    smoothingOverrideCombo.addItem ("1/3", 7);
-    smoothingOverrideCombo.addItem ("1/2", 8);
-    smoothingOverrideCombo.addItem ("1/1", 9);
+    smoothingOverrideCombo.addItem (strings::snapshotSelectGlobal, 1);
+    smoothingOverrideCombo.addItem (strings::noSmoothingItem, 2);
+
+    for (int i = 2; i < (int) std::size (smoothingOverrideDenoms); ++i)
+        smoothingOverrideCombo.addItem ("1/" + juce::String (smoothingOverrideDenoms[i]) + " oct", i + 1);
+
     smoothingOverrideCombo.setSelectedId (1, juce::dontSendNotification);
     smoothingOverrideCombo.onChange = [this]
     {
-        const auto selected = snapshotList.getSelectedRow();
-        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        if (syncingEditors)
+            return;
+
+        if (auto* snapshot = selectedSnapshot())
         {
-            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
-            const auto id = smoothingOverrideCombo.getSelectedId();
-            if (id == 1) snapshot.smoothingOverride = -1; // グローバル
-            else if (id == 2) snapshot.smoothingOverride = 0; // なし
-            else snapshot.smoothingOverride = (id == 3 ? 48 : id == 4 ? 24 : id == 5 ? 12 : id == 6 ? 6 : id == 7 ? 3 : id == 8 ? 2 : 1);
+            const auto id = juce::jlimit (1, (int) std::size (smoothingOverrideDenoms), smoothingOverrideCombo.getSelectedId());
+            snapshot->smoothingOverride = smoothingOverrideDenoms[id - 1];
             ctx.state.snapshotVersion.fetch_add (1);
-            rebuildOverlays();
         }
     };
     addAndMakeVisible (smoothingOverrideCombo);
@@ -541,6 +641,7 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     hintLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     hintLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     hintLabel.setJustificationType (juce::Justification::centred);
+    hintLabel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (hintLabel);
 
     refreshSnapshotList();
@@ -548,8 +649,54 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 
 TransferFunctionTab::~TransferFunctionTab() = default;
 
+void TransferFunctionTab::setSettings (juce::PropertiesFile* settingsToUse)
+{
+    settings = settingsToUse;
+
+    if (settings == nullptr)
+        return;
+
+    viewModeCombo.setSelectedId (juce::jlimit (1, 3, settings->getIntValue ("tfViewMode", 1)), juce::sendNotificationSync);
+    scaleCombo.setSelectedId (juce::jlimit (1, 5, settings->getIntValue ("tfScalePreset", 1)), juce::sendNotificationSync);
+    coherenceThresholdCombo.setSelectedId (juce::jlimit (1, 5, settings->getIntValue ("tfCoherenceThreshold", 4)),
+                                           juce::sendNotificationSync);
+    blankingToggle.setToggleState (settings->getBoolValue ("tfCoherenceBlanking", false), juce::dontSendNotification);
+    graph.setCoherenceBlanking (blankingToggle.getToggleState());
+}
+
+void TransferFunctionTab::saveViewSettings()
+{
+    if (settings == nullptr)
+        return;
+
+    settings->setValue ("tfViewMode", viewModeCombo.getSelectedId());
+    settings->setValue ("tfScalePreset", scaleCombo.getSelectedId());
+    settings->setValue ("tfCoherenceThreshold", coherenceThresholdCombo.getSelectedId());
+    settings->setValue ("tfCoherenceBlanking", blankingToggle.getToggleState());
+}
+
+eeq::core::Snapshot* TransferFunctionTab::selectedSnapshot()
+{
+    auto& snapshots = ctx.project.snapshots();
+    const auto selected = snapshotList.getSelectedRow();
+    return (selected >= 0 && selected < (int) snapshots.size()) ? &snapshots[(size_t) selected] : nullptr;
+}
+
+std::shared_ptr<const eeq::dsp::SpectrumFrame> TransferFunctionTab::sharedFrameFor (const eeq::core::Snapshot& snapshot)
+{
+    // スナップショットのフレームは保存後に変わらない（変えるときは id を振り直す）ので、
+    // id ごとに1回だけ不変コピーを作ってワーカーと共有する（issue #128）
+    auto& entry = frameCache[snapshot.id];
+
+    if (entry == nullptr)
+        entry = std::make_shared<const eeq::dsp::SpectrumFrame> (snapshot.frame);
+
+    return entry;
+}
+
 void TransferFunctionTab::timerTick()
 {
+    // ---- ライブ曲線 ----
     auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
     if (framePtr == nullptr)
         framePtr = lastRequestedFrame;
@@ -558,31 +705,33 @@ void TransferFunctionTab::timerTick()
     const auto plotWidth = graph.getPlotWidthForCache();
     const auto viewMin = graph.getViewMinForCache();
     const auto viewMax = graph.getViewMaxForCache();
-    const bool smoothingChanged = smoothing != cachedSmoothing;
     const bool applyCorrection = ctx.correction.isActive() && ctx.state.loopbackEnabled.load();
     const auto correctionGeneration = ctx.correction.getGeneration();
+    const auto delaySamples = ctx.state.showRawPhase.load() ? 0.0 : ctx.state.appliedDelaySamples.load();
 
     if (framePtr != nullptr)
     {
         const bool settingsChanged = smoothing != requestedSmoothing
-                                   || std::abs (viewMin - cachedViewMin) > 1.0e-9
-                                   || std::abs (viewMax - cachedViewMax) > 1.0e-9
-                                   || plotWidth != cachedPlotWidth
+                                   || std::abs (viewMin - liveViewMin) > 1.0e-9
+                                   || std::abs (viewMax - liveViewMax) > 1.0e-9
+                                   || plotWidth != livePlotWidth
                                    || applyCorrection != requestedCorrectionEnabled
-                                   || correctionGeneration != requestedCorrectionGeneration;
+                                   || correctionGeneration != requestedCorrectionGeneration
+                                   || std::abs (delaySamples - requestedDelaySamples) > 1.0e-9;
 
         if (settingsChanged)
-            ++settingsGeneration;
+            ++liveGeneration;
 
         if (settingsChanged || framePtr != lastRequestedFrame)
         {
             LiveSmoothingWorker::Request request;
-            request.generation = settingsGeneration;
+            request.generation = liveGeneration;
             request.frame = framePtr;
             request.smoothing = smoothing;
             request.viewMin = viewMin;
             request.viewMax = viewMax;
             request.plotWidth = plotWidth;
+            request.delayCompensationSamples = delaySamples;
             request.applyCorrection = applyCorrection;
             request.correctionGeneration = correctionGeneration;
             request.correction = &ctx.correction;
@@ -592,214 +741,469 @@ void TransferFunctionTab::timerTick()
             requestedSmoothing = smoothing;
             requestedCorrectionEnabled = applyCorrection;
             requestedCorrectionGeneration = correctionGeneration;
-            cachedViewMin = viewMin;
-            cachedViewMax = viewMax;
-            cachedPlotWidth = plotWidth;
+            requestedDelaySamples = delaySamples;
+            liveViewMin = viewMin;
+            liveViewMax = viewMax;
+            livePlotWidth = plotWidth;
         }
     }
 
     LiveSmoothingWorker::Result result;
-    if (liveSmoothingWorker->takeResult (result) && result.generation == settingsGeneration)
+    if (liveSmoothingWorker->takeResult (result) && result.generation == liveGeneration)
     {
         displayedFrame = std::move (result.frame);
         displayedPoints = std::move (result.points);
         displayedSmoothing = result.smoothing;
     }
 
+    // 位相の遅延補正は平滑化の前にワーカーで済ませている（issue #107）ので、グラフには 0 を渡す
     if (displayedFrame != nullptr && displayedPoints != nullptr)
-        graph.setLiveFrameCached (displayedPoints, displayedFrame, displayedSmoothing,
-                                  ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
+        graph.setLiveFrameCached (displayedPoints, displayedFrame, displayedSmoothing, 0.0, true);
 
-    // オーバーレイ平滑化ワーカーの結果をチェック（issue #66: paint内での重い平滑化を回避）
-    OverlaySmoothingWorker::Result overlayResult;
-    if (overlaySmoothingWorker->takeResult (overlayResult) && overlayResult.generation == settingsGeneration)
-    {
-        graph.setOverlayColumns (overlayResult.columns, ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load());
-        cachedOverlaySmoothing = overlayResult.smoothing;
-        cachedOverlayVersion = ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load();
-    }
+    // 入力クリップ中は平均が信頼できないことをグラフに出す（issue #146）
+    graph.setClipWarning (ctx.engine.getMeasurement().isMeasuring()
+                          && (ctx.engine.getRefMeter().clip.load() || ctx.engine.getMeasMeter().clip.load()));
 
-    // オーバーレイが必要かチェック（スナップショット/設定変更時、またはスムージング/ビュー変更時）
-    const auto overlayVersion = ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load();
-    const bool overlayNeeded = overlayVersion != cachedOverlayVersion
-                            || smoothing != cachedOverlaySmoothing
-                            || smoothingChanged
-                            || std::abs (viewMin - cachedViewMin) > 1.0e-9
-                            || std::abs (viewMax - cachedViewMax) > 1.0e-9
-                            || plotWidth != cachedPlotWidth;
-
-    if (overlayNeeded)
-    {
-        ++settingsGeneration;
-        rebuildOverlays(); // OverlaySource を作成してワーカーに送る
-        cachedOverlayVersion = overlayVersion;
-        cachedOverlaySmoothing = smoothing;
-    }
-
+    // ---- 重ね描き ----
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
-        || ctx.state.eqVersion.load() != lastSeenEqVersion
-        || smoothingChanged)
+        || ctx.state.eqVersion.load() != lastSeenEqVersion)
         refreshSnapshotList();
+
+    requestOverlaysIfNeeded();
+
+    OverlaySmoothingWorker::Result overlayResult;
+    if (overlaySmoothingWorker->takeResult (overlayResult) && overlayResult.generation == overlayGeneration)
+    {
+        overlayColumns = std::move (overlayResult.columns);
+        pushOverlayTraces();
+    }
+}
+
+void TransferFunctionTab::requestOverlaysIfNeeded()
+{
+    // 平滑化結果を左右する要素だけで「鍵」を作る。色・名前・dB オフセットは描画時に効くので鍵に入れない
+    const auto globalSmoothing = ctx.state.smoothingDenom;
+    const auto viewMin = graph.getViewMinForCache();
+    const auto viewMax = graph.getViewMaxForCache();
+    const auto width = graph.getPlotWidthForCache();
+    auto& snapshots = ctx.project.snapshots();
+
+    juce::String key;
+    key << viewMin << "|" << viewMax << "|" << width << "|" << globalSmoothing << "|e" << (int) ctx.state.eqVersion.load();
+
+    OverlaySmoothingWorker::Request request;
+    std::map<std::uint64_t, bool> liveIds;
+
+    for (const auto& snapshot : snapshots)
+    {
+        liveIds[snapshot.id] = true;
+
+        if (! snapshot.visible)
+            continue;
+
+        OverlaySmoothingWorker::Item item;
+        item.key = snapshotKey (snapshot.id);
+        item.frame = sharedFrameFor (snapshot);
+        item.smoothing = snapshot.smoothingOverride >= 0 ? snapshot.smoothingOverride : globalSmoothing;
+        item.delayCompensationSamples = snapshot.showPhase ? snapshot.delaySamples + snapshot.delayOffset : 0.0;
+        key << "|" << item.key << ":" << item.smoothing << ":" << item.delayCompensationSamples;
+        request.items.push_back (std::move (item));
+    }
+
+    // 消えたスナップショットのキャッシュを捨てる
+    for (auto it = frameCache.begin(); it != frameCache.end();)
+        it = liveIds.count (it->first) == 0 ? frameCache.erase (it) : std::next (it);
+
+    if (! ctx.state.targetPoints.empty())
+    {
+        OverlaySmoothingWorker::Item item;
+        item.key = "target";
+        item.points = std::make_shared<const std::vector<eeq::dsp::GridPoint>> (ctx.state.targetPoints);
+        request.items.push_back (std::move (item));
+        key << "|target";
+    }
+
+    if (! ctx.state.predictionPoints.empty())
+    {
+        OverlaySmoothingWorker::Item item;
+        item.key = "prediction";
+        item.points = std::make_shared<const std::vector<eeq::dsp::GridPoint>> (ctx.state.predictionPoints);
+        request.items.push_back (std::move (item));
+        key << "|prediction";
+    }
+
+    // 差分 A−B（仕様 5.2）
+    const auto indexA = diffComboA.getSelectedId() - 2;
+    const auto indexB = diffComboB.getSelectedId() - 2;
+
+    if (indexA >= 0 && indexB >= 0 && indexA < (int) snapshots.size() && indexB < (int) snapshots.size()
+        && indexA != indexB)
+    {
+        OverlaySmoothingWorker::Item item;
+        item.key = "diff";
+        item.frame = sharedFrameFor (snapshots[(size_t) indexA]);
+        item.diffB = sharedFrameFor (snapshots[(size_t) indexB]);
+        item.smoothing = globalSmoothing;
+        request.items.push_back (std::move (item));
+        key << "|diff:" << snapshotKey (snapshots[(size_t) indexA].id) << "-" << snapshotKey (snapshots[(size_t) indexB].id);
+    }
+
+    if (key == requestedOverlayKey)
+        return;
+
+    requestedOverlayKey = key;
+    request.generation = ++overlayGeneration;
+    request.viewMin = viewMin;
+    request.viewMax = viewMax;
+    request.plotWidth = width;
+
+    if (request.items.empty())
+    {
+        overlayColumns.clear();
+        pushOverlayTraces();
+        return;
+    }
+
+    overlaySmoothingWorker->submit (std::move (request));
+
+    // 古い結果のうち今も有効な項目はそのまま描き続ける（再計算中にちらつかせない）
+    pushOverlayTraces();
+}
+
+void TransferFunctionTab::pushOverlayTraces()
+{
+    std::vector<FrequencyGraphView::OverlayTrace> traces;
+    auto find = [this] (const juce::String& key) -> std::shared_ptr<const std::vector<FrequencyGraphView::OverlayColumn>>
+    {
+        const auto it = overlayColumns.find (key);
+        return it != overlayColumns.end() ? it->second : nullptr;
+    };
+
+    for (const auto& snapshot : ctx.project.snapshots())
+    {
+        if (! snapshot.visible)
+            continue;
+
+        if (auto columns = find (snapshotKey (snapshot.id)))
+        {
+            FrequencyGraphView::OverlayTrace trace;
+            trace.name = snapshot.name;
+            trace.colour = snapshot.colour;
+            trace.thickness = 1.2f;
+            trace.dbOffset = snapshot.dbOffset;
+            trace.showPhase = snapshot.showPhase;
+            trace.sampleRate = snapshot.frame.sampleRate;
+            trace.columns = std::move (columns);
+            traces.push_back (std::move (trace));
+        }
+    }
+
+    if (! ctx.state.targetPoints.empty())
+        if (auto columns = find ("target"))
+        {
+            FrequencyGraphView::OverlayTrace trace;
+            trace.name = strings::eqTargetLabel;
+            trace.colour = theme::get (theme::ColourId::ok);
+            trace.dashed = true;
+            trace.columns = std::move (columns);
+            traces.push_back (std::move (trace));
+        }
+
+    if (! ctx.state.predictionPoints.empty())
+        if (auto columns = find ("prediction"))
+        {
+            FrequencyGraphView::OverlayTrace trace;
+            trace.name = strings::eqPredictionLegend;
+            trace.colour = theme::get (theme::ColourId::warn);
+            trace.thickness = 1.0f;
+            trace.columns = std::move (columns);
+            traces.push_back (std::move (trace));
+        }
+
+    if (diffComboA.getSelectedId() > 1 && diffComboB.getSelectedId() > 1)
+        if (auto columns = find ("diff"))
+        {
+            FrequencyGraphView::OverlayTrace trace;
+            trace.name = strings::snapshotDiffButton;
+            trace.colour = theme::get (theme::ColourId::text);
+            trace.thickness = 1.4f;
+            trace.dashed = true;
+            trace.columns = std::move (columns);
+            traces.push_back (std::move (trace));
+        }
+
+    graph.setOverlayTraces (std::move (traces));
 }
 
 void TransferFunctionTab::refreshSnapshotList()
 {
     lastSeenSnapshotVersion = ctx.state.snapshotVersion.load();
     lastSeenEqVersion = ctx.state.eqVersion.load();
-    cachedSmoothing = ctx.state.smoothingDenom;
 
     snapshotList.updateContent();
+    snapshotList.repaint();
     updateDiffCombos();
+    syncEditorsToSelection();
     hintLabel.setVisible (ctx.project.snapshots().empty());
-    // rebuildOverlays() は timerTick でオーバーレイワーカーへ送信するためここでは呼ばない
-}
 
-void TransferFunctionTab::rebuildOverlays()
-{
-    std::vector<FrequencyGraphView::OverlaySource> sources;
-    const auto globalSmoothing = ctx.state.smoothingDenom;
-
-    for (auto& snapshot : ctx.project.snapshots())
-    {
-        if (! snapshot.visible)
-            continue;
-
-        FrequencyGraphView::OverlaySource source;
-        source.name = snapshot.name;
-        source.colour = snapshot.colour;
-        source.frame = &snapshot.frame;
-        source.thickness = 1.2f;
-        // Issue #143: スナップショットごとのオフセットと平滑化オーバーライド
-        source.dbOffset = snapshot.dbOffset;
-        source.delayOffset = snapshot.delayOffset;
-        source.smoothingOverride = snapshot.smoothingOverride >= 0 ? snapshot.smoothingOverride : globalSmoothing;
-        sources.push_back (source);
-    }
-
-    // ターゲット曲線（EQ案タブが設定する。仕様 4.1）
-    if (! ctx.state.targetPoints.empty())
-    {
-        FrequencyGraphView::OverlaySource source;
-        source.name = strings::eqTargetLabel;
-        source.colour = theme::get (theme::ColourId::ok);
-        source.points = &ctx.state.targetPoints;
-        source.thickness = 1.2f;
-        source.dashed = true;
-        sources.push_back (source);
-    }
-
-    // 予測（補正後）カーブ（仕様 4.4）
-    if (! ctx.state.predictionPoints.empty())
-    {
-        FrequencyGraphView::OverlaySource source;
-        source.name = strings::eqPredictionLegend;
-        source.colour = theme::get (theme::ColourId::warn);
-        source.points = &ctx.state.predictionPoints;
-        source.thickness = 1.0f;
-        sources.push_back (source);
-    }
-
-    // 差分 A−B（仕様 5.2）
-    if (! diffPoints.empty())
-    {
-        FrequencyGraphView::OverlaySource source;
-        source.name = strings::snapshotDiffButton;
-        source.colour = theme::get (theme::ColourId::text);
-        source.points = &diffPoints;
-        source.thickness = 1.4f;
-        source.dashed = true;
-        sources.push_back (source);
-    }
-
-    // オーバーレイ平滑化ワーカーに送信（issue #66: paint内での重い平滑化を回避）
-    OverlaySmoothingWorker::Request request;
-    request.generation = settingsGeneration;
-    request.sources = std::move (sources);
-    request.smoothing = globalSmoothing;
-    request.viewMin = graph.getViewMinForCache();
-    request.viewMax = graph.getViewMaxForCache();
-    request.plotWidth = graph.getPlotWidthForCache();
-    request.liveSampleRate = ctx.engine.getCurrentSampleRate();
-    overlaySmoothingWorker->submit (std::move (request));
-}
-
-void TransferFunctionTab::computeDiffCurve()
-{
-    auto& snapshots = ctx.project.snapshots();
-
-    // コンボの選択を A/B フラグへ反映する
-    for (int i = 0; i < (int) snapshots.size(); ++i)
-    {
-        snapshots[(size_t) i].isSelectedA = diffComboA.getSelectedId() == i + 1;
-        snapshots[(size_t) i].isSelectedB = diffComboB.getSelectedId() == i + 1;
-    }
-
-    diffPoints.clear();
-
-    const auto indexA = diffComboA.getSelectedId() - 1;
-    const auto indexB = diffComboB.getSelectedId() - 1;
-
-    if (indexA < 0 || indexB < 0 || indexA >= (int) snapshots.size() || indexB >= (int) snapshots.size()
-        || indexA == indexB)
-    {
-        // timerTick でオーバーレイワーカーへ送信されるのを待つ
-        return;
-    }
-
-    const auto& frameA = snapshots[(size_t) indexA].frame;
-    const auto& frameB = snapshots[(size_t) indexB].frame;
-    const auto smoothing = ctx.state.smoothingDenom;
-
-    const auto columnsA = eeq::dsp::smoothToLogGrid (frameA, smoothing, 20.0, 20000.0, graph.plotWidth());
-    const auto columnsB = eeq::dsp::smoothToLogGrid (frameB, smoothing, 20.0, 20000.0, graph.plotWidth());
-
-    diffPoints.resize (columnsA.size());
-
-    for (size_t i = 0; i < columnsA.size(); ++i)
-    {
-        const auto ampA = 20.0 * std::log10 (std::max (std::abs (columnsA[i].h), 1e-9));
-        const auto ampB = 20.0 * std::log10 (std::max (std::abs (columnsB[i].h), 1e-9));
-        const auto diffDb = ampA - ampB;
-
-        diffPoints[i].freq = columnsA[i].freq;
-        diffPoints[i].h = std::complex<double> (std::pow (10.0, diffDb / 20.0), 0.0);
-        diffPoints[i].coherence = 1.0f;
-        diffPoints[i].count = columnsA[i].count;
-    }
-
-    // timerTick でオーバーレイワーカーへ送信される（eqVersion が変わるため）
+    // 色・名前・オフセットなど描画属性の変更は再計算なしで反映する
+    pushOverlayTraces();
 }
 
 void TransferFunctionTab::updateDiffCombos()
 {
     auto& snapshots = ctx.project.snapshots();
 
-    auto fill = [&snapshots] (juce::ComboBox& combo, bool preferA)
+    // id 1 = 差分なし（issue #140: 差分を消す選択肢）、id 2.. = スナップショット
+    auto fill = [&snapshots] (juce::ComboBox& combo, bool isA)
     {
         combo.clear (juce::dontSendNotification);
+        combo.addItem (strings::diffNone, 1);
+
+        int selectId = 1;
 
         for (int i = 0; i < (int) snapshots.size(); ++i)
-            combo.addItem (snapshots[(size_t) i].name, i + 1);
+        {
+            combo.addItem (snapshots[(size_t) i].name, i + 2);
 
-        int selectId = 0;
+            if (isA ? snapshots[(size_t) i].isSelectedA : snapshots[(size_t) i].isSelectedB)
+                selectId = i + 2;
+        }
 
-        for (int i = 0; i < (int) snapshots.size(); ++i)
-            if (preferA ? snapshots[(size_t) i].isSelectedA : snapshots[(size_t) i].isSelectedB)
-                selectId = i + 1;
-
-        if (selectId == 0 && snapshots.size() >= (preferA ? 1 : 2))
-            selectId = (preferA ? 1 : 2);
-
-        if (selectId > 0)
-            combo.setSelectedId (selectId, juce::dontSendNotification);
+        combo.setSelectedId (selectId, juce::dontSendNotification);
     };
 
     fill (diffComboA, true);
     fill (diffComboB, false);
+}
 
-    // 既定選択（A=1件目, B=2件目）を入れたら差分カーブもすぐ再計算する
-    // （dontSendNotification では onChange が発火せず、差分が出ない/古いままになる）
-    computeDiffCurve();
+void TransferFunctionTab::syncEditorsToSelection()
+{
+    const juce::ScopedValueSetter<bool> guard (syncingEditors, true);
+    auto* snapshot = selectedSnapshot();
+    const bool has = snapshot != nullptr;
+
+    for (auto* c : std::initializer_list<juce::Component*> { &deleteButton, &exportCsvButton, &exportRewButton,
+                                                             &visibleButton, &colorButton, &editNameButton,
+                                                             &moveUpButton, &moveDownButton, &phaseToggle,
+                                                             &dbOffsetEditor, &delayOffsetEditor, &smoothingOverrideCombo })
+        c->setEnabled (has);
+
+    averageButton.setEnabled (ctx.project.snapshots().size() >= 2);
+
+    if (! has)
+        return;
+
+    if (! dbOffsetEditor.hasKeyboardFocus (true))
+        dbOffsetEditor.setText (juce::String (snapshot->dbOffset, 1), juce::dontSendNotification);
+
+    if (! delayOffsetEditor.hasKeyboardFocus (true))
+        delayOffsetEditor.setText (juce::String (snapshot->frame.sampleRate > 0.0
+                                                     ? snapshot->delayOffset * 1000.0 / snapshot->frame.sampleRate
+                                                     : 0.0, 2),
+                                   juce::dontSendNotification);
+
+    int comboId = 1;
+
+    for (int i = 0; i < (int) std::size (smoothingOverrideDenoms); ++i)
+        if (smoothingOverrideDenoms[i] == snapshot->smoothingOverride)
+            comboId = i + 1;
+
+    smoothingOverrideCombo.setSelectedId (comboId, juce::dontSendNotification);
+    phaseToggle.setToggleState (snapshot->showPhase, juce::dontSendNotification);
+    visibleButton.setButtonText (snapshot->visible ? strings::snapshotHide : strings::snapshotShow);
+}
+
+void TransferFunctionTab::selectedRowsChanged (int)
+{
+    syncEditorsToSelection();
+}
+
+void TransferFunctionTab::deleteKeyPressed (int lastRowSelected)
+{
+    deleteSnapshot (lastRowSelected);
+}
+
+void TransferFunctionTab::deleteSnapshot (int index)
+{
+    auto& snapshots = ctx.project.snapshots();
+
+    if (index < 0 || index >= (int) snapshots.size())
+        return;
+
+    // 確認ダイアログの代わりに「元に戻す」を出す（測定の流れを止めない: issue #148）
+    lastDeleted = std::move (snapshots[(size_t) index]);
+    lastDeletedIndex = index;
+    snapshots.erase (snapshots.begin() + index);
+    ctx.state.snapshotVersion.fetch_add (1);
+
+    undoButton.setButtonText (strings::undoDeleteButton + " (" + lastDeleted->name + ")");
+    undoButton.setVisible (true);
+    startTimer (15000);
+
+    snapshotList.selectRow (juce::jmin (index, (int) snapshots.size() - 1));
+    refreshSnapshotList();
+}
+
+void TransferFunctionTab::undoDelete()
+{
+    stopTimer();
+    undoButton.setVisible (false);
+
+    if (! lastDeleted.has_value())
+        return;
+
+    auto& snapshots = ctx.project.snapshots();
+    const auto index = juce::jlimit (0, (int) snapshots.size(), lastDeletedIndex);
+    snapshots.insert (snapshots.begin() + index, std::move (*lastDeleted));
+    lastDeleted.reset();
+    ctx.state.snapshotVersion.fetch_add (1);
+    snapshotList.selectRow (index);
+    refreshSnapshotList();
+}
+
+void TransferFunctionTab::timerCallback()
+{
+    stopTimer();
+    undoButton.setVisible (false);
+    lastDeleted.reset();
+}
+
+void TransferFunctionTab::showColourPicker (int index)
+{
+    auto& snapshots = ctx.project.snapshots();
+
+    if (index < 0 || index >= (int) snapshots.size())
+        return;
+
+    // ColourSelector はデスクトップに載せないと表示されないので CallOutBox に入れる
+    auto selector = std::make_unique<juce::ColourSelector> (juce::ColourSelector::showColourAtTop
+                                                            | juce::ColourSelector::showSliders
+                                                            | juce::ColourSelector::showColourspace);
+    selector->setSize (260, 280);
+    selector->setCurrentColour (snapshots[(size_t) index].colour);
+
+    struct Listener final : juce::ChangeListener
+    {
+        juce::Component::SafePointer<TransferFunctionTab> owner;
+        std::uint64_t snapshotId = 0;
+
+        void changeListenerCallback (juce::ChangeBroadcaster* source) override
+        {
+            if (owner == nullptr)
+                return;
+
+            auto* sel = dynamic_cast<juce::ColourSelector*> (source);
+
+            for (auto& snapshot : owner->ctx.project.snapshots())
+                if (snapshot.id == snapshotId && sel != nullptr)
+                {
+                    snapshot.colour = sel->getCurrentColour().withAlpha (1.0f);
+                    owner->ctx.state.snapshotVersion.fetch_add (1);
+                }
+        }
+    };
+
+    struct Holder final : juce::Component
+    {
+        std::unique_ptr<juce::ColourSelector> selector;
+        Listener listener;
+
+        void resized() override { selector->setBounds (getLocalBounds()); }
+        ~Holder() override { selector->removeChangeListener (&listener); }
+    };
+
+    auto holder = std::make_unique<Holder>();
+    holder->listener.owner = this;
+    holder->listener.snapshotId = snapshots[(size_t) index].id;
+    holder->selector = std::move (selector);
+    holder->selector->addChangeListener (&holder->listener);
+    holder->addAndMakeVisible (*holder->selector);
+    holder->setSize (260, 280);
+
+    juce::CallOutBox::launchAsynchronously (std::move (holder), colorButton.getScreenBounds(), nullptr);
+}
+
+void TransferFunctionTab::createAverageTrace()
+{
+    // 表示中のスナップショットを平均したトレースを作る（マイク複数点の空間平均: issue #143）。
+    // 振幅はパワー平均（|H|² の平均）、位相は単位ベクトルの平均、コヒーレンスは平均。
+    std::vector<const eeq::core::Snapshot*> sources;
+
+    for (const auto& snapshot : ctx.project.snapshots())
+        if (snapshot.visible)
+            sources.push_back (&snapshot);
+
+    if (sources.size() < 2)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, strings::snapshotAverageButton,
+                                                strings::snapshotAverageNeedTwo, strings::okButton, this, nullptr);
+        return;
+    }
+
+    const auto& first = sources.front()->frame;
+
+    for (const auto* s : sources)
+        if (s->frame.fftSize != first.fftSize || std::abs (s->frame.sampleRate - first.sampleRate) > 0.5
+            || s->frame.transfer.size() != first.transfer.size())
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, strings::snapshotAverageButton,
+                                                    strings::snapshotAverageMismatch, strings::okButton, this, nullptr);
+            return;
+        }
+
+    eeq::core::Snapshot average;
+    average.frame = first;
+    const auto bins = first.transfer.size();
+    const auto n = (double) sources.size();
+
+    for (size_t k = 0; k < bins; ++k)
+    {
+        double power = 0.0, coherence = 0.0, refPower = 0.0, measPower = 0.0;
+        std::complex<double> unit;
+
+        for (const auto* s : sources)
+        {
+            const std::complex<double> h (s->frame.transfer[k].real(), s->frame.transfer[k].imag());
+            power += std::norm (h);
+            const auto magnitude = std::abs (h);
+
+            if (magnitude > 0.0)
+                unit += h / magnitude;
+
+            coherence += s->frame.coherence[k];
+            refPower += std::pow (10.0, s->frame.refPowerDb[k] / 10.0);
+            measPower += std::pow (10.0, s->frame.measPowerDb[k] / 10.0);
+        }
+
+        const auto magnitude = std::sqrt (power / n);
+        const auto phase = std::abs (unit) > 0.0 ? std::arg (unit) : 0.0;
+        const auto h = std::polar (magnitude, phase);
+        average.frame.transfer[k] = { (float) h.real(), (float) h.imag() };
+        average.frame.magnitudeDb[k] = (float) (20.0 * std::log10 (std::max (magnitude, 1.0e-9)));
+        average.frame.phaseDeg[k] = (float) (phase * 180.0 / juce::MathConstants<double>::pi);
+        average.frame.coherence[k] = (float) (coherence / n);
+        average.frame.refPowerDb[k] = (float) (10.0 * std::log10 (std::max (refPower / n, 1.0e-30)));
+        average.frame.measPowerDb[k] = (float) (10.0 * std::log10 (std::max (measPower / n, 1.0e-30)));
+    }
+
+    average.name = strings::snapshotAverageName + " (" + juce::String ((int) sources.size()) + ")";
+    average.systemName = sources.front()->systemName;
+    average.micPoint = strings::snapshotAverageMicPoint;
+    average.timestamp = juce::Time::getCurrentTime();
+    average.temperatureC = sources.front()->temperatureC;
+    average.correctionApplied = sources.front()->correctionApplied;
+    average.note = strings::snapshotAverageNote;
+    average.colour = theme::get (theme::ColourId::text);
+
+    for (const auto* s : sources)
+        average.note << "\n- " << s->name;
+
+    auto& snapshots = ctx.project.snapshots();
+    snapshots.push_back (std::move (average));
+    ctx.state.snapshotVersion.fetch_add (1);
+    snapshotList.selectRow ((int) snapshots.size() - 1);
+    refreshSnapshotList();
 }
 
 void TransferFunctionTab::showSaveSnapshotDialog()
@@ -933,9 +1337,14 @@ void TransferFunctionTab::paintListBoxItem (int rowNumber, juce::Graphics& g, in
     g.fillAll (rowIsSelected ? theme::get (theme::ColourId::control)
                              : theme::get (theme::ColourId::panelBackground));
 
-    // 色見本。表示ON/OFFは色の濃さで伝える（仕様 5.5: 色だけで伝えない→薄いときは名前も薄く）
-    g.setColour (snapshot.colour.withAlpha (snapshot.visible ? 1.0f : 0.25f));
-    g.fillRoundedRectangle (6.0f, (float) height / 2 - 6.0f, 12.0f, 12.0f, 2.0f);
+    // 表示チェック（クリックで切替）と色見本。表示OFFは名前も薄くする（仕様 5.5: 色だけで伝えない）
+    const juce::Rectangle<float> box (5.0f, (float) height / 2 - 6.0f, 12.0f, 12.0f);
+    g.setColour (snapshot.colour);
+
+    if (snapshot.visible)
+        g.fillRoundedRectangle (box, 2.0f);
+    else
+        g.drawRoundedRectangle (box, 2.0f, 1.5f);
 
     g.setColour (theme::get (theme::ColourId::text).withAlpha (snapshot.visible ? 1.0f : 0.4f));
     g.setFont (juce::Font (juce::FontOptions (12.5f)));
@@ -947,37 +1356,47 @@ void TransferFunctionTab::paintListBoxItem (int rowNumber, juce::Graphics& g, in
     if (snapshot.micPoint.isNotEmpty())
         text += " @" + snapshot.micPoint;
 
-    g.drawText (text, 26, 0, width - 30, height, juce::Justification::centredLeft);
+    if (std::abs (snapshot.dbOffset) > 1.0e-6)
+        text << "  " << (snapshot.dbOffset > 0 ? "+" : "") << juce::String (snapshot.dbOffset, 1) << " dB";
+
+    if (! snapshot.visible)
+        text << "  " << strings::snapshotHiddenSuffix;
+
+    g.drawText (text, 24, 0, width - 28, height, juce::Justification::centredLeft);
 }
 
 void TransferFunctionTab::listBoxItemClicked (int rowNumber, const juce::MouseEvent& event)
 {
-    const auto& snapshots = ctx.project.snapshots();
+    auto& snapshots = ctx.project.snapshots();
 
     if (rowNumber < 0 || rowNumber >= (int) snapshots.size())
         return;
 
-    // 色見本のクリックで表示ON/OFFを切り替える
-    if (event.position.x < 20.0f)
+    // 色見本（チェック）のクリックで表示ON/OFFを切り替える
+    if (event.position.x < 22.0f)
     {
-        auto& snapshot = ctx.project.snapshots()[(size_t) rowNumber];
-        snapshot.visible = ! snapshot.visible;
+        snapshots[(size_t) rowNumber].visible = ! snapshots[(size_t) rowNumber].visible;
         ctx.state.snapshotVersion.fetch_add (1);
-        computeDiffCurve();
-        refreshSnapshotList();
     }
 }
 
-// Issue #143: スナップショット編集ダイアログ
+void TransferFunctionTab::listBoxItemDoubleClicked (int rowNumber, const juce::MouseEvent& event)
+{
+    if (event.position.x >= 22.0f)
+        showSnapshotEditDialog (rowNumber);
+}
+
+// スナップショット編集ダイアログ（名前・メモ・マイクポイント）
 void TransferFunctionTab::showSnapshotEditDialog (int index)
 {
-    if (index < 0 || index >= (int) ctx.project.snapshots().size())
+    if (dialogOpen || index < 0 || index >= (int) ctx.project.snapshots().size())
         return;
 
-    editingSnapshotIndex = index;
-    auto& snapshot = ctx.project.snapshots()[(size_t) index];
+    dialogOpen = true;
+    const auto& snapshot = ctx.project.snapshots()[(size_t) index];
+    const auto snapshotId = snapshot.id;
 
-    auto* window = new juce::AlertWindow (strings::snapshotDialogTitle, {}, juce::MessageBoxIconType::NoIcon, this);
+    auto* window = new juce::AlertWindow (strings::snapshotEditTitle, {}, juce::MessageBoxIconType::NoIcon, this);
     window->addTextEditor ("name", snapshot.name, strings::snapshotNameLabel);
     window->addTextEditor ("note", snapshot.note, strings::venueSnapshotMemo);
 
@@ -985,49 +1404,53 @@ void TransferFunctionTab::showSnapshotEditDialog (int index)
     for (const auto& point : ctx.project.currentVenue().micPoints)
         micPointNames.add (point.name);
     window->addComboBox ("micPoint", micPointNames, strings::venueMicPoints);
-    if (snapshot.micPoint.isNotEmpty())
-        window->getComboBoxComponent ("micPoint")->setText (snapshot.micPoint);
+    window->getComboBoxComponent ("micPoint")->setText (snapshot.micPoint.isNotEmpty() ? snapshot.micPoint
+                                                                                       : strings::notSelected,
+                                                        juce::dontSendNotification);
 
-    window->addButton (strings::snapshotSaveButton, 1);
-    window->addButton (strings::snapshotCancelButton, 0);
+    window->addButton (strings::snapshotSaveButton, 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton (strings::snapshotCancelButton, 0, juce::KeyPress (juce::KeyPress::escapeKey));
 
     auto safeWindowPtr = std::make_shared<juce::Component::SafePointer<juce::AlertWindow>> (window);
+    juce::Component::SafePointer<TransferFunctionTab> safeThis { this };
     window->enterModalState (true, juce::ModalCallbackFunction::create (
-        [this, safeWindowPtr, index] (int result)
+        [safeThis, safeWindowPtr, snapshotId] (int result)
         {
-            if (result != 1 || safeWindowPtr == nullptr || *safeWindowPtr == nullptr)
+            if (safeThis == nullptr)
+                return;
+
+            safeThis->dialogOpen = false;
+
+            if (result != 1 || *safeWindowPtr == nullptr)
                 return;
 
             auto* safeWindow = safeWindowPtr->getComponent();
-            auto& snapshots = ctx.project.snapshots();
 
-            if (index < 0 || index >= (int) snapshots.size())
-                return;
+            // 編集中に並べ替え・削除されても正しい対象に書く（index ではなく id で探す）
+            for (auto& s : safeThis->ctx.project.snapshots())
+            {
+                if (s.id != snapshotId)
+                    continue;
 
-            auto& snapshot = snapshots[(size_t) index];
-            snapshot.name = safeWindow->getTextEditorContents ("name");
+                s.name = safeWindow->getTextEditorContents ("name").trim();
 
-            if (snapshot.name.isEmpty())
-                snapshot.name = juce::Time::getCurrentTime().formatted ("%H:%M:%S");
+                if (s.name.isEmpty())
+                    s.name = s.timestamp.formatted ("%H:%M:%S");
 
-            snapshot.note = safeWindow->getTextEditorContents ("note");
-            snapshot.micPoint = safeWindow->getComboBoxComponent ("micPoint")->getText();
-
-            ctx.state.snapshotVersion.fetch_add (1);
-            refreshSnapshotList();
+                s.note = safeWindow->getTextEditorContents ("note");
+                const auto mic = safeWindow->getComboBoxComponent ("micPoint")->getText();
+                s.micPoint = mic == strings::notSelected ? juce::String() : mic;
+                safeThis->ctx.state.snapshotVersion.fetch_add (1);
+            }
         }), true);
 }
 
-// Issue #143: スナップショットの移動（表示順変更）
 void TransferFunctionTab::moveSnapshot (int fromIndex, int toIndex)
 {
     auto& snapshots = ctx.project.snapshots();
 
-    if (fromIndex < 0 || fromIndex >= (int) snapshots.size())
-        return;
-    if (toIndex < 0 || toIndex >= (int) snapshots.size())
-        return;
-    if (fromIndex == toIndex)
+    if (fromIndex < 0 || fromIndex >= (int) snapshots.size() || toIndex < 0 || toIndex >= (int) snapshots.size()
+        || fromIndex == toIndex)
         return;
 
     auto snapshot = std::move (snapshots[(size_t) fromIndex]);
@@ -1043,55 +1466,84 @@ void TransferFunctionTab::resized()
 {
     auto bounds = getLocalBounds().reduced (6);
 
-    auto snapshotPanel = bounds.removeFromBottom (220); // 高さを増やして編集コントロール分のスペースを確保
+    auto snapshotPanel = bounds.removeFromBottom (190);
     snapshotPanel.reduce (4, 4);
 
-    auto buttonColumn = snapshotPanel.removeFromLeft (96);
-    saveButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    deleteButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    exportCsvButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    exportRewButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    colorButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    editNameButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    moveUpButton.setBounds (buttonColumn.removeFromTop (26));
-    buttonColumn.removeFromTop (4);
-    moveDownButton.setBounds (buttonColumn.removeFromTop (26));
+    // 左列: 保存・削除・書き出し
+    auto buttonColumn = snapshotPanel.removeFromLeft (110);
+    snapshotPanel.removeFromLeft (6);
 
-    auto diffRow = snapshotPanel.removeFromTop (26);
-    diffLabel.setBounds (diffRow.removeFromLeft (70));
-    diffRow.removeFromLeft (4);
-    diffComboA.setBounds (diffRow.removeFromLeft (160));
-    diffRow.removeFromLeft (6);
-    diffComboB.setBounds (diffRow.removeFromLeft (160));
-    diffRow.removeFromLeft (6);
-    exportPngButton.setBounds (diffRow.removeFromLeft (120));
-    snapshotPanel.removeFromTop (4);
+    auto stack = [&buttonColumn] (juce::Component& c)
+    {
+        c.setBounds (buttonColumn.removeFromTop (24));
+        buttonColumn.removeFromTop (4);
+    };
 
-    // Issue #143: スナップショット編集コントロール行
-    auto editRow1 = snapshotPanel.removeFromTop (26);
-    dbOffsetLabel.setBounds (editRow1.removeFromLeft (80));
-    dbOffsetEditor.setBounds (editRow1.removeFromLeft (80));
-    editRow1.removeFromLeft (8);
-    delayOffsetLabel.setBounds (editRow1.removeFromLeft (80));
-    delayOffsetEditor.setBounds (editRow1.removeFromLeft (80));
+    stack (saveButton);
+    stack (deleteButton);
+    stack (exportCsvButton);
+    stack (exportRewButton);
+    stack (exportPngButton);
+    undoButton.setBounds (buttonColumn.removeFromTop (24));
 
-    auto editRow2 = snapshotPanel.removeFromTop (26);
-    smoothingOverrideLabel.setBounds (editRow2.removeFromLeft (80));
-    smoothingOverrideCombo.setBounds (editRow2.removeFromLeft (160));
+    // 右列: 選択中スナップショットの編集
+    auto editColumn = snapshotPanel.removeFromRight (juce::jmin (330, snapshotPanel.getWidth() / 2));
+    snapshotPanel.removeFromRight (6);
 
-    snapshotPanel.removeFromTop (4);
+    auto editRow = [&editColumn] () { auto r = editColumn.removeFromTop (24); editColumn.removeFromTop (4); return r; };
+
+    {
+        auto r = editRow();
+        const auto w = (r.getWidth() - 12) / 4;
+        visibleButton.setBounds (r.removeFromLeft (w)); r.removeFromLeft (4);
+        colorButton.setBounds (r.removeFromLeft (w)); r.removeFromLeft (4);
+        editNameButton.setBounds (r.removeFromLeft (w)); r.removeFromLeft (4);
+        averageButton.setBounds (r);
+    }
+    {
+        auto r = editRow();
+        const auto w = (r.getWidth() - 8) / 3;
+        moveUpButton.setBounds (r.removeFromLeft (w)); r.removeFromLeft (4);
+        moveDownButton.setBounds (r.removeFromLeft (w)); r.removeFromLeft (4);
+        phaseToggle.setBounds (r);
+    }
+    {
+        auto r = editRow();
+        dbOffsetLabel.setBounds (r.removeFromLeft (72));
+        dbOffsetEditor.setBounds (r.removeFromLeft (64));
+        r.removeFromLeft (8);
+        delayOffsetLabel.setBounds (r.removeFromLeft (100));
+        delayOffsetEditor.setBounds (r.removeFromLeft (juce::jmin (64, r.getWidth())));
+    }
+    {
+        auto r = editRow();
+        smoothingOverrideLabel.setBounds (r.removeFromLeft (72));
+        smoothingOverrideCombo.setBounds (r.removeFromLeft (juce::jmin (160, r.getWidth())));
+    }
+    {
+        auto r = editRow();
+        diffLabel.setBounds (r.removeFromLeft (72));
+        const auto w = (r.getWidth() - 4) / 2;
+        diffComboA.setBounds (r.removeFromLeft (w));
+        r.removeFromLeft (4);
+        diffComboB.setBounds (r);
+    }
+
     snapshotList.setBounds (snapshotPanel);
-    hintLabel.setBounds (snapshotPanel); // 「スナップショットなし」の案内を一覧領域に重ねる
+    hintLabel.setBounds (snapshotPanel);
 
-    bounds.removeFromBottom (6);
+    // グラフ上のツールバー
+    bounds.removeFromBottom (4);
+    auto toolbar = bounds.removeFromTop (26);
+    viewModeCombo.setBounds (toolbar.removeFromLeft (150)); toolbar.removeFromLeft (6);
+    scaleCombo.setBounds (toolbar.removeFromLeft (100)); toolbar.removeFromLeft (10);
+    blankingToggle.setBounds (toolbar.removeFromLeft (150)); toolbar.removeFromLeft (4);
+    coherenceThresholdCombo.setBounds (toolbar.removeFromLeft (80)); toolbar.removeFromLeft (10);
+    clearMarkersButton.setBounds (toolbar.removeFromRight (110)); toolbar.removeFromRight (6);
+    peakMarkerButton.setBounds (toolbar.removeFromRight (juce::jmin (130, juce::jmax (0, toolbar.getWidth()))));
+    bounds.removeFromTop (4);
+
     graph.setBounds (bounds);
-    graphBounds = bounds;
 }
 
 } // namespace eeq::ui

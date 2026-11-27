@@ -62,6 +62,7 @@ private:
 
     eeq::dsp::EQProposalResult lastResult;
     bool hasResult = false;
+    double targetDisplayOffsetDb = 0.0; // ターゲットを測定の全体レベルに合わせて表示する量（issue #109）
     std::vector<double> gridFrequencies;
     std::vector<double> measuredDb;
     std::vector<double> weight;

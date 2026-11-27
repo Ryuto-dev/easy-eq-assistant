@@ -4,10 +4,19 @@
 
 #include "Core/JuceModules.h"
 
+#include <atomic>
+#include <cstdint>
 #include <vector>
 
 namespace eeq::core
 {
+
+/** スナップショットの識別子（表示キャッシュの鍵。保存はしない） */
+inline std::uint64_t nextSnapshotId() noexcept
+{
+    static std::atomic<std::uint64_t> counter { 1 };
+    return counter.fetch_add (1, std::memory_order_relaxed);
+}
 
 // 前方宣言（循環参照回避: SystemCorrection.h が ProjectStore.h を include するため）
 class SystemCorrection;
@@ -32,8 +41,12 @@ struct Snapshot
 
     // Issue #143: スナップショットごとの表示調整
     double dbOffset = 0.0;         // dB オフセット（垂直シフト）
-    double delayOffset = 0.0;      // 遅延オフセット（サンプル）
+    double delayOffset = 0.0;      // 位相表示の遅延オフセット（サンプル。frame.sampleRate 基準）
     int smoothingOverride = -1;    // -1 = グローバル設定を使用、0 = なし、3 = 1/3 oct 等
+    bool showPhase = false;        // 位相も重ね描きする
+
+    // 表示キャッシュの識別子。frame を差し替えたら新しい id を振ること
+    std::uint64_t id = nextSnapshotId();
 
     eeq::dsp::SpectrumFrame frame;
 };

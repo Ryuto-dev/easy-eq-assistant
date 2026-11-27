@@ -20,6 +20,10 @@ public:
     void update();
     void setStatusText (const juce::String& text);
 
+    /** 「● 出力中 −24.0 dBFS ピンクノイズ」の表示文字列（本番モードの表示とも共通: issue #141） */
+    static juce::String outputStatusText (const eeq::audio::AudioEngine& engine);
+    static int comboIdForSource (eeq::audio::AudioEngine::ExcitationSource source) noexcept;
+
     /** スナップショット保存（Sキー/ボタン共通） */
     std::function<void()> onSnapshotRequested;
     /** 遅延測定（IR・遅延タブへ移動して実行） */

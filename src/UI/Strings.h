@@ -81,9 +81,11 @@ inline const juce::String excitationPinkNoise { u8"ピンクノイズ" };
 inline const juce::String excitationSweep { u8"ログスイープ" };
 inline const juce::String excitationWav { u8"WAV再生" };
 inline const juce::String excitationExternal { u8"外部入力のみ" };
+inline const juce::String excitationCalTone { u8"1 kHz トーン（校正）" };
+inline const juce::String excitationCalBandNoise { u8"1 kHz 帯域ノイズ（校正）" };
 inline const juce::String themeToggle { u8"ライト/ダーク" };
 inline const juce::String emergencyStopHint { u8"Esc: 緊急停止" };
-inline const juce::String shortcutHint { u8"Space: 測定  S: スナップ  R: リセット" };
+inline const juce::String shortcutHint { u8"Space: 測定  N: 発振器  D: 遅延検出  S: スナップ  R: リセット" };
 
 // ---- スナップショット（仕様 3.5 / 5.2 / 6.2）----
 inline const juce::String snapshotDialogTitle { u8"スナップショットを保存" };
@@ -356,12 +358,12 @@ inline const juce::String wavLoadFailed { u8"WAVファイルを読み込めま�
 inline const juce::String cancelButton { u8"キャンセル" };
 
 // ---- Issue #141: オシレータ/ショートカット表示 ----
-inline const juce::String oscillatorActiveLabel { u8"発振中" };
-inline const juce::String shortcutsHint { u8"Space: 測定  N: ノイズ  S: スナップ  R: リセット  Esc: 緊急停止" };
+inline const juce::String oscillatorActiveLabel { u8"出力中" };
+inline const juce::String shortcutsHint { u8"Space 測定 / N 発振器 / D 遅延 / S スナップ / R リセット / Esc 全停止" };
 
 // ---- Issue #142: Delay Finder 改善 ----
-inline const juce::String delayAutoApplyToggle { u8"検出即適用" };
-inline const juce::String delayTrackFollowToggle { u8"トラック追従" };
+inline const juce::String delayAutoApplyToggle { u8"検出したら適用" };
+inline const juce::String delayTrackFollowToggle { u8"Track（追従）" };
 inline const juce::String irClipHoldToggle { u8"IR保持" };
 
 // ---- Issue #143: スナップショット管理 ----
@@ -406,8 +408,7 @@ inline const juce::String tfClipWarning { u8"⚠ 入力クリップ検知" };
 
 // ---- Issue #147: 平滑化プリセット・FIFO ----
 inline const juce::String smoothingPresetLabel { u8"平滑化プリセット" };
-inline const juce::String smoothingFifoLabel { u8"FIFO (指数平均)" };
-inline const juce::String smoothingFifoTimeLabel { u8"時定数 (秒)" };
+inline const juce::String averagingModeFifo { u8"FIFO（直近N回の等重み）" };
 
 // ---- Issue #148: 確認ダイアログ・Undo ----
 inline const juce::String confirmDeleteSnapshot { u8"このスナップショットを削除しますか？" };
@@ -428,4 +429,68 @@ inline const juce::String eqTooltipCoherence { u8"このコヒーレンス未満
 inline const juce::String eqTooltipBands { u8"提案するPEQ帯域の最大数" };
 inline const juce::String eqTooltipValley { u8"谷（ディップ）へのブーストを許可するか" };
 inline const juce::String eqTooltipCreate { u8"現在の測定に対して補正EQ案を計算" };
+
+// ---- グラフのマーカー・カーソル（issue #145 / #146）----
+inline const juce::String markerAddHere { u8"ここにマーカーを置く（Shift+クリック）" };
+inline const juce::String markerAddPeak { u8"表示範囲のピークにマーカー" };
+inline const juce::String markerRemoveNear { u8"近くのマーカーを消す" };
+inline const juce::String markerClearAll { u8"マーカーをすべて消す" };
+inline const juce::String graphResetView { u8"表示範囲をリセット（ダブルクリック）" };
+inline const juce::String cursorDeltaLive { u8"LIVE差" };
+inline const juce::String graphClipWarning { u8"入力がクリップしています（平均は信頼できません）" };
+
+
+// ---- 伝達関数タブのツールバー・トレース管理（issue #143 / #144 / #145 / #148）----
+inline const juce::String viewModeThree { u8"振幅/位相/γ²（3段）" };
+inline const juce::String viewModeTwo { u8"振幅/位相（2段）" };
+inline const juce::String viewModeTooltip { u8"グラフの段構成" };
+inline const juce::String scaleAuto { u8"縦軸: 自動" };
+inline const juce::String scaleTooltip { u8"振幅の縦軸レンジ。固定すると目盛りが揺れない（dB帯でホイール・縦ドラッグでも調整）" };
+inline const juce::String coherenceBlankingToggle { u8"低γ²を非表示" };
+inline const juce::String coherenceBlankingTooltip { u8"オン: コヒーレンスがしきい値未満の区間を消す／オフ: 薄く描く" };
+inline const juce::String coherenceThresholdTooltip { u8"コヒーレンスのしきい値" };
+inline const juce::String markerPeakButton { u8"ピークにマーカー" };
+inline const juce::String markerTooltip { u8"Shift+クリックで任意の周波数にマーカー、右クリックでメニュー" };
+inline const juce::String diffNone { u8"（差分なし）" };
+inline const juce::String undoDeleteButton { u8"元に戻す" };
+inline const juce::String snapshotToggleVisible { u8"表示切替" };
+inline const juce::String snapshotShow { u8"表示する" };
+inline const juce::String snapshotHide { u8"隠す" };
+inline const juce::String snapshotHiddenSuffix { u8"（非表示）" };
+inline const juce::String snapshotShowPhase { u8"位相も表示" };
+inline const juce::String snapshotDelayOffsetMsLabel { u8"位相の遅延 (ms)" };
+inline const juce::String snapshotEditTitle { u8"スナップショットを編集" };
+inline const juce::String snapshotAverageButton { u8"平均を作成" };
+inline const juce::String snapshotAverageTooltip { u8"表示中のスナップショットを平均したトレースを作る（複数マイク位置の空間平均）" };
+inline const juce::String snapshotAverageNeedTwo { u8"平均するには、表示中のスナップショットが2つ以上必要です。" };
+inline const juce::String snapshotAverageMismatch { u8"FFTサイズかサンプルレートが異なるスナップショットは平均できません。" };
+inline const juce::String snapshotAverageName { u8"平均" };
+inline const juce::String snapshotAverageMicPoint { u8"平均" };
+inline const juce::String snapshotAverageNote { u8"平均したスナップショット:" };
+
+
+// ---- Delay Finder（issue #142）----
+inline const juce::String delayMeasureTooltip { u8"現在の入力から遅延を検出する（D キーで検出→即適用）" };
+inline const juce::String delayAutoApplyTooltip { u8"検出に成功したら、そのまま遅延を適用する" };
+inline const juce::String delayTrackTooltip { u8"測定中、約2秒ごとに遅延を再検出して追従する（伝達関数タブを見ながら使える）" };
+inline const juce::String irHoldTooltip { u8"測定を止めても最後の IR を表示し続ける。IR グラフをクリックするとその時刻を遅延として適用" };
+inline const juce::String delayTrackWaiting { u8"Track: 測定開始待ち" };
+inline const juce::String delayTrackLost { u8"Track: 検出できません（信号を確認）" };
+inline const juce::String delayTrackFollowed { u8"Track: 追従 " };
+inline const juce::String delayTrackStable { u8"Track: 安定 " };
+
+inline const juce::String meterTooltip { u8"数値はピーク (dBFS)。クリップは保持され、クリック（または R）で解除" };
+
+inline const juce::String liveWarnThreshold { u8"注意" };
+inline const juce::String liveLimitThreshold { u8"上限" };
+
+inline const juce::String liveLogInactive { u8"CSVログ停止中（保存先を確認）" };
+
+inline const juce::String confirmClearCalibration { u8"SPL校正値を消去しますか？（騒音計と比べて測り直すまで、SPLは相対値になります）" };
+inline const juce::String confirmDeleteMicPoint { u8"このマイクポイントを削除しますか？" };
+inline const juce::String confirmLoadProject { u8"プロジェクトを読み込むと、現在の会場・スナップショットは置き換わります。必要なら先に保存してください。続けますか？" };
+inline const juce::String clearProjectButton { u8"プロジェクトをクリア" };
+inline const juce::String systemsSetTarget { u8"測定対象にする" };
+inline const juce::String systemsSetTargetTooltip { u8"選択中の系統だけから励起信号を出す（行のダブルクリックでも可）" };
+
 } // namespace eeq::strings

@@ -107,8 +107,11 @@ public:
     void resized() override;
     void paint (juce::Graphics&) override;
 
-    /** 下部バーの「遅延測定」から呼ぶ。相互相関で遅延を検出して表示する */
-    void runDelayMeasurement();
+    /** 下部バーの「遅延測定」・D キーから呼ぶ。相互相関で遅延を検出して表示する。
+        forceApply = true か「検出したら適用」がオンなら、有効な結果をそのまま適用する（issue #142） */
+    void runDelayMeasurement (bool forceApply = false);
+
+    void mouseDown (const juce::MouseEvent&) override;
 
     /** ループバック補正の状態表示を最新化する（起動時の復元後にMainComponentから呼ぶ） */
     void refreshLoopbackStatus() { updateLoopbackUi(); }
@@ -119,6 +122,8 @@ private:
     void applyDelay();
     void clearDelay();
     void refreshDistanceFromManualDelay();
+    void trackDelayStep(); // Track（追従）: 測定中に定期的に再推定して追従する（issue #142）
+    void setAppliedDelayMs (double ms, const juce::String& reason);
 
     // ---- IR ----
     void requestIrRebuild (const eeq::dsp::SpectrumFrame& frame);
@@ -174,6 +179,10 @@ private:
     bool trackFollowEnabled = false; // トラック追従
     bool irClipHold = false;         // IR保持
     std::unique_ptr<eeq::dsp::ImpulseResponse> heldIr; // 保持中のIR
+    int trackTickCounter = 0;
+    juce::Rectangle<float> lastIrArea;     // IR グラフの描画領域（クリックで遅延を指定）
+    double lastIrT0 = 0.0, lastIrT1 = 0.0; // IR グラフの時間範囲（ms）
+    juce::Label trackStatusLabel;
 
     // ---- 遅延パネル ----
     juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel;
@@ -199,7 +208,7 @@ private:
 
     // ---- 系統管理 ----
     juce::Label systemsTitle, systemsHint;
-    juce::TextButton systemsAddButton, systemsRemoveButton, systemsAllButton;
+    juce::TextButton systemsAddButton, systemsRemoveButton, systemsAllButton, systemsTargetButton;
     juce::ListBox systemList { {}, nullptr };
     juce::TextEditor systemNameEditor;    // 選択中の系統名を編集（issue #15）
     juce::ComboBox systemChannelCombo;    // 選択中の系統の出力chを編集（issue #15）

@@ -282,6 +282,7 @@ juce::var ProjectStore::snapshotToVar (const Snapshot& snapshot)
     o->setProperty ("dbOffset", snapshot.dbOffset);
     o->setProperty ("delayOffset", snapshot.delayOffset);
     o->setProperty ("smoothingOverride", snapshot.smoothingOverride);
+    o->setProperty ("showPhase", snapshot.showPhase);
     o->setProperty ("frame", frameToVar (snapshot.frame));
 
     return object;
@@ -309,6 +310,7 @@ Snapshot ProjectStore::snapshotFromVar (const juce::var& v)
         snapshot.dbOffset = getPropertyWithDefault (o, "dbOffset", snapshot.dbOffset);
         snapshot.delayOffset = getPropertyWithDefault (o, "delayOffset", snapshot.delayOffset);
         snapshot.smoothingOverride = getPropertyWithDefault (o, "smoothingOverride", snapshot.smoothingOverride);
+        snapshot.showPhase = getPropertyWithDefault (o, "showPhase", snapshot.showPhase);
         snapshot.frame = frameFromVar (o->getProperty ("frame"));
     }
 

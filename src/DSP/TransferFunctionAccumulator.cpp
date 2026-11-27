@@ -32,7 +32,9 @@ void TransferFunctionAccumulator::configure (int fftSizePoints, double newSample
     // 初回のconfigureは必ず初期化する（メンバーの既定fftSizeと同じ値を渡しても
     // バッファ確保がスキップされないようにする）
     const bool structural = ! configured || points != fftSize || std::abs (newSampleRate - sampleRate) > 0.5
-                            || averaging.mode != config.mode || windowMethod != currentWindowMethod;
+                            || averaging.mode != config.mode || windowMethod != currentWindowMethod
+                            || (averaging.mode == AveragingConfig::Mode::fifo
+                                && averaging.maxAverages != config.maxAverages);
     configured = true;
 
     fftSize = points;
@@ -104,6 +106,36 @@ void TransferFunctionAccumulator::resetAveragesInternal()
     averages = 0;
     publishedAverages.store (0, std::memory_order_relaxed);
 
+    fifoWrite = 0;
+    fifoCount = 0;
+    framesSinceFifoRecompute = 0;
+
+    if (config.mode == AveragingConfig::Mode::fifo)
+    {
+        const auto depth = juce::jlimit (1, AveragingConfig::maxFifoFrames, config.maxAverages);
+        const auto bins = (size_t) fftSize / 2 + 1;
+        fifoSlots.resize ((size_t) depth);
+
+        for (auto& slot : fifoSlots)
+        {
+            slot.xx.assign (bins, 0.0f);
+            slot.yy.assign (bins, 0.0f);
+            slot.xy.assign (bins, {});
+        }
+
+        fifoSumXx.assign (bins, 0.0);
+        fifoSumYy.assign (bins, 0.0);
+        fifoSumXy.assign (bins, {});
+    }
+    else
+    {
+        fifoSlots.clear();
+        fifoSlots.shrink_to_fit();
+        fifoSumXx.clear();
+        fifoSumYy.clear();
+        fifoSumXy.clear();
+    }
+
     result = {};
     result.fftSize = fftSize;
     result.sampleRate = sampleRate;
@@ -170,6 +202,58 @@ void TransferFunctionAccumulator::processFrame()
     fft->performRealOnlyForwardTransform (fftBufRef.data(), true);
     fft->performRealOnlyForwardTransform (fftBufMeas.data(), true);
 
+    if (config.mode == AveragingConfig::Mode::fifo && ! fifoSlots.empty())
+    {
+        // 直近 N フレームの等重み平均: 最も古いスロットを差し引いて新しいフレームを足す
+        auto& slot = fifoSlots[(size_t) fifoWrite];
+        const bool full = fifoCount == (int) fifoSlots.size();
+
+        for (size_t k = 0; k < halfBins; ++k)
+        {
+            const std::complex<double> r (fftBufRef[k * 2], fftBufRef[k * 2 + 1]);
+            const std::complex<double> m (fftBufMeas[k * 2], fftBufMeas[k * 2 + 1]);
+            const auto xx = std::norm (r);
+            const auto yy = std::norm (m);
+            const auto xy = m * std::conj (r);
+
+            if (full)
+            {
+                fifoSumXx[k] -= slot.xx[k];
+                fifoSumYy[k] -= slot.yy[k];
+                fifoSumXy[k] -= std::complex<double> (slot.xy[k]);
+            }
+
+            slot.xx[k] = (float) xx;
+            slot.yy[k] = (float) yy;
+            slot.xy[k] = std::complex<float> (xy);
+            fifoSumXx[k] += slot.xx[k];
+            fifoSumYy[k] += slot.yy[k];
+            fifoSumXy[k] += std::complex<double> (slot.xy[k]);
+        }
+
+        fifoWrite = (fifoWrite + 1) % (int) fifoSlots.size();
+        fifoCount = std::min (fifoCount + 1, (int) fifoSlots.size());
+
+        // 引き算の丸め誤差が溜まらないよう、一巡ごとに総和を取り直す
+        if (++framesSinceFifoRecompute >= (int) fifoSlots.size())
+            recomputeFifoSums();
+
+        const auto inv = 1.0 / (double) fifoCount;
+
+        for (size_t k = 0; k < halfBins; ++k)
+        {
+            gxx[k] = std::max (0.0, fifoSumXx[k]) * inv;
+            gyy[k] = std::max (0.0, fifoSumYy[k]) * inv;
+            gxy[k] = fifoSumXy[k] * inv;
+        }
+
+        ++averages;
+        updateResult();
+        result.averages = fifoCount;
+        publishedAverages.store (result.averages, std::memory_order_relaxed);
+        return;
+    }
+
     const auto weight = computeWeight();
 
     for (size_t k = 0; k < halfBins; ++k)
@@ -233,6 +317,26 @@ void TransferFunctionAccumulator::updateResult()
         // 窓ゲインは補正していない相対値（S/N表示では差を見るため問題ない）
         result.refPowerDb[k] = (float) (10.0 * std::log10 (xx));
         result.measPowerDb[k] = (float) (10.0 * std::log10 (yy));
+    }
+}
+
+void TransferFunctionAccumulator::recomputeFifoSums()
+{
+    framesSinceFifoRecompute = 0;
+    std::fill (fifoSumXx.begin(), fifoSumXx.end(), 0.0);
+    std::fill (fifoSumYy.begin(), fifoSumYy.end(), 0.0);
+    std::fill (fifoSumXy.begin(), fifoSumXy.end(), std::complex<double>());
+
+    for (int s = 0; s < fifoCount; ++s)
+    {
+        const auto& slot = fifoSlots[(size_t) s];
+
+        for (size_t k = 0; k < fifoSumXx.size(); ++k)
+        {
+            fifoSumXx[k] += slot.xx[k];
+            fifoSumYy[k] += slot.yy[k];
+            fifoSumXy[k] += std::complex<double> (slot.xy[k]);
+        }
     }
 }
 
