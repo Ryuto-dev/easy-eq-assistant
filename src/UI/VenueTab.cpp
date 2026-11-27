@@ -354,6 +354,8 @@ void VenueTab::loadProject()
             const auto error = safeThis->ctx.project.loadFromFile (file);
             safeThis->statusLabel.setText (error.isEmpty() ? strings::venueLoadOk : strings::venueLoadFailed + ": " + error,
                                            juce::dontSendNotification);
+            // ループバック校正（システム補正）を復元（仕様 6.1）
+            safeThis->ctx.project.restoreSystemCorrection (safeThis->ctx.correction);
             safeThis->ctx.state.snapshotVersion.fetch_add (1);
             safeThis->refreshVenueList();
             safeThis->loadSelectedVenueFields();

@@ -888,6 +888,10 @@ void DelayIrTab::finishLoopbackMeasurement()
     ctx.settings.setValue ("loopbackRate", frame.sampleRate);
     ctx.settings.saveIfNeeded();
 
+    // ProjectStore にも frame と delay を保存（.eea プロジェクトファイル永続化用）
+    ctx.project.setSystemCorrection (ctx.correction);
+    ctx.project.setSystemCorrectionFrame (frame, estimate.valid ? estimate.delaySamples : 0.0);
+
     eeq::log::write (juce::String ("loopback correction measured: delay=")
                      + juce::String (ctx.correction.getRoundtripDelaySamples(), 2) + " samples, averages="
                      + juce::String (frame.averages));

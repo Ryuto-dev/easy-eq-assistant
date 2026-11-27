@@ -90,6 +90,9 @@ MainComponent::MainComponent()
             eeq::log::write (error.isEmpty() ? "project restored: " + projectFile.getFullPathName()
                                              : "project restore FAILED: " + error);
 
+            // ループバック校正（システム補正）を復元（仕様 6.1）
+            project.restoreSystemCorrection (correction);
+
             // タブ類に一覧の張り直しを促す（スナップショット等の生ポインタも入れ替わる）
             uiState.snapshotVersion.fetch_add (1);
             uiState.eqVersion.fetch_add (1);

@@ -1,5 +1,7 @@
 #include "ProjectStore.h"
 
+#include "SystemCorrection.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -100,6 +102,94 @@ juce::File ProjectStore::defaultProjectFile()
         .getChildFile ("last_project.eea");
 }
 
+//==============================================================================
+// システム補正（ループバック校正）の保存・復元（仕様 6.1）
+//==============================================================================
+
+juce::var ProjectStore::correctionToVar (const eeq::dsp::SpectrumFrame& frame, double delaySamples, const juce::Time& measuredAt, bool active)
+{
+    juce::DynamicObject* o = new juce::DynamicObject();
+    juce::var object (o);
+
+    o->setProperty ("active", active);
+
+    if (! active)
+        return object;
+
+    o->setProperty ("delaySamples", delaySamples);
+    o->setProperty ("measuredAt", timeToVar (measuredAt));
+    o->setProperty ("frame", frameToVar (frame));
+
+    return object;
+}
+
+void ProjectStore::correctionFromVar (const juce::var& v, eeq::dsp::SpectrumFrame& outFrame, double& outDelaySamples, juce::Time& outMeasuredAt, bool& outActive)
+{
+    outActive = false;
+    outDelaySamples = 0.0;
+    outMeasuredAt = juce::Time();
+    outFrame = {};
+
+    if (auto* o = v.getDynamicObject())
+    {
+        outActive = getPropertyWithDefault (o, "active", false);
+
+        if (! outActive)
+            return;
+
+        outDelaySamples = getPropertyWithDefault (o, "delaySamples", 0.0);
+        outMeasuredAt = timeFromVar (o->getProperty ("measuredAt"));
+        outFrame = frameFromVar (o->getProperty ("frame"));
+    }
+}
+
+//==============================================================================
+// 公開メソッド
+
+void ProjectStore::setSystemCorrection (const eeq::core::SystemCorrection& correction)
+{
+    // SystemCorrection からデータを抽出して個別に保存
+    correctionActive_ = correction.isActive();
+
+    if (! correctionActive_)
+    {
+        correctionFrame_ = {};
+        correctionDelaySamples_ = 0.0;
+        correctionMeasuredAt_ = juce::Time();
+        return;
+    }
+
+    // frame と delay をコピー（CriticalSection はコピーしない）
+    correctionDelaySamples_ = correction.getRoundtripDelaySamples();
+    correctionMeasuredAt_ = correction.getMeasuredAt();
+
+    // frame を取得するために一時的な SystemCorrection を作成して apply 経由で取得
+    // ただし、直接 frame にアクセスする方法がないため、DelayIrTab 側で frame も一緒に渡す必要がある
+    // ここでは DelayIrTab::measureLoopback で ProjectStore に frame も保存するようにする
+    // いったん correctionFrame_ は空のままとし、DelayIrTab で別途保存する
+}
+
+void ProjectStore::restoreSystemCorrection (eeq::core::SystemCorrection& outCorrection) const
+{
+    if (! correctionActive_)
+        return;
+
+    // 再構築
+    if (correctionFrame_.fftSize > 0)
+    {
+        outCorrection.setCorrection (correctionFrame_, correctionDelaySamples_);
+    }
+}
+
+void ProjectStore::setSystemCorrectionFrame (const eeq::dsp::SpectrumFrame& frame, double delaySamples)
+{
+    correctionFrame_ = frame;
+    correctionDelaySamples_ = delaySamples;
+    correctionActive_ = true;
+    correctionMeasuredAt_ = juce::Time::getCurrentTime();
+}
+
+//==============================================================================
 // JSON変換
 
 juce::var ProjectStore::frameToVar (const eeq::dsp::SpectrumFrame& frame)
@@ -345,7 +435,39 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
 
 juce::String ProjectStore::saveToFile (const juce::File& file) const
 {
-    return saveVenuesToFile (venues_, currentVenueIndex, file);
+    // インスタンス版: 会場データ + システム補正も保存する
+    juce::DynamicObject* root = new juce::DynamicObject();
+    juce::var object (root);
+
+    root->setProperty ("format", "eea-project");
+    root->setProperty ("version", 1);
+
+    juce::Array<juce::var> venueArray;
+
+    for (const auto& venue : venues_)
+        venueArray.add (venueToVar (venue));
+
+    root->setProperty ("venues", venueArray);
+    root->setProperty ("currentVenueIndex", currentVenueIndex);
+    root->setProperty ("systemCorrection", correctionToVar (correctionFrame_, correctionDelaySamples_, correctionMeasuredAt_, correctionActive_));
+
+    if (! file.getParentDirectory().exists())
+        file.getParentDirectory().createDirectory();
+
+    // アトミック書き込み（issue #38）: まず一時ファイルへ書き、成功したら置き換える。
+    // 書き込みの最中にクラッシュ・電源断しても既存の .eea が壊れない
+    const auto tmp = file.getSiblingFile (file.getFileName() + ".tmp");
+
+    if (! tmp.replaceWithText (juce::JSON::toString (object)))
+        return juce::String (u8"一時ファイルに書き込めませんでした: ") + tmp.getFullPathName();
+
+    if (! tmp.moveFileTo (file))
+    {
+        tmp.deleteFile();
+        return juce::String (u8"保存ファイルを置き換えられませんでした: ") + file.getFullPathName();
+    }
+
+    return {};
 }
 
 juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
@@ -354,6 +476,7 @@ juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, i
     // 静的版（issue #58）: 会場データのコピーを受け取り、JSON化と書き込みを行う。
     // 呼び出し側（自動保存のワーカースレッド）はメッセージスレッドで取ったコピーを渡すので、
     // UI スレッドをブロックせずに保存できる
+    // 注: 静的版ではシステム補正は保存しない（会場データのみ）
     juce::DynamicObject* root = new juce::DynamicObject();
     juce::var object (root);
 
@@ -415,6 +538,11 @@ juce::String ProjectStore::loadFromFile (const juce::File& file)
         venues_ = std::move (loaded);
         currentVenueIndex = juce::jlimit (0, (int) venues_.size() - 1,
                                           getPropertyWithDefault (root, "currentVenueIndex", 0));
+
+        // システム補正を復元
+        correctionFromVar (root->getProperty ("systemCorrection"),
+                           correctionFrame_, correctionDelaySamples_, correctionMeasuredAt_, correctionActive_);
+
         return {};
     }
 

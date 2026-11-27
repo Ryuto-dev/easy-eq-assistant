@@ -9,6 +9,9 @@
 namespace eeq::core
 {
 
+// 前方宣言（循環参照回避: SystemCorrection.h が ProjectStore.h を include するため）
+class SystemCorrection;
+
 // スナップショット（仕様 3.5 / 5.2）: 測定結果に名前・色・系統・マイクポイントを付けたもの。
 // データはマイクポイント単位で扱う前提（仕様 5.4.1）を守るため、micPoint を必ず持つ。
 struct Snapshot
@@ -105,6 +108,11 @@ public:
     /** SpectrumFrame のデシリアライズ。壊れたデータは fftSize=0 の空フレームを返す */
     static eeq::dsp::SpectrumFrame spectrumFrameFromVar (const juce::var& v) { return frameFromVar (v); }
 
+    /** システム補正（ループバック校正）の保存・復元（仕様 6.1） */
+    void setSystemCorrection (const eeq::core::SystemCorrection& correction);
+    void setSystemCorrectionFrame (const eeq::dsp::SpectrumFrame& frame, double delaySamples);
+    void restoreSystemCorrection (eeq::core::SystemCorrection& outCorrection) const;
+
 private:
     static juce::var venueToVar (const Venue& venue);
     static Venue venueFromVar (const juce::var& v);
@@ -112,8 +120,17 @@ private:
     static Snapshot snapshotFromVar (const juce::var& v);
     static juce::var frameToVar (const eeq::dsp::SpectrumFrame& frame);
     static eeq::dsp::SpectrumFrame frameFromVar (const juce::var& v);
+    static juce::var correctionToVar (const eeq::dsp::SpectrumFrame& frame, double delaySamples, const juce::Time& measuredAt, bool active);
+    static void correctionFromVar (const juce::var& v, eeq::dsp::SpectrumFrame& outFrame, double& outDelaySamples, juce::Time& outMeasuredAt, bool& outActive);
+
     std::vector<Venue> venues_;
     int currentVenueIndex = 0;
+
+    // システム補正データを個別に保存（SystemCorrection は CriticalSection を持つためコピー不可）
+    eeq::dsp::SpectrumFrame correctionFrame_;
+    double correctionDelaySamples_ = 0.0;
+    juce::Time correctionMeasuredAt_;
+    bool correctionActive_ = false;
 };
 
 } // namespace eeq::core
