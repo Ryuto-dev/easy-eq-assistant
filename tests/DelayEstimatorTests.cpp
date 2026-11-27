@@ -5,6 +5,7 @@
 #include "DSP/DelayEstimator.h"
 
 #include <cmath>
+#include <complex>
 #include <random>
 #include <vector>
 
@@ -208,4 +209,86 @@ TEST (DelayEstimator, PhatImprovesPeakSharpness)
     EXPECT_TRUE (resultPhat.valid);
     // PHAT はピークを鋭くするため peakToSidelobe が向上することが多い
     EXPECT_GE (resultPhat.peakToSidelobe, resultNormal.peakToSidelobe * 0.8);
+}
+
+namespace
+{
+// 周波数領域で厳密な分数遅延（循環）をかける: X(k)·e^{−j2πkd/N}。Nyquist bin は 0 にする
+std::vector<float> circularFractionalDelay (const std::vector<float>& input, double delaySamples)
+{
+    const auto n = (int) input.size();
+    int order = 0;
+
+    while ((1 << order) < n)
+        ++order;
+
+    juce::dsp::FFT fft (order);
+    std::vector<float> buffer ((size_t) n * 2, 0.0f);
+    std::copy (input.begin(), input.end(), buffer.begin());
+    fft.performRealOnlyForwardTransform (buffer.data(), true);
+
+    for (int k = 0; k <= n / 2; ++k)
+    {
+        const std::complex<double> x (buffer[(size_t) k * 2], buffer[(size_t) k * 2 + 1]);
+        const auto phase = -2.0 * juce::MathConstants<double>::pi * (double) k * delaySamples / (double) n;
+        const auto y = k == n / 2 ? std::complex<double> (0.0, 0.0) : x * std::polar (1.0, phase);
+        buffer[(size_t) k * 2] = (float) y.real();
+        buffer[(size_t) k * 2 + 1] = (float) y.imag();
+    }
+
+    for (int k = n / 2 + 1; k < n; ++k)
+    {
+        buffer[(size_t) k * 2] = buffer[(size_t) (n - k) * 2];
+        buffer[(size_t) k * 2 + 1] = -buffer[(size_t) (n - k) * 2 + 1];
+    }
+
+    fft.performRealOnlyInverseTransform (buffer.data());
+    return { buffer.begin(), buffer.begin() + n };
+}
+} // namespace
+
+// #118: 相関（PHAT では sinc 形）の小数部を、符号付きの値で補間する。
+// |r| に放物線補間していた旧実装は、真の 0.3 に対して 0.074（誤差 0.23 サンプル）だった
+TEST (DelayEstimator, RecoversFractionalDelaysAsymmetric)
+{
+    constexpr int count = 16384;
+    const auto reference = makeExcitation (count);
+
+    for (const auto fraction : { 0.1, 0.3, 0.7 })
+    {
+        const auto trueDelay = 100.0 + fraction;
+        const auto meas = circularFractionalDelay (reference, trueDelay);
+
+        for (const auto phat : { true, false })
+        {
+            const auto result = eeq::dsp::estimateDelay (reference.data(), meas.data(), count, phat);
+
+            EXPECT_TRUE (result.valid);
+            EXPECT_NEAR (result.delaySamples, trueDelay, 0.02) << "fraction=" << fraction << " phat=" << phat;
+        }
+    }
+}
+
+// 負のピーク（極性反転）でも符号を反転して同じ精度で補間する
+TEST (DelayEstimator, SubsamplePeakOffsetHandlesNegativePeak)
+{
+    constexpr int size = 256;
+    constexpr double pi = juce::MathConstants<double>::pi;
+
+    for (const auto fraction : { 0.1, 0.3, -0.3 })
+    {
+        for (const auto polarity : { 1.0, -1.0 })
+        {
+            std::vector<float> data ((size_t) size);
+
+            for (int i = 0; i < size; ++i)
+            {
+                const auto x = (double) (i - 50) - fraction;
+                data[(size_t) i] = (float) (polarity * (std::abs (x) < 1e-12 ? 1.0 : std::sin (pi * x) / (pi * x)));
+            }
+
+            const auto offset = eeq::dsp::subsamplePeakOffset (data.data(), size, 50);
+            EXPECT_NEAR (offset, fraction, 0.01) << "fraction=" << fraction << " polarity=" << polarity;
+        }
+    }
 }

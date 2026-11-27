@@ -154,13 +154,8 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     if (peakValue <= 0.0f)
         return result;
 
-    // 放物線補間でサブサンプル精度（仕様 3.3）
-    const auto y0 = std::abs (measBuf[(size_t) ((peakIndex - 1 + size) % size)]);
-    const auto y1 = peakValue;
-    const auto y2 = std::abs (measBuf[(size_t) ((peakIndex + 1) % size)]);
-    const auto denom = y0 - 2.0f * y1 + y2;
-    auto fractional = denom != 0.0f ? 0.5f * (y0 - y2) / denom : 0.0f;
-    fractional = juce::jlimit (-0.5f, 0.5f, fractional);
+    // 符号付きの値でサブサンプル補間する（仕様 3.3 / #118）
+    const auto fractional = subsamplePeakOffset (measBuf.data(), size, peakIndex);
 
     auto delaySamples = (double) peakIndex + (double) fractional;
 
