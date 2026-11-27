@@ -496,4 +496,9 @@ inline const juce::String systemsSetTargetTooltip { u8"選択中の系統だけ�
 inline const juce::String eqLevelAlignedPrefix { u8"ターゲットのレベル合わせ: " };
 inline const juce::String eqLevelAlignTooltip { u8"測定の絶対レベルは機器のゲインで決まるため、補正範囲内の中央値にターゲットを合わせてから EQ 案を作る" };
 
+inline const juce::String limitCeilingInvalid { u8"出力上限は −60〜0 dBFS の数値で入力してください" };
+
+inline const juce::String uiWatchdogStoppedNotice { u8"UI停止を検知：励起音を自動停止しました" };
+inline const juce::String deviceRestartStoppedNotice { u8"オーディオデバイスが停止したため励起音を止めました（自動では再開しません）" };
+
 } // namespace eeq::strings

@@ -43,6 +43,7 @@ private:
     std::optional<double> tryReadSpl() const;
     /** テスト中だけ出力上限（ceiling）を掛け替え、終了時に元へ戻す（issue #29） */
     void overrideCeilingForTest();
+    std::optional<double> readCeilingInput();
     void restoreCeilingAfterTest();
 
     // レベルステップの進行（メッセージスレッドのタイマー＝MainComponentの30Hzで進める）
@@ -103,6 +104,7 @@ private:
     // テスト前の出力上限（issue #29: テスト終了後に通常測定へ戻す）
     bool ceilingOverridden = false;
     float ceilingBeforeTestDb = 0.0f;
+    float levelBeforeTestDb = -20.0f; // テスト前の出力レベル（issue #100）
 
     static constexpr double settleSeconds = 1.2;
     static constexpr double measureSeconds = 0.8;

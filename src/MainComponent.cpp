@@ -196,6 +196,9 @@ MainComponent::~MainComponent()
 
     modalEscapeTargets.clear();
     modalEscapeRoot = nullptr;
+
+    // 鳴らしたまま閉じてもポップ音を出さない（issue #105）: フェードアウトが終わるまで待ってから閉じる
+    engine.fadeOutAndWait (400);
     engine.saveSettings();
     // 最終保存は同期的に行う（自動保存がワーカースレッドのまま終了すると、
     // 終了処理に書き込みが殺されて失われる可能性があるため）
@@ -379,9 +382,10 @@ void MainComponent::timerCallback()
 
     const auto status = engine.getStatusText();
     const auto watchdogWarningActive = (std::int32_t) (uiWatchdogWarningUntilMs - nowMs) > 0;
-    bottomBar.setStatusText (watchdogWarningActive
-                                 ? juce::String (u8"UI停止を検知：励起音を自動停止しました")
-                                 : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
+    const auto deviceStopNoticeActive = (std::int32_t) (deviceStopNoticeUntilMs - nowMs) > 0;
+    bottomBar.setStatusText (watchdogWarningActive ? strings::uiWatchdogStoppedNotice
+                             : deviceStopNoticeActive ? strings::deviceRestartStoppedNotice
+                             : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
 
     // デバイスが開き直されたら測定設定（サンプルレート）を合わせ直す
     if (engine.getDeviceGeneration() != lastSeenGeneration)
@@ -391,6 +395,13 @@ void MainComponent::timerCallback()
 
         // RTA/SPL解析器は RtaSplTab が保存済みのユーザー設定で張り直す
         //（ここでハードコードするとユーザーの設定が上書きされるため触らない）
+    }
+
+    if (engine.consumeStoppedByDeviceRestart())
+    {
+        // デバイスが止まったので励起を止めた。再オープン後も自動では鳴らさない（issue #102）
+        deviceStopNoticeUntilMs = nowMs + 8000u;
+        eeq::log::write ("excitation: stopped because the audio device stopped (not resumed automatically)");
     }
 
     if (engine.consumeNoiseReachedIdle())

@@ -104,6 +104,7 @@ private:
 
     uint32_t lastSeenGeneration = 0;
     std::uint32_t uiWatchdogWarningUntilMs = 0;
+    std::uint32_t deviceStopNoticeUntilMs = 0;
     bool errorDialogOpen = false;
     bool wizardShown = false;
     bool initialFocusTaken = false;
