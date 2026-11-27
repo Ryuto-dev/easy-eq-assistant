@@ -14,6 +14,7 @@ class SystemCorrection;
 
 // スナップショット（仕様 3.5 / 5.2）: 測定結果に名前・色・系統・マイクポイントを付けたもの。
 // データはマイクポイント単位で扱う前提（仕様 5.4.1）を守るため、micPoint を必ず持つ。
+// Issue #143: dBオフセット、遅延オフセット、スナップショットごとの平滑化オーバーライドを追加
 struct Snapshot
 {
     juce::String name;
@@ -28,6 +29,11 @@ struct Snapshot
     bool isSelectedA = false;  // 差分（A−B）表示用の選択（仕様 5.2）
     bool isSelectedB = false;
     bool correctionApplied = false; // システム補正済みのフレームか（issue #32）
+
+    // Issue #143: スナップショットごとの表示調整
+    double dbOffset = 0.0;         // dB オフセット（垂直シフト）
+    double delayOffset = 0.0;      // 遅延オフセット（サンプル）
+    int smoothingOverride = -1;    // -1 = グローバル設定を使用、0 = なし、3 = 1/3 oct 等
 
     eeq::dsp::SpectrumFrame frame;
 };

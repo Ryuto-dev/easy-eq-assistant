@@ -32,6 +32,7 @@ EQTab::EQTab (UiContext& context)
     // ---- 入力 ----
     targetTitle.setText (strings::eqTargetLabel, juce::dontSendNotification);
     styleLabel (targetTitle, 12.0f, false);
+    targetTitle.setTooltip (strings::eqTooltipTarget);
     addAndMakeVisible (targetTitle);
 
     targetCombo.addItem (strings::eqTargetFlat, 1);
@@ -40,25 +41,30 @@ EQTab::EQTab (UiContext& context)
     targetCombo.setSelectedId (1, juce::dontSendNotification);
     styleCombo (targetCombo);
     targetCombo.onChange = [this] { buildTargetPoints(); };
+    targetCombo.setTooltip (strings::eqTooltipTarget);
     addAndMakeVisible (targetCombo);
 
     tiltTitle.setText (strings::eqTargetTiltLabel, juce::dontSendNotification);
     styleLabel (tiltTitle);
+    tiltTitle.setTooltip (strings::eqTooltipTarget);
     addAndMakeVisible (tiltTitle);
 
     styleTextEditor (tiltEditor);
     tiltEditor.setText ("-1.0", juce::dontSendNotification);
     tiltEditor.setInputRestrictions (8, "0123456789.-");
     tiltEditor.onTextChange = [this] { buildTargetPoints(); };
+    tiltEditor.setTooltip (strings::eqTooltipTarget);
     addAndMakeVisible (tiltEditor);
 
     styleButton (targetCsvButton);
     targetCsvButton.setButtonText (strings::eqTargetCsv);
     targetCsvButton.onClick = [this] { loadTargetCsv(); };
+    targetCsvButton.setTooltip (strings::eqTooltipTarget);
     addAndMakeVisible (targetCsvButton);
 
     rangeTitle.setText (strings::eqRangeLabel, juce::dontSendNotification);
     styleLabel (rangeTitle);
+    rangeTitle.setTooltip (strings::eqTooltipRange);
     addAndMakeVisible (rangeTitle);
 
     styleTextEditor (minFreqEditor);
@@ -67,40 +73,51 @@ EQTab::EQTab (UiContext& context)
     maxFreqEditor.setText ("16000", juce::dontSendNotification);
     minFreqEditor.setInputRestrictions (7, "0123456789.");
     maxFreqEditor.setInputRestrictions (7, "0123456789.");
+    minFreqEditor.setTooltip (strings::eqTooltipRange);
+    maxFreqEditor.setTooltip (strings::eqTooltipRange);
 
     // 補正範囲を変えたらターゲットカーブも作り直す（グラフの重ね描きと提案の両方が変わる）
-    minFreqEditor.onTextChange = [this] { buildTargetPoints(); };
-    maxFreqEditor.onTextChange = [this] { buildTargetPoints(); };
+    minFreqEditor.onTextChange = [this] { buildTargetPoints(); updateEqGraph(); };
+    maxFreqEditor.onTextChange = [this] { buildTargetPoints(); updateEqGraph(); };
     addAndMakeVisible (minFreqEditor);
     addAndMakeVisible (maxFreqEditor);
 
     coherenceTitle.setText (strings::eqCoherenceGateLabel, juce::dontSendNotification);
     styleLabel (coherenceTitle);
+    coherenceTitle.setTooltip (strings::eqTooltipCoherence);
     addAndMakeVisible (coherenceTitle);
 
     styleTextEditor (coherenceEditor);
     coherenceEditor.setText ("0.8", juce::dontSendNotification); // 既定 0.8（仕様 4.1）
     coherenceEditor.setInputRestrictions (6, "0123456789.");
+    coherenceEditor.setTooltip (strings::eqTooltipCoherence);
     addAndMakeVisible (coherenceEditor);
 
     maxBandsTitle.setText (strings::eqMaxBandsLabel, juce::dontSendNotification);
     styleLabel (maxBandsTitle);
+    maxBandsTitle.setTooltip (strings::eqTooltipBands);
     addAndMakeVisible (maxBandsTitle);
 
     styleSlider (maxBandsSlider);
     maxBandsSlider.setRange (1.0, 8.0, 1.0); // 最大 8 帯域（仕様 4.3）
     maxBandsSlider.setValue (8.0, juce::dontSendNotification);
     maxBandsSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 20);
+    maxBandsSlider.setTooltip (strings::eqTooltipBands);
     addAndMakeVisible (maxBandsSlider);
 
     styleToggle (valleyBoostToggle);
     valleyBoostToggle.setButtonText (strings::eqValleyBoostToggle);
+    valleyBoostToggle.setTooltip (strings::eqTooltipValley);
     addAndMakeVisible (valleyBoostToggle);
 
     styleAccentButton (createButton);
     createButton.setButtonText (strings::eqCreateButton);
     createButton.onClick = [this] { runProposal(); };
+    createButton.setTooltip (strings::eqTooltipCreate);
     addAndMakeVisible (createButton);
+
+    // Issue #149: EQ専用グラフ
+    addAndMakeVisible (eqGraph);
 
     // ---- 帯域一覧 ----
     bandTitle.setText (strings::eqSection, juce::dontSendNotification);
@@ -417,6 +434,7 @@ void EQTab::runProposal()
     const auto canExport = ! ctx.state.proposedBands.empty();
     exportCsvButton.setEnabled (canExport);
     exportTextButton.setEnabled (canExport);
+    updateEqGraph();
 }
 
 void EQTab::updatePrediction()
@@ -445,6 +463,7 @@ void EQTab::updatePrediction()
 
     // 手動編集が一覧の行表示（Hz/dB/Q/OFF）にも反映されるようにする
     bandList.updateContent();
+    updateEqGraph();
 }
 
 void EQTab::refreshBandTable()
@@ -671,7 +690,13 @@ void EQTab::resized()
     left.removeFromTop (8);
     convergenceLabel.setBounds (left.removeFromTop (18));
 
-    // 右: 帯域一覧と手動調整
+    // 右: EQグラフ + 帯域一覧と手動調整
+    auto graphTitle = right.removeFromTop (18);
+    // グラフエリアを確保
+    auto graphHeight = juce::jmin (240, right.getHeight() / 2);
+    eqGraph.setBounds (right.removeFromTop (graphHeight));
+    right.removeFromTop (4);
+
     bandTitle.setBounds (right.removeFromTop (18));
     auto tableHeight = right.getHeight() - 120;
     bandList.setBounds (right.removeFromTop (std::max (60, tableHeight)));
@@ -693,6 +718,71 @@ void EQTab::resized()
     exportCsvButton.setBounds (exportRow.removeFromLeft (120));
     exportRow.removeFromLeft (6);
     exportTextButton.setBounds (exportRow.removeFromLeft (140));
+}
+
+// Issue #149: EQ専用グラフを更新
+void EQTab::updateEqGraph()
+{
+    if (! hasResult)
+        return;
+
+    // 測定カーブをライブフレームとして設定
+    eeq::dsp::SpectrumFrame frame;
+    frame.fftSize = 8192; // 仮の値
+    frame.sampleRate = ctx.engine.getCurrentSampleRate();
+    frame.averages = 1;
+
+    frame.transfer.resize (gridFrequencies.size());
+    frame.magnitudeDb.resize (gridFrequencies.size());
+    frame.phaseDeg.resize (gridFrequencies.size());
+    frame.coherence.resize (gridFrequencies.size());
+    frame.refPowerDb.resize (gridFrequencies.size());
+    frame.measPowerDb.resize (gridFrequencies.size());
+
+    for (size_t i = 0; i < gridFrequencies.size(); ++i)
+    {
+        const auto mag = std::pow (10.0, measuredDb[i] / 20.0);
+        frame.transfer[i] = std::complex<float> ((float) mag, 0.0f);
+        frame.magnitudeDb[i] = (float) measuredDb[i];
+        frame.phaseDeg[i] = 0.0f;
+        frame.coherence[i] = 1.0f;
+        frame.refPowerDb[i] = (float) measuredDb[i];
+        frame.measPowerDb[i] = (float) measuredDb[i];
+    }
+
+    // オーバーレイとしてターゲットと予測を設定
+    std::vector<FrequencyGraphView::OverlaySource> sources;
+
+    // ターゲット曲線
+    if (! ctx.state.targetPoints.empty())
+    {
+        FrequencyGraphView::OverlaySource source;
+        source.name = strings::eqGraphTarget;
+        source.colour = theme::get (theme::ColourId::ok);
+        source.points = &ctx.state.targetPoints;
+        source.thickness = 1.2f;
+        source.dashed = true;
+        source.showPhase = false;
+        sources.push_back (source);
+    }
+
+    // 予測曲線
+    if (! ctx.state.predictionPoints.empty())
+    {
+        FrequencyGraphView::OverlaySource source;
+        source.name = strings::eqGraphPrediction;
+        source.colour = theme::get (theme::ColourId::warn);
+        source.points = &ctx.state.predictionPoints;
+        source.thickness = 1.0f;
+        source.dashed = false;
+        source.showPhase = false;
+        sources.push_back (source);
+    }
+
+    // 表示モードを振幅のみに設定（EQ調整用）
+    eqGraph.setViewMode (eeq::ui::ViewMode::ampOnly);
+    eqGraph.setOverlays (sources, ctx.state.eqVersion.load(), ctx.state.smoothingDenom);
+    eqGraph.setLiveFrame (frame, ctx.state.smoothingDenom, 0.0, true);
 }
 
 } // namespace eeq::ui

@@ -353,4 +353,79 @@ inline const juce::String renameButton { u8"名前変更" };
 inline const juce::String fileChooserOpen { u8"開く" };
 inline const juce::String wavFileChooserTitle { u8"WAVファイルを選択" };
 inline const juce::String wavLoadFailed { u8"WAVファイルを読み込めませんでした" };
+inline const juce::String cancelButton { u8"キャンセル" };
+
+// ---- Issue #141: オシレータ/ショートカット表示 ----
+inline const juce::String oscillatorActiveLabel { u8"発振中" };
+inline const juce::String shortcutsHint { u8"Space: 測定  N: ノイズ  S: スナップ  R: リセット  Esc: 緊急停止" };
+
+// ---- Issue #142: Delay Finder 改善 ----
+inline const juce::String delayAutoApplyToggle { u8"検出即適用" };
+inline const juce::String delayTrackFollowToggle { u8"トラック追従" };
+inline const juce::String irClipHoldToggle { u8"IR保持" };
+
+// ---- Issue #143: スナップショット管理 ----
+inline const juce::String snapshotColorLabel { u8"色" };
+inline const juce::String snapshotEditNameButton { u8"名前変更" };
+inline const juce::String snapshotDbOffsetLabel { u8"dBオフセット" };
+inline const juce::String snapshotDelayOffsetLabel { u8"遅延オフセット" };
+inline const juce::String snapshotSmoothingLabel { u8"平滑化" };
+inline const juce::String snapshotMoveUpButton { u8"上へ" };
+inline const juce::String snapshotMoveDownButton { u8"下へ" };
+inline const juce::String snapshotSelectGlobal { u8"グローバル設定" };
+
+// ---- Issue #144: 3段表示・縦スケールプリセット ----
+inline const juce::String viewModeLabel { u8"表示モード" };
+inline const juce::String viewModeAmpPhaseCoh { u8"振幅/位相/コヒーレンス" };
+inline const juce::String viewModeAmpPhase { u8"振幅/位相" };
+inline const juce::String viewModeAmpOnly { u8"振幅のみ" };
+inline const juce::String scalePresetLabel { u8"縦スケール" };
+inline const juce::String scalePresetAuto { u8"自動" };
+inline const juce::String scalePreset6 { u8"±6 dB" };
+inline const juce::String scalePreset12 { u8"±12 dB" };
+inline const juce::String scalePreset24 { u8"±24 dB" };
+inline const juce::String scalePreset48 { u8"±48 dB" };
+inline const juce::String scaleLockButton { u8"スケール固定" };
+
+// ---- Issue #145: カーソル・マーカー ----
+inline const juce::String cursorLabel { u8"カーソル" };
+inline const juce::String markerLabel { u8"マーカー" };
+inline const juce::String markerAddButton { u8"マーカー追加" };
+inline const juce::String markerClearButton { u8"マーカー全消去" };
+inline const juce::String markerDeltaLabel { u8"差分" };
+inline const juce::String peakSearchNext { u8"次のピーク" };
+inline const juce::String peakSearchPrev { u8"前のピーク" };
+inline const juce::String peakSearchHighest { u8"最大ピーク" };
+
+// ---- Issue #146: 入力メーター改善 ----
+inline const juce::String inputMeterPeakLabel { u8"ピーク" };
+inline const juce::String inputMeterRmsLabel { u8"RMS" };
+inline const juce::String inputMeterClipLabel { u8"CLIP" };
+inline const juce::String inputMeterClearClipButton { u8"クリップ解除" };
+inline const juce::String tfClipWarning { u8"⚠ 入力クリップ検知" };
+
+// ---- Issue #147: 平滑化プリセット・FIFO ----
+inline const juce::String smoothingPresetLabel { u8"平滑化プリセット" };
+inline const juce::String smoothingFifoLabel { u8"FIFO (指数平均)" };
+inline const juce::String smoothingFifoTimeLabel { u8"時定数 (秒)" };
+
+// ---- Issue #148: 確認ダイアログ・Undo ----
+inline const juce::String confirmDeleteSnapshot { u8"このスナップショットを削除しますか？" };
+inline const juce::String confirmDeleteSystem { u8"この系統を削除しますか？" };
+inline const juce::String confirmClearLoopback { u8"ループバック校正を削除しますか？" };
+inline const juce::String confirmClearProject { u8"プロジェクト全体をクリアしますか？元に戻せません。" };
+inline const juce::String undoButton { u8"元に戻す" };
+inline const juce::String redoButton { u8"やり直し" };
+
+// ---- Issue #149: EQタブグラフ・ツールチップ ----
+inline const juce::String eqGraphTitle { u8"周波数特性" };
+inline const juce::String eqGraphMeasured { u8"実測" };
+inline const juce::String eqGraphTarget { u8"ターゲット" };
+inline const juce::String eqGraphPrediction { u8"予測" };
+inline const juce::String eqTooltipTarget { u8"補正目標の周波数特性（フラット/傾斜/CSV）" };
+inline const juce::String eqTooltipRange { u8"EQ補正を適用する周波数範囲" };
+inline const juce::String eqTooltipCoherence { u8"このコヒーレンス未満の帯域は補正対象から除外" };
+inline const juce::String eqTooltipBands { u8"提案するPEQ帯域の最大数" };
+inline const juce::String eqTooltipValley { u8"谷（ディップ）へのブーストを許可するか" };
+inline const juce::String eqTooltipCreate { u8"現在の測定に対して補正EQ案を計算" };
 } // namespace eeq::strings

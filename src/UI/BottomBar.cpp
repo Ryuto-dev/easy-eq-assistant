@@ -106,6 +106,21 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     levelSlider.addListener (this);
     addAndMakeVisible (levelSlider);
 
+    // 発振中インジケータ（issue #141）: 常時目立つ表示
+    oscillatorActiveLabel.setText (strings::oscillatorActiveLabel, juce::dontSendNotification);
+    oscillatorActiveLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::danger));
+    oscillatorActiveLabel.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+    oscillatorActiveLabel.setJustificationType (juce::Justification::centred);
+    oscillatorActiveLabel.setVisible (false);
+    addAndMakeVisible (oscillatorActiveLabel);
+
+    // ショートカットヒント（issue #141）
+    shortcutsLabel.setText (strings::shortcutsHint, juce::dontSendNotification);
+    shortcutsLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    shortcutsLabel.setFont (juce::Font (juce::FontOptions (10.0f)));
+    shortcutsLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (shortcutsLabel);
+
     statusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     statusLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
     statusLabel.setJustificationType (juce::Justification::centredRight);
@@ -181,6 +196,9 @@ void BottomBar::update()
                            audible ? theme::get (theme::ColourId::danger)
                                    : theme::get (theme::ColourId::buttonOn));
 
+    // 発振中インジケータ（issue #141）: 常時目立つ表示
+    oscillatorActiveLabel.setVisible (audible);
+
     const auto measuring = engine.getMeasurement().isMeasuring();
     measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
     measurementButton.setColour (juce::TextButton::buttonColourId,
@@ -233,6 +251,14 @@ void BottomBar::resized()
     bounds.removeFromLeft (6);
     levelSlider.setBounds (bounds.removeFromLeft (juce::jmin (250, bounds.getWidth())).withSizeKeepingCentre (
         juce::jmin (250, bounds.getWidth()), 30));
+
+    // 発振中インジケータ（issue #141）
+    oscillatorActiveLabel.setBounds (bounds.removeFromRight (120));
+    bounds.removeFromRight (8);
+
+    // ショートカットヒント（issue #141）
+    shortcutsLabel.setBounds (bounds.removeFromRight (320));
+    bounds.removeFromRight (8);
 
     statusLabel.setBounds (bounds.withTrimmedLeft (12));
 }

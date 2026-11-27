@@ -162,6 +162,33 @@ DelayIrTab::DelayIrTab (UiContext& context)
     styleToggle (rawPhaseToggle);
     addAndMakeVisible (rawPhaseToggle);
 
+    // Issue #142: Delay Finder 改善
+    autoApplyToggle.setButtonText (strings::delayAutoApplyToggle);
+    autoApplyToggle.onClick = [this]
+    {
+        autoApplyDelay = autoApplyToggle.getToggleState();
+    };
+    styleToggle (autoApplyToggle);
+    addAndMakeVisible (autoApplyToggle);
+
+    trackFollowToggle.setButtonText (strings::delayTrackFollowToggle);
+    trackFollowToggle.onClick = [this]
+    {
+        trackFollowEnabled = trackFollowToggle.getToggleState();
+    };
+    styleToggle (trackFollowToggle);
+    addAndMakeVisible (trackFollowToggle);
+
+    irHoldToggle.setButtonText (strings::irClipHoldToggle);
+    irHoldToggle.onClick = [this]
+    {
+        irClipHold = irHoldToggle.getToggleState();
+        if (! irClipHold)
+            heldIr.reset();
+    };
+    styleToggle (irHoldToggle);
+    addAndMakeVisible (irHoldToggle);
+
     delayProposalLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     addAndMakeVisible (delayProposalLabel);
 
@@ -301,10 +328,21 @@ DelayIrTab::DelayIrTab (UiContext& context)
     loopbackClearButton.setButtonText (strings::loopbackClearButton);
     loopbackClearButton.onClick = [this]
     {
-        ctx.correction.clear();
-        ctx.settings.setValue ("loopbackCorrection", juce::var());
-        ctx.settings.saveIfNeeded();
-        updateLoopbackUi();
+        // Issue #148: 削除確認ダイアログ
+        juce::Component::SafePointer<DelayIrTab> safeThis { this };
+        juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+            strings::loopbackSection, strings::confirmClearLoopback,
+            strings::okButton, strings::cancelButton, this,
+            juce::ModalCallbackFunction::create ([safeThis] (int result) mutable
+            {
+                if (safeThis == nullptr || result == 0)
+                    return;
+
+                safeThis->ctx.correction.clear();
+                safeThis->ctx.settings.setValue ("loopbackCorrection", juce::var());
+                safeThis->ctx.settings.saveIfNeeded();
+                safeThis->updateLoopbackUi();
+            }));
     };
     addAndMakeVisible (loopbackClearButton);
 
@@ -369,9 +407,24 @@ DelayIrTab::DelayIrTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) systems.size())
         {
-            systems.erase (systems.begin() + selected);
-            saveSystemsToVenue();
-            rebuildSystemList();
+            // Issue #148: 削除確認ダイアログ
+            juce::Component::SafePointer<DelayIrTab> safeThis { this };
+            juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+                strings::systemsSection, strings::confirmDeleteSystem,
+                strings::okButton, strings::cancelButton, this,
+                juce::ModalCallbackFunction::create ([safeThis, selected] (int result) mutable
+                {
+                    if (safeThis == nullptr || result == 0)
+                        return;
+
+                    auto& sys = safeThis->ctx.project.currentVenue().systems;
+                    if (selected >= 0 && selected < (int) sys.size())
+                    {
+                        sys.erase (sys.begin() + selected);
+                        safeThis->saveSystemsToVenue();
+                        safeThis->rebuildSystemList();
+                    }
+                }));
         }
     };
     addAndMakeVisible (systemsRemoveButton);
@@ -514,6 +567,11 @@ void DelayIrTab::checkIrRebuildResult()
     if (irWorker.takeResult (result))
     {
         cachedIr = std::move (result.ir);
+
+        // Issue #142: IR保持
+        if (irClipHold && cachedIr)
+            heldIr = std::make_unique<eeq::dsp::ImpulseResponse> (*cachedIr);
+
         // cachedIrAverages 等は requestIrRebuild 側で更新するが、ここでも念のため
         auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
         if (framePtr)
@@ -642,7 +700,14 @@ void DelayIrTab::paint (juce::Graphics& g)
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (irArea, 6.0f);
 
-    if (cachedIr == nullptr || cachedIr->samples.empty())
+    // Issue #142: IR保持 - irClipHold 有効時は heldIr を優先表示
+    const eeq::dsp::ImpulseResponse* irToDraw = nullptr;
+    if (irClipHold && heldIr && heldIr->samples.empty() == false)
+        irToDraw = heldIr.get();
+    else if (cachedIr && cachedIr->samples.empty() == false)
+        irToDraw = cachedIr.get();
+
+    if (irToDraw == nullptr)
     {
         g.setColour (theme::get (theme::ColourId::textDim));
         g.drawText (strings::graphPlaceholder, irArea.toNearestInt(), juce::Justification::centred);
@@ -650,7 +715,7 @@ void DelayIrTab::paint (juce::Graphics& g)
     }
 
     // 時間軸: ピークを基準に ±irTimeRange。ETC（対数エンベロープ）か波形かを切替
-    const auto& ir = *cachedIr;
+    const auto& ir = *irToDraw;
     const auto sampleRate = ir.sampleRate;
     const auto peakMs = ir.peakTimeSamples * 1000.0 / sampleRate;
     const auto t0 = peakAligned ? peakMs + irTimeRangeMs.getStart() : irTimeRangeMs.getStart();
@@ -759,6 +824,10 @@ void DelayIrTab::runDelayMeasurement()
     lastEstimate = ctx.engine.getMeasurement().estimateCurrentDelay (usePhat);
     hasEstimate = true;
     updateDelayReadout();
+
+    // Issue #142: 検出即適用
+    if (autoApplyDelay && hasEstimate && lastEstimate.valid)
+        applyDelay();
 }
 
 void DelayIrTab::updateDelayReadout()
@@ -1232,6 +1301,12 @@ void DelayIrTab::resized()
     juce::ignoreUnused (toggles);
 
     auto delayPanel = left;
+
+    // Issue #142: Delay Finder 改善トグル
+    auto extraToggles = delayPanel.removeFromTop (22);
+    autoApplyToggle.setBounds (extraToggles.removeFromLeft (110));
+    trackFollowToggle.setBounds (extraToggles.removeFromLeft (110));
+    irHoldToggle.setBounds (extraToggles.removeFromLeft (110));
     auto delayRow = delayPanel.removeFromTop (40);
     delayTitle.setBounds (delayRow.removeFromLeft (50));
     delayValueLabel.setBounds (delayRow);

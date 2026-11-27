@@ -136,7 +136,7 @@ public:
     {
         std::uint64_t generation = 0;
         std::vector<FrequencyGraphView::OverlaySource> sources;
-        int smoothing = 6;
+        int smoothing = 6; // グローバル設定（フォールバック用）
         double viewMin = 20.0;
         double viewMax = 20000.0;
         int plotWidth = 2;
@@ -208,9 +208,12 @@ private:
                 const auto& source = request.sources[s];
                 auto& out = result.columns[s];
 
+                // Issue #143: スナップショットごとの平滑化オーバーライドを使用
+                const auto sourceSmoothing = source.smoothingOverride >= 0 ? source.smoothingOverride : request.smoothing;
+
                 if (source.frame != nullptr)
                 {
-                    const auto points = eeq::dsp::smoothToLogGrid (*source.frame, request.smoothing,
+                    const auto points = eeq::dsp::smoothToLogGrid (*source.frame, sourceSmoothing,
                                                                    request.viewMin, effectiveMax, width);
                     out.resize (points.size());
                     for (size_t i = 0; i < points.size(); ++i)
@@ -274,15 +277,29 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
         {
-            auto& snapshots = ctx.project.snapshots();
-            snapshots.erase (snapshots.begin() + selected);
-            ctx.state.snapshotVersion.fetch_add (1);
-            snapshotList.deselectAllRows();
-            snapshotList.updateContent();
+            // Issue #148: 削除確認ダイアログ
+            juce::Component::SafePointer<TransferFunctionTab> safeThis { this };
+            juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+                strings::snapshotDialogTitle, strings::confirmDeleteSnapshot,
+                strings::okButton, strings::cancelButton, this,
+                juce::ModalCallbackFunction::create ([safeThis, selected] (int result) mutable
+                {
+                    if (safeThis == nullptr || result == 0)
+                        return;
 
-            // 差分表示が消えたスナップショットを参照しないよう張り直す
-            computeDiffCurve();
-            refreshSnapshotList();
+                    auto& snapshots = safeThis->ctx.project.snapshots();
+                    if (selected >= 0 && selected < (int) snapshots.size())
+                    {
+                        snapshots.erase (snapshots.begin() + selected);
+                        safeThis->ctx.state.snapshotVersion.fetch_add (1);
+                        safeThis->snapshotList.deselectAllRows();
+                        safeThis->snapshotList.updateContent();
+
+                        // 差分表示が消えたスナップショットを参照しないよう張り直す
+                        safeThis->computeDiffCurve();
+                        safeThis->refreshSnapshotList();
+                    }
+                }));
         }
     };
     addAndMakeVisible (deleteButton);
@@ -380,6 +397,145 @@ TransferFunctionTab::TransferFunctionTab (UiContext& context)
     }
 
     diffComboB.setTextWhenNothingSelected (strings::snapshotSelectB);
+
+    // Issue #143: スナップショット編集コントロール
+    styleButton (colorButton);
+    colorButton.setButtonText (strings::snapshotColorLabel);
+    colorButton.onClick = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        {
+            editingSnapshotIndex = selected;
+            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
+            auto* selector = new juce::ColourSelector (
+                juce::ColourSelector::showAlphaChannel |
+                juce::ColourSelector::showColourAtTop);
+            selector->setCurrentColour (snapshot.colour);
+            selector->enterModalState (true, juce::ModalCallbackFunction::create (
+                [this, selected, safeThis = juce::Component::SafePointer<TransferFunctionTab> (this), selector] (int)
+                {
+                    if (safeThis == nullptr)
+                        return;
+                    auto colour = selector->getCurrentColour();
+                    auto& snapshots = safeThis->ctx.project.snapshots();
+                    if (selected >= 0 && selected < (int) snapshots.size())
+                    {
+                        if (colour != snapshots[(size_t) selected].colour)
+                        {
+                            snapshots[(size_t) selected].colour = colour;
+                            safeThis->ctx.state.snapshotVersion.fetch_add (1);
+                            safeThis->refreshSnapshotList();
+                        }
+                    }
+                    selector->setVisible (false);
+                }), true);
+        }
+    };
+    addAndMakeVisible (colorButton);
+
+    styleButton (editNameButton);
+    editNameButton.setButtonText (strings::snapshotEditNameButton);
+    editNameButton.onClick = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        {
+            showSnapshotEditDialog (selected);
+        }
+    };
+    addAndMakeVisible (editNameButton);
+
+    styleButton (moveUpButton);
+    moveUpButton.setButtonText (strings::snapshotMoveUpButton);
+    moveUpButton.onClick = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected > 0)
+            moveSnapshot (selected, selected - 1);
+    };
+    addAndMakeVisible (moveUpButton);
+
+    styleButton (moveDownButton);
+    moveDownButton.setButtonText (strings::snapshotMoveDownButton);
+    moveDownButton.onClick = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size() - 1)
+            moveSnapshot (selected, selected + 1);
+    };
+    addAndMakeVisible (moveDownButton);
+
+    dbOffsetLabel.setText (strings::snapshotDbOffsetLabel, juce::dontSendNotification);
+    styleLabel (dbOffsetLabel);
+    addAndMakeVisible (dbOffsetLabel);
+
+    styleTextEditor (dbOffsetEditor);
+    dbOffsetEditor.setText ("0.0", juce::dontSendNotification);
+    dbOffsetEditor.setInputRestrictions (8, "0123456789.-");
+    dbOffsetEditor.onTextChange = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        {
+            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
+            snapshot.dbOffset = dbOffsetEditor.getText().getDoubleValue();
+            ctx.state.snapshotVersion.fetch_add (1);
+            rebuildOverlays();
+        }
+    };
+    addAndMakeVisible (dbOffsetEditor);
+
+    delayOffsetLabel.setText (strings::snapshotDelayOffsetLabel, juce::dontSendNotification);
+    styleLabel (delayOffsetLabel);
+    addAndMakeVisible (delayOffsetLabel);
+
+    styleTextEditor (delayOffsetEditor);
+    delayOffsetEditor.setText ("0", juce::dontSendNotification);
+    delayOffsetEditor.setInputRestrictions (10, "0123456789.-");
+    delayOffsetEditor.onTextChange = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        {
+            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
+            snapshot.delayOffset = delayOffsetEditor.getText().getDoubleValue();
+            ctx.state.snapshotVersion.fetch_add (1);
+            rebuildOverlays();
+        }
+    };
+    addAndMakeVisible (delayOffsetEditor);
+
+    smoothingOverrideLabel.setText (strings::snapshotSmoothingLabel, juce::dontSendNotification);
+    styleLabel (smoothingOverrideLabel);
+    addAndMakeVisible (smoothingOverrideLabel);
+
+    styleCombo (smoothingOverrideCombo);
+    smoothingOverrideCombo.addItem (strings::snapshotSelectGlobal, 1); // グローバル設定を使用
+    smoothingOverrideCombo.addItem (strings::noSmoothingItem, 2);       // なし
+    smoothingOverrideCombo.addItem ("1/48", 3);
+    smoothingOverrideCombo.addItem ("1/24", 4);
+    smoothingOverrideCombo.addItem ("1/12", 5);
+    smoothingOverrideCombo.addItem ("1/6", 6);
+    smoothingOverrideCombo.addItem ("1/3", 7);
+    smoothingOverrideCombo.addItem ("1/2", 8);
+    smoothingOverrideCombo.addItem ("1/1", 9);
+    smoothingOverrideCombo.setSelectedId (1, juce::dontSendNotification);
+    smoothingOverrideCombo.onChange = [this]
+    {
+        const auto selected = snapshotList.getSelectedRow();
+        if (selected >= 0 && selected < (int) ctx.project.snapshots().size())
+        {
+            auto& snapshot = ctx.project.snapshots()[(size_t) selected];
+            const auto id = smoothingOverrideCombo.getSelectedId();
+            if (id == 1) snapshot.smoothingOverride = -1; // グローバル
+            else if (id == 2) snapshot.smoothingOverride = 0; // なし
+            else snapshot.smoothingOverride = (id == 3 ? 48 : id == 4 ? 24 : id == 5 ? 12 : id == 6 ? 6 : id == 7 ? 3 : id == 8 ? 2 : 1);
+            ctx.state.snapshotVersion.fetch_add (1);
+            rebuildOverlays();
+        }
+    };
+    addAndMakeVisible (smoothingOverrideCombo);
 
     hintLabel.setText (strings::noSnapshots, juce::dontSendNotification);
     hintLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
@@ -501,7 +657,7 @@ void TransferFunctionTab::refreshSnapshotList()
 void TransferFunctionTab::rebuildOverlays()
 {
     std::vector<FrequencyGraphView::OverlaySource> sources;
-    const auto smoothing = ctx.state.smoothingDenom;
+    const auto globalSmoothing = ctx.state.smoothingDenom;
 
     for (auto& snapshot : ctx.project.snapshots())
     {
@@ -513,6 +669,10 @@ void TransferFunctionTab::rebuildOverlays()
         source.colour = snapshot.colour;
         source.frame = &snapshot.frame;
         source.thickness = 1.2f;
+        // Issue #143: スナップショットごとのオフセットと平滑化オーバーライド
+        source.dbOffset = snapshot.dbOffset;
+        source.delayOffset = snapshot.delayOffset;
+        source.smoothingOverride = snapshot.smoothingOverride >= 0 ? snapshot.smoothingOverride : globalSmoothing;
         sources.push_back (source);
     }
 
@@ -555,7 +715,7 @@ void TransferFunctionTab::rebuildOverlays()
     OverlaySmoothingWorker::Request request;
     request.generation = settingsGeneration;
     request.sources = std::move (sources);
-    request.smoothing = smoothing;
+    request.smoothing = globalSmoothing;
     request.viewMin = graph.getViewMinForCache();
     request.viewMax = graph.getViewMaxForCache();
     request.plotWidth = graph.getPlotWidthForCache();
@@ -808,11 +968,82 @@ void TransferFunctionTab::listBoxItemClicked (int rowNumber, const juce::MouseEv
     }
 }
 
+// Issue #143: スナップショット編集ダイアログ
+void TransferFunctionTab::showSnapshotEditDialog (int index)
+{
+    if (index < 0 || index >= (int) ctx.project.snapshots().size())
+        return;
+
+    editingSnapshotIndex = index;
+    auto& snapshot = ctx.project.snapshots()[(size_t) index];
+
+    auto* window = new juce::AlertWindow (strings::snapshotDialogTitle, {}, juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor ("name", snapshot.name, strings::snapshotNameLabel);
+    window->addTextEditor ("note", snapshot.note, strings::venueSnapshotMemo);
+
+    juce::StringArray micPointNames { strings::notSelected };
+    for (const auto& point : ctx.project.currentVenue().micPoints)
+        micPointNames.add (point.name);
+    window->addComboBox ("micPoint", micPointNames, strings::venueMicPoints);
+    if (snapshot.micPoint.isNotEmpty())
+        window->getComboBoxComponent ("micPoint")->setText (snapshot.micPoint);
+
+    window->addButton (strings::snapshotSaveButton, 1);
+    window->addButton (strings::snapshotCancelButton, 0);
+
+    auto safeWindowPtr = std::make_shared<juce::Component::SafePointer<juce::AlertWindow>> (window);
+    window->enterModalState (true, juce::ModalCallbackFunction::create (
+        [this, safeWindowPtr, index] (int result)
+        {
+            if (result != 1 || safeWindowPtr == nullptr || *safeWindowPtr == nullptr)
+                return;
+
+            auto* safeWindow = safeWindowPtr->getComponent();
+            auto& snapshots = ctx.project.snapshots();
+
+            if (index < 0 || index >= (int) snapshots.size())
+                return;
+
+            auto& snapshot = snapshots[(size_t) index];
+            snapshot.name = safeWindow->getTextEditorContents ("name");
+
+            if (snapshot.name.isEmpty())
+                snapshot.name = juce::Time::getCurrentTime().formatted ("%H:%M:%S");
+
+            snapshot.note = safeWindow->getTextEditorContents ("note");
+            snapshot.micPoint = safeWindow->getComboBoxComponent ("micPoint")->getText();
+
+            ctx.state.snapshotVersion.fetch_add (1);
+            refreshSnapshotList();
+        }), true);
+}
+
+// Issue #143: スナップショットの移動（表示順変更）
+void TransferFunctionTab::moveSnapshot (int fromIndex, int toIndex)
+{
+    auto& snapshots = ctx.project.snapshots();
+
+    if (fromIndex < 0 || fromIndex >= (int) snapshots.size())
+        return;
+    if (toIndex < 0 || toIndex >= (int) snapshots.size())
+        return;
+    if (fromIndex == toIndex)
+        return;
+
+    auto snapshot = std::move (snapshots[(size_t) fromIndex]);
+    snapshots.erase (snapshots.begin() + fromIndex);
+    snapshots.insert (snapshots.begin() + toIndex, std::move (snapshot));
+
+    ctx.state.snapshotVersion.fetch_add (1);
+    snapshotList.selectRow (toIndex);
+    refreshSnapshotList();
+}
+
 void TransferFunctionTab::resized()
 {
     auto bounds = getLocalBounds().reduced (6);
 
-    auto snapshotPanel = bounds.removeFromBottom (132);
+    auto snapshotPanel = bounds.removeFromBottom (220); // 高さを増やして編集コントロール分のスペースを確保
     snapshotPanel.reduce (4, 4);
 
     auto buttonColumn = snapshotPanel.removeFromLeft (96);
@@ -823,6 +1054,14 @@ void TransferFunctionTab::resized()
     exportCsvButton.setBounds (buttonColumn.removeFromTop (26));
     buttonColumn.removeFromTop (4);
     exportRewButton.setBounds (buttonColumn.removeFromTop (26));
+    buttonColumn.removeFromTop (4);
+    colorButton.setBounds (buttonColumn.removeFromTop (26));
+    buttonColumn.removeFromTop (4);
+    editNameButton.setBounds (buttonColumn.removeFromTop (26));
+    buttonColumn.removeFromTop (4);
+    moveUpButton.setBounds (buttonColumn.removeFromTop (26));
+    buttonColumn.removeFromTop (4);
+    moveDownButton.setBounds (buttonColumn.removeFromTop (26));
 
     auto diffRow = snapshotPanel.removeFromTop (26);
     diffLabel.setBounds (diffRow.removeFromLeft (70));
@@ -834,6 +1073,19 @@ void TransferFunctionTab::resized()
     exportPngButton.setBounds (diffRow.removeFromLeft (120));
     snapshotPanel.removeFromTop (4);
 
+    // Issue #143: スナップショット編集コントロール行
+    auto editRow1 = snapshotPanel.removeFromTop (26);
+    dbOffsetLabel.setBounds (editRow1.removeFromLeft (80));
+    dbOffsetEditor.setBounds (editRow1.removeFromLeft (80));
+    editRow1.removeFromLeft (8);
+    delayOffsetLabel.setBounds (editRow1.removeFromLeft (80));
+    delayOffsetEditor.setBounds (editRow1.removeFromLeft (80));
+
+    auto editRow2 = snapshotPanel.removeFromTop (26);
+    smoothingOverrideLabel.setBounds (editRow2.removeFromLeft (80));
+    smoothingOverrideCombo.setBounds (editRow2.removeFromLeft (160));
+
+    snapshotPanel.removeFromTop (4);
     snapshotList.setBounds (snapshotPanel);
     hintLabel.setBounds (snapshotPanel); // 「スナップショットなし」の案内を一覧領域に重ねる
 

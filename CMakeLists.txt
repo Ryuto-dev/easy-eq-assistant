@@ -189,8 +189,10 @@ if(EASYEQ_BUILD_TESTS)
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
+        tests/MeasurementRegressionTests.cpp
         src/Audio/AudioEngine.cpp
         src/Core/Log.cpp
+        src/Core/ProjectStore.cpp
         src/DSP/TransferFunctionAccumulator.cpp
         src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp

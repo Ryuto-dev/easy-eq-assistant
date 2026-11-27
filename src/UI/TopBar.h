@@ -47,6 +47,7 @@ private:
     juce::TextButton liveModeButton, themeButton;
 
     LevelMeter refMeter, measMeter, outMeter;
+    juce::TextButton clearClipButton;
 
     uint32_t lastGeneration = 0;
     bool updating = false; // コンボ再構築中のイベントを無視するためのフラグ

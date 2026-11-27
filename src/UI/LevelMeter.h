@@ -5,7 +5,7 @@
 namespace eeq::ui
 {
 
-// 横型のレベルメーター。RMSバー＋ピークマーカー＋ピークホールド＋クリップ表示。
+// 横型のレベルメーター。RMSバー＋ピークマーカー＋ピークホールド＋クリップ表示＋数値表示。
 // ボールディクス（ピークホールドの落下）はUI側で処理する（仕様 3.5 / 5.1）。
 class LevelMeter : public juce::Component
 {
@@ -14,6 +14,7 @@ public:
 
     /** 30Hz程度のタイマーから呼ぶ。dB値は −100..0 を想定 */
     void setLevels (float peakDb, float rmsDb, bool clippedNow);
+    void clearClip();
 
     void paint (juce::Graphics&) override;
 
@@ -25,6 +26,7 @@ private:
     float holdDb = -100.0f;
     int holdTicks = 0;
     int clipTicks = 0;
+    bool clipped = false;
 
     static constexpr int holdTicksInitial = 30; // 1秒ホールド（30Hz想定）
     static constexpr int clipTicksInitial = 45; // クリップ表示は1.5秒残す

@@ -39,12 +39,15 @@ MeasurementPanel::MeasurementPanel()
     avgModeCombo.setSelectedId (2, juce::dontSendNotification); // 既定 指数平均（応答重視）
 
     smoothingLabel.setText (strings::smoothingLabel, juce::dontSendNotification);
-    smoothingCombo.addItem (strings::noSmoothingItem, 1);
-    smoothingCombo.addItem ("1/48", 2);
-    smoothingCombo.addItem ("1/24", 3);
-    smoothingCombo.addItem ("1/12", 4);
-    smoothingCombo.addItem ("1/6", 5);
-    smoothingCombo.addItem ("1/3", 6);
+    smoothingCombo.addItem (strings::noSmoothingItem, 1);       // 0: なし
+    smoothingCombo.addItem ("1/48 oct", 2);                      // 48
+    smoothingCombo.addItem ("1/24 oct", 3);                      // 24
+    smoothingCombo.addItem ("1/12 oct", 4);                      // 12
+    smoothingCombo.addItem ("1/6 oct", 5);                       // 6 (既定)
+    smoothingCombo.addItem ("1/3 oct", 6);                       // 3
+    smoothingCombo.addItem ("1/2 oct", 7);                       // 2
+    smoothingCombo.addItem ("1/1 oct", 8);                       // 1
+    smoothingCombo.addItem (strings::smoothingFifoLabel, 9);     // -1: FIFO
     smoothingCombo.setSelectedId (5, juce::dontSendNotification); // 既定 1/6 oct
 
     avgCountLabel.setText (strings::averagingCountLabel, juce::dontSendNotification);
@@ -62,6 +65,22 @@ MeasurementPanel::MeasurementPanel()
     averagesDisplay.setFont (juce::Font (juce::FontOptions (11.5f)));
     averagesDisplay.setText (juce::String (u8"平均: 0 回"), juce::dontSendNotification);
 
+    // FIFO 時定数入力（issue #147）
+    fifoTimeLabel.setText (strings::smoothingFifoTimeLabel, juce::dontSendNotification);
+    styleLabel (fifoTimeLabel);
+    addAndMakeVisible (fifoTimeLabel);
+
+    styleTextEditor (fifoTimeEditor);
+    fifoTimeEditor.setText ("0.5", juce::dontSendNotification);
+    fifoTimeEditor.setInputRestrictions (6, "0123456789.");
+    fifoTimeEditor.onTextChange = [this]
+    {
+        saveSettings();
+        if (onSettingsChanged)
+            onSettingsChanged();
+    };
+    addAndMakeVisible (fifoTimeEditor);
+
     for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo })
     {
         styleCombo (*combo);
@@ -72,6 +91,16 @@ MeasurementPanel::MeasurementPanel()
     avgCountSlider.addListener (this);
     addAndMakeVisible (avgCountSlider);
     addAndMakeVisible (averagesDisplay);
+
+    updateSmoothingControls();
+}
+
+void MeasurementPanel::updateSmoothingControls()
+{
+    const bool isFifo = (smoothingCombo.getSelectedId() == 9); // FIFO 選択時
+    fifoTimeLabel.setVisible (isFifo);
+    fifoTimeEditor.setVisible (isFifo);
+    useFifo = isFifo;
 }
 
 void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
@@ -90,9 +119,12 @@ void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
                                juce::dontSendNotification);
     avgModeCombo.setSelectedId (juce::jlimit (1, 2, settings->getIntValue ("measurementAvgModeId", 1)),
                                 juce::dontSendNotification);
-    smoothingCombo.setSelectedId (juce::jlimit (1, 6, settings->getIntValue ("measurementSmoothingId", 5)),
+    smoothingCombo.setSelectedId (juce::jlimit (1, 9, settings->getIntValue ("measurementSmoothingId", 5)),
                                   juce::dontSendNotification);
-    avgCountSlider.setValue (settings->getDoubleValue ("measurementAvgCount", 64.0), juce::dontSendNotification);
+    avgCountSlider.setValue (settings->getDoubleValue ("measurementAvgCount", 16.0), juce::dontSendNotification);
+    fifoTimeEditor.setText (settings->getValue ("measurementFifoTime", "0.5"), juce::dontSendNotification);
+
+    updateSmoothingControls();
 }
 
 void MeasurementPanel::saveSettings()
@@ -105,6 +137,7 @@ void MeasurementPanel::saveSettings()
     settings->setValue ("measurementAvgModeId", avgModeCombo.getSelectedId());
     settings->setValue ("measurementSmoothingId", smoothingCombo.getSelectedId());
     settings->setValue ("measurementAvgCount", avgCountSlider.getValue());
+    settings->setValue ("measurementFifoTime", fifoTimeEditor.getText());
     settings->saveIfNeeded();
 }
 
@@ -135,7 +168,14 @@ eeq::dsp::AveragingConfig MeasurementPanel::getAveragingConfig() const noexcept
 int MeasurementPanel::getSmoothingOctaveDenominator() const noexcept
 {
     const auto id = smoothingCombo.getSelectedId();
-    return id >= 2 && id <= 6 ? smoothingDenominators[id - 2] : 0; // id 1 = なし
+    if (id == 9) return -1; // FIFO
+    return id >= 2 && id <= 9 ? smoothingDenominators[id - 2] : 0; // id 1 = なし
+}
+
+double MeasurementPanel::getFifoTimeConstant() const noexcept
+{
+    if (! useFifo) return 0.0;
+    return std::max (0.01, fifoTimeEditor.getText().getDoubleValue());
 }
 
 void MeasurementPanel::setAverageCountDisplay (int averages)
@@ -146,8 +186,11 @@ void MeasurementPanel::setAverageCountDisplay (int averages)
         averagesDisplay.setText (newText, juce::dontSendNotification);
 }
 
-void MeasurementPanel::comboBoxChanged (juce::ComboBox*)
+void MeasurementPanel::comboBoxChanged (juce::ComboBox* combo)
 {
+    if (combo == &smoothingCombo)
+        updateSmoothingControls();
+
     saveSettings();
 
     if (onSettingsChanged)
@@ -187,6 +230,17 @@ void MeasurementPanel::resized()
     row (windowLabel, windowCombo);
     row (avgModeLabel, avgModeCombo);
     row (smoothingLabel, smoothingCombo);
+
+    // FIFO 時定数行（表示時のみスペースを取る）
+    if (useFifo)
+    {
+        auto fifoRow = bounds.removeFromTop (40);
+        fifoTimeLabel.setBounds (fifoRow.removeFromTop (14));
+        fifoRow.removeFromTop (2);
+        fifoTimeEditor.setBounds (fifoRow.removeFromTop (24));
+        bounds.removeFromTop (8);
+    }
+
     row (avgCountLabel, avgCountSlider);
 
     averagesDisplay.setBounds (bounds.removeFromTop (16));

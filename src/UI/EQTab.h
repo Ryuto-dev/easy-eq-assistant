@@ -3,6 +3,7 @@
 #include "Core/JuceModules.h"
 
 #include "../DSP/EQProposer.h"
+#include "FrequencyGraphView.h"
 #include "UiContext.h"
 
 namespace eeq::ui
@@ -11,6 +12,7 @@ namespace eeq::ui
 // 「EQ案」タブ（仕様 4章）。
 // 測定カーブとターゲット曲線の差を埋めるPEQを反復法で提案し、
 // 帯域一覧（種別・周波数・ゲイン・Q、ON/OFF・手動調整）、予測カーブ、CSV/テキスト書き出しを提供する。
+// Issue #149: 専用グラフを置き、ツールチップと操作発見性を改善する
 class EQTab : public juce::Component,
               private juce::ListBoxModel
 {
@@ -35,6 +37,7 @@ private:
     void exportCsv();
     void exportText();
     void loadTargetCsv();
+    void updateEqGraph(); // Issue #149: グラフ更新
 
     UiContext& ctx;
 
@@ -45,6 +48,9 @@ private:
     juce::Slider maxBandsSlider;
     juce::ToggleButton valleyBoostToggle;
     juce::TextButton targetCsvButton, createButton, exportCsvButton, exportTextButton;
+
+    // Issue #149: EQ専用グラフ
+    FrequencyGraphView eqGraph;
 
     // 帯域一覧と手動調整
     juce::ListBox bandList { {}, this };

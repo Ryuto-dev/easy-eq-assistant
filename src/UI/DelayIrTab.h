@@ -169,10 +169,19 @@ private:
     bool loopbackRanging = false;
     juce::Time loopbackDeadline;
 
+    // Issue #142: Delay Finder 改善
+    bool autoApplyDelay = false;     // 検出即適用
+    bool trackFollowEnabled = false; // トラック追従
+    bool irClipHold = false;         // IR保持
+    std::unique_ptr<eeq::dsp::ImpulseResponse> heldIr; // 保持中のIR
+
     // ---- 遅延パネル ----
     juce::Label delayTitle, delayValueLabel, delayProposalLabel, distanceCheckLabel;
     juce::TextButton measureButton, applyButton, clearButton, manualApplyButton;
     juce::ToggleButton phatToggle, rawPhaseToggle, peakAlignToggle, etcToggle;
+    juce::ToggleButton autoApplyToggle;   // 検出即適用（issue #142）
+    juce::ToggleButton trackFollowToggle; // トラック追従（issue #142）
+    juce::ToggleButton irHoldToggle;      // IR保持（issue #142）
 
     // 手動入力（ms と m が連動: 仕様 3.3.2）
     juce::Label manualDelayTitle, manualDistanceTitle;

@@ -14,6 +14,7 @@ namespace eeq::ui
 // 「伝達関数」タブ（仕様 5.1 上段メイン表示）。
 // 振幅・位相・コヒーレンスのグラフに、スナップショット・ターゲット・EQ予測を重ねる。
 // スナップショットの表示ON/OFF、差分（A−B）、CSV/REW書き出しもここ（仕様 3.5 / 5.2 / 6.2）。
+// Issue #143: スナップショット管理機能（色・名前・表示順・dB/遅延オフセット・平滑化）を追加
 class TransferFunctionTab : public juce::Component,
                             private juce::ListBoxModel
 {
@@ -49,12 +50,29 @@ private:
     void computeDiffCurve();
     void updateDiffCombos();
 
+    // Issue #143: スナップショット編集用
+    void showSnapshotEditDialog (int index);
+    void moveSnapshot (int fromIndex, int toIndex);
+
     UiContext& ctx;
     FrequencyGraphView graph;
     juce::ListBox snapshotList { {}, this };
     juce::TextButton saveButton, deleteButton, exportCsvButton, exportRewButton, exportPngButton;
     juce::ComboBox diffComboA, diffComboB;
     juce::Label diffLabel, hintLabel;
+
+    // Issue #143: スナップショット編集コントロール
+    juce::TextButton colorButton;       // 色選択
+    juce::TextButton editNameButton;    // 名前変更
+    juce::TextButton moveUpButton;      // 上へ移動
+    juce::TextButton moveDownButton;    // 下へ移動
+    juce::Label dbOffsetLabel;          // dBオフセット
+    juce::TextEditor dbOffsetEditor;    // dBオフセット入力
+    juce::Label delayOffsetLabel;       // 遅延オフセット
+    juce::TextEditor delayOffsetEditor; // 遅延オフセット入力
+    juce::Label smoothingOverrideLabel; // 平滑化オーバーライド
+    juce::ComboBox smoothingOverrideCombo; // 平滑化オーバーライド選択
+
     bool dialogOpen = false;
     std::vector<eeq::dsp::GridPoint> diffPoints;
     int cachedSmoothing = -1;
@@ -62,6 +80,7 @@ private:
     uint32_t lastSeenSnapshotVersion = 0;
     uint32_t lastSeenEqVersion = 0;
     juce::Rectangle<int> graphBounds;
+    int editingSnapshotIndex = -1;      // 現在編集中のスナップショット
 
     // ---- 表示用平滑化はワーカーで計算し、UIと共有ポインタで受け渡す ----
     std::unique_ptr<LiveSmoothingWorker> liveSmoothingWorker;

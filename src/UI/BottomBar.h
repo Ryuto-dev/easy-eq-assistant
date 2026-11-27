@@ -10,6 +10,7 @@ namespace eeq::ui
 // 下部バー（仕様 5.1 下部バー）: Start/Stop、平均リセット、スナップショット保存、遅延測定、
 // 校正、励起信号（ピンクノイズ/スイープ/WAV/外部）の開始/停止、出力レベル、状態表示。
 // 出力レベルが −20 dBFS（engine.outputLevelLimitDb）を超えるときは確認ダイアログを出す（仕様 3.2）。
+// 発振器アクティブ表示とショートカットヒントを常時表示（issue #141）。
 class BottomBar : public juce::Component, private juce::Slider::Listener
 {
 public:
@@ -41,6 +42,8 @@ private:
     juce::TextButton snapshotButton, delayButton, calibrationButton;
     juce::ComboBox excitationCombo;
     juce::Label levelTitle, statusLabel;
+    juce::Label oscillatorActiveLabel;      // 発振中インジケータ（issue #141）
+    juce::Label shortcutsLabel;              // ショートカットヒント（issue #141）
     juce::Slider levelSlider;
 
     int lastExcitationId = 1; // 変化検出（デバイス再構築でコンボが再設定されても発火させない）

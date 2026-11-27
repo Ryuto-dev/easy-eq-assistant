@@ -223,6 +223,29 @@ VenueTab::VenueTab (UiContext& context)
     reportButton.onClick = [this] { exportReportPng(); };
     addAndMakeVisible (reportButton);
 
+    // Issue #148: プロジェクトクリア確認
+    styleButton (clearProjectButton);
+    clearProjectButton.setButtonText (juce::String (u8"プロジェクトをクリア"));
+    clearProjectButton.onClick = [this]
+    {
+        juce::Component::SafePointer<VenueTab> safeThis { this };
+        juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::WarningIcon,
+            strings::venueSection, strings::confirmClearProject,
+            strings::okButton, strings::cancelButton, this,
+            juce::ModalCallbackFunction::create ([safeThis] (int result) mutable
+            {
+                if (safeThis == nullptr || result == 0)
+                    return;
+
+                safeThis->ctx.project = eeq::core::ProjectStore();
+                safeThis->ctx.state.snapshotVersion.fetch_add (1);
+                safeThis->ctx.state.eqVersion.fetch_add (1);
+                safeThis->refreshVenueList();
+                safeThis->loadSelectedVenueFields();
+            }));
+    };
+    addAndMakeVisible (clearProjectButton);
+
     statusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
     addAndMakeVisible (statusLabel);
 
@@ -556,6 +579,8 @@ void VenueTab::resized()
     saveProjectButton.setBounds (saveRow.removeFromLeft (170));
     saveRow.removeFromLeft (6);
     loadProjectButton.setBounds (saveRow.removeFromLeft (150));
+    saveRow.removeFromLeft (6);
+    clearProjectButton.setBounds (saveRow.removeFromLeft (130));
     right.removeFromTop (4);
     // レポートボタンは独立行にする（同じ行だと右カラム幅に収まらず潰れる）
     reportButton.setBounds (right.removeFromTop (26).removeFromLeft (180));
