@@ -15,12 +15,23 @@ namespace eeq::acoustics
     return 331.3 + 0.606 * airTemperatureCelsius;
 }
 
-/** 湿度補正付き音速 [m/s]。経験的な近似で、ISO 9613-1 の吸収式とは別の計算。
-    h は相対湿度 [%]。通常は 0.1% 程度の影響しかないが、長距離では無視できない。 */
+/** 湿度補正付き音速 [m/s]。h は相対湿度 [%]（0..100）、大気圧は 101.325 kPa とする。
+    湿り空気を乾燥空気と水蒸気の理想気体混合として扱い、
+      c_humid / c_dry = √( (γ_mix / γ_dry) · (M_dry / M_mix) )
+    で補正する（#119）。水蒸気のモル分率 x = h/100 · p_sat(T) / p、p_sat は Buck の式。
+    M_mix = M_dry·(1 − 0.378·x)、γ_mix = (3.5 + 0.54·x) / (2.5 + 0.54·x)
+    （乾燥空気 Cp = 3.5R、水蒸気 Cp ≈ 4.04R）。
+    20 ℃ で 50 %RH なら +0.19 %、100 %RH なら +0.37 %（Cramer (1993) の値とほぼ一致）。 */
 [[nodiscard]] inline double speedOfSoundMetresPerSecond (double airTemperatureCelsius, double humidityPercent) noexcept
 {
     const auto c0 = 331.3 + 0.606 * airTemperatureCelsius;
-    return c0 * std::sqrt (1.0 + 0.001 * humidityPercent / 100.0);
+    const auto h = std::clamp (humidityPercent, 0.0, 100.0) / 100.0;
+    const auto t = airTemperatureCelsius;
+    const auto saturationPa = 611.21 * std::exp ((18.678 - t / 234.5) * (t / (257.14 + t)));
+    const auto x = std::clamp (h * saturationPa / 101325.0, 0.0, 1.0);
+    const auto gammaRatio = ((3.5 + 0.54 * x) / (2.5 + 0.54 * x)) / 1.4;
+    const auto molarMassRatio = 1.0 / (1.0 - 0.378 * x);
+    return c0 * std::sqrt (gammaRatio * molarMassRatio);
 }
 
 /** 距離 [m] → 遅延 [ms]。気温で音速を補正する */

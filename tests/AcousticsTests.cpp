@@ -23,11 +23,15 @@ TEST (Acoustics, SpeedOfSoundAtReferenceTemperatureIsAbout343)
 
 TEST (Acoustics, SpeedOfSoundWithHumidity)
 {
-    // 湿度 50% で約 0.1% 音速が上がる
+    // #119: 20 ℃ では 50 %RH で約 +0.19 %、100 %RH で約 +0.37 %
+    // （旧実装の √(1 + 1e-5·RH) は 100 %RH でも +0.05 % だった）
     const auto c20dry = speedOfSoundMetresPerSecond (20.0);
-    const auto c20humid = speedOfSoundMetresPerSecond (20.0, 50.0);
-    EXPECT_GT (c20humid, c20dry);
-    EXPECT_NEAR (c20humid / c20dry, 1.0, 0.002); // 約 0.1% 程度
+    EXPECT_DOUBLE_EQ (speedOfSoundMetresPerSecond (20.0, 0.0), c20dry);
+    EXPECT_NEAR (speedOfSoundMetresPerSecond (20.0, 50.0) / c20dry, 1.00187, 0.0002);
+    EXPECT_NEAR (speedOfSoundMetresPerSecond (20.0, 100.0) / c20dry, 1.00374, 0.0003);
+
+    // 気温が高いほど飽和水蒸気圧が上がり、補正は大きくなる（30 ℃ 100 %RH で約 +0.67 %）
+    EXPECT_NEAR (speedOfSoundMetresPerSecond (30.0, 100.0) / speedOfSoundMetresPerSecond (30.0), 1.0067, 0.0005);
 }
 
 TEST (Acoustics, DelayFor30MetresAt20C)
