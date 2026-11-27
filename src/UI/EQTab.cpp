@@ -26,6 +26,20 @@ std::vector<double> makeEqGrid (double fMin, double fMax)
 }
 } // namespace
 
+namespace
+{
+bool parseBandValue (const juce::String& text, double& out)
+{
+    const auto trimmed = text.trim();
+
+    if (! trimmed.containsAnyOf ("0123456789"))
+        return false;
+
+    out = trimmed.getDoubleValue();
+    return std::isfinite (out);
+}
+} // namespace
+
 EQTab::EQTab (UiContext& context)
     : ctx (context)
 {
@@ -119,6 +133,10 @@ EQTab::EQTab (UiContext& context)
     // Issue #149: EQ専用グラフ
     addAndMakeVisible (eqGraph);
 
+    styleLabel (levelAlignLabel);
+    levelAlignLabel.setTooltip (strings::eqLevelAlignTooltip);
+    addAndMakeVisible (levelAlignLabel);
+
     // ---- 帯域一覧 ----
     bandTitle.setText (strings::eqSection, juce::dontSendNotification);
     styleLabel (bandTitle, 12.0f, false);
@@ -158,6 +176,14 @@ EQTab::EQTab (UiContext& context)
         addAndMakeVisible (*editor);
     }
 
+    // 単位が分かるよう、空欄のときに単位を出し、ツールチップでも示す（issue #140）
+    bandFreqEditor.setTextToShowWhenEmpty ("Hz", theme::get (theme::ColourId::textDim));
+    bandGainEditor.setTextToShowWhenEmpty ("dB", theme::get (theme::ColourId::textDim));
+    bandQEditor.setTextToShowWhenEmpty ("Q", theme::get (theme::ColourId::textDim));
+    bandFreqEditor.setTooltip (strings::eqBandFreqTooltip);
+    bandGainEditor.setTooltip (strings::eqBandGainTooltip);
+    bandQEditor.setTooltip (strings::eqBandQTooltip);
+
     bandFreqEditor.setInputRestrictions (9, "0123456789.");
     bandGainEditor.setInputRestrictions (8, "0123456789.-");
     bandQEditor.setInputRestrictions (8, "0123456789.");
@@ -168,7 +194,13 @@ EQTab::EQTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) ctx.state.proposedBands.size())
         {
-            ctx.state.proposedBands[(size_t) selected].frequency = bandFreqEditor.getText().getDoubleValue();
+            // 空欄・入力途中の値は反映しない（issue #140: 0 Hz / Q 0 になり予測が NaN になっていた）
+            double value = 0.0;
+
+            if (! parseBandValue (bandFreqEditor.getText(), value))
+                return;
+
+            ctx.state.proposedBands[(size_t) selected].frequency = juce::jlimit (10.0, ctx.engine.getCurrentSampleRate() * 0.45, value);
             updatePrediction();
         }
     };
@@ -178,7 +210,13 @@ EQTab::EQTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) ctx.state.proposedBands.size())
         {
-            ctx.state.proposedBands[(size_t) selected].gainDb = bandGainEditor.getText().getDoubleValue();
+            // 空欄・入力途中の値は反映しない（issue #140: 0 Hz / Q 0 になり予測が NaN になっていた）
+            double value = 0.0;
+
+            if (! parseBandValue (bandGainEditor.getText(), value))
+                return;
+
+            ctx.state.proposedBands[(size_t) selected].gainDb = juce::jlimit (-24.0, 24.0, value);
             updatePrediction();
         }
     };
@@ -188,7 +226,13 @@ EQTab::EQTab (UiContext& context)
 
         if (selected >= 0 && selected < (int) ctx.state.proposedBands.size())
         {
-            ctx.state.proposedBands[(size_t) selected].q = bandQEditor.getText().getDoubleValue();
+            // 空欄・入力途中の値は反映しない（issue #140: 0 Hz / Q 0 になり予測が NaN になっていた）
+            double value = 0.0;
+
+            if (! parseBandValue (bandQEditor.getText(), value))
+                return;
+
+            ctx.state.proposedBands[(size_t) selected].q = juce::jlimit (0.1, 30.0, value);
             updatePrediction();
         }
     };
@@ -313,7 +357,7 @@ void EQTab::runProposal()
     eeq::dsp::SpectrumFrame frame;
     ctx.engine.getMeasurement().copyLatestResult (frame);
 
-    if (frame.averages == 0)
+    if (frame.averages < 2)
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::eqSection,
@@ -407,6 +451,15 @@ void EQTab::runProposal()
 
     lastResult = eeq::dsp::proposeEQ (input);
     hasResult = true;
+
+    // ターゲットは測定の全体レベル（補正範囲内の中央値）に合わせてから比べている（issue #109）。
+    // 表示も同じだけずらして、予測とターゲットが同じ基準で重なるようにする
+    targetDisplayOffsetDb = lastResult.appliedLevelOffsetDb;
+    ctx.state.targetLevelOffsetDb = targetDisplayOffsetDb;
+    ctx.state.eqVersion.fetch_add (1);
+    levelAlignLabel.setText (strings::eqLevelAlignedPrefix + (targetDisplayOffsetDb >= 0 ? "+" : "")
+                                 + juce::String (targetDisplayOffsetDb, 1) + " dB",
+                             juce::dontSendNotification);
 
     // 提案を共有する（TFタブが予測カーブを重ね描きする。仕様 4.4）
     ctx.state.proposedBands = lastResult.bands;
@@ -689,6 +742,7 @@ void EQTab::resized()
 
     left.removeFromTop (8);
     convergenceLabel.setBounds (left.removeFromTop (18));
+    levelAlignLabel.setBounds (left.removeFromTop (18));
 
     // 右: EQグラフ + 帯域一覧と手動調整
     auto graphHeight = juce::jmin (240, right.getHeight() / 2);

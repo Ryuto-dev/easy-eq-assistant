@@ -106,7 +106,8 @@ public:
         bandNoise1k // SPL校正用: 1 kHz 中心の帯域制限ピンクノイズ（比較校正の既定。仕様 3.4）
     };
 
-    /** 励起信号の種類を選ぶ（音が出ている間は切り替えないこと） */
+    /** 励起信号の種類を選ぶ。音が出ている間に変えると、オーディオスレッドが短くフェードアウト →
+        切替 → フェードインで反映する（issue #104: 段差的に別の信号・別のスピーカーへ切り替えない） */
     void setExcitationSource (ExcitationSource source) noexcept
     { excitationSource.store (source, std::memory_order_relaxed); }
     ExcitationSource getExcitationSource() const noexcept
@@ -223,6 +224,9 @@ public:
     /** エラーが滞留していれば true を返して内容を out に入れ、滞留を消す */
     bool consumeDeviceError (juce::String& messageOut);
 
+    /** 起動時に保存デバイスが無く既定デバイスで開いたとき、その説明を一度だけ返す（issue #124） */
+    bool consumeFallbackNotice (juce::String& messageOut);
+
     /** フェードアウトが完了して停止したことをUIが消費する（診断ログ用） */
     bool consumeNoiseReachedIdle() noexcept
     { return noiseReachedIdle.exchange (false, std::memory_order_relaxed); }
@@ -253,7 +257,25 @@ private:
     void audioDeviceError (const juce::String& errorMessage) override;
 
     void restoreSavedAssignment (int numInputs, int numOutputs);
-    /** スイープ/WAVバッファを公開する（メッセージスレッド専用。2世代ローテーション） */
+
+public:
+    /** 終了時: 鳴っていればフェードアウトして無音になるまで（最大 timeoutMs）待つ（issue #105） */
+    void fadeOutAndWait (int timeoutMs);
+
+    /** 出力の有効chマスク（0..numOut-1 が立ったマスク）。64ch でも未定義動作にしない（issue #126） */
+    [[nodiscard]] static constexpr std::uint64_t channelMaskFor (int numChannels) noexcept
+    {
+        return numChannels <= 0 ? 0ull : numChannels >= 64 ? ~0ull : ((1ull << numChannels) - 1ull);
+    }
+
+    /** デバイスが止まったことで励起が止められたか（1度だけ true）。UI が理由を表示する（issue #102） */
+    bool consumeStoppedByDeviceRestart() noexcept
+    { return stoppedByDeviceRestart.exchange (false, std::memory_order_relaxed); }
+
+    static constexpr double switchFadeSeconds = 0.03; // 構成切替時の短いフェードアウト（issue #104）
+
+private:
+    /** スイープ/WAVバッファを公開する（メッセージスレッド専用。3世代＋使用中の世代を保持） */
     void publishExcitationBuffer (std::vector<float> samples);
 
     juce::AudioDeviceManager deviceManager;
@@ -288,6 +310,8 @@ private:
     //（3世代ローテーション: 1ブロック内に2回差し替わっても旧バッファが生きる）
     std::shared_ptr<const std::vector<float>> ownedBuffers[3]; // メッセージスレッドだけが触る
     std::atomic<const std::vector<float>*> activeBufferPtr { nullptr };
+    std::atomic<const std::vector<float>*> adoptedBufferPtr { nullptr }; // オーディオスレッドが鳴らしている世代
+    std::vector<std::shared_ptr<const std::vector<float>>> retiredBuffers; // 3世代より古いが使用中のもの
     std::atomic<int> playbackPosition { 0 }; // オーディオスレッドだけが書く
     std::atomic<bool> excitationFinished { false };
     std::atomic<uint64_t> outputMask { 1 };
@@ -299,6 +323,8 @@ private:
     juce::CriticalSection errorMutex;
     juce::String pendingErrorMessage;
     std::atomic<bool> hasPendingError { false };
+    juce::String fallbackNotice;
+    std::atomic<bool> hasFallbackNotice { false };
     std::atomic<bool> noiseReachedIdle { false };
     // UI watchdogはオーディオコールバックのサンプルカウンターで進める。
     // RT側はatomic load/storeだけを使い、時計・ロック・割り当て・ログを使わない。
@@ -310,6 +336,15 @@ private:
     std::atomic<std::uint64_t> uiWatchdogTimeoutSamples
         { uiWatchdogTimeoutSamplesFor (48000.0, 512) };
     std::atomic<bool> uiWatchdogStopPending { false };
+    std::atomic<bool> stoppedByDeviceRestart { false };
+
+    // 実際に鳴らしている構成（オーディオスレッドだけが触る）。要求（excitationSource/outputMask/
+    // activeBufferPtr）と違えば、フェードを挟んでから切り替える（issue #104）
+    ExcitationSource appliedSource = ExcitationSource::pinkNoise;
+    std::uint64_t appliedMask = 1;
+    const std::vector<float>* appliedBuffer = nullptr;
+    bool switchPending = false;
+    bool pendingResumeAfterSwitch = false;
 
     PinkNoiseGenerator noise;
     juce::AudioFormatManager formatManager;

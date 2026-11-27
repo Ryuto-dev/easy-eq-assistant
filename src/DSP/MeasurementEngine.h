@@ -30,6 +30,13 @@ public:
 
     void resetAverages();
 
+    /** Ref の遅延補償（issue #106）: Meas との時間合わせのため、Ref をこのサンプル数だけ遅らせてから
+        Welch 平均に入れる（Smaart の Delay Finder と同じ方式）。値が変わったら平均をリセットする。
+        遅延推定用のキャプチャ（copyRecentSamples）は遅らせない生の信号のまま */
+    void setReferenceDelaySamples (int samples) noexcept;
+    int getReferenceDelaySamples() const noexcept { return requestedRefDelay.load (std::memory_order_relaxed); }
+    static constexpr int maxReferenceDelaySamples = (1 << 18) - 1; // 96 kHz で約 2.7 秒
+
     /** FFTサイズ（点数）・サンプルレート・平均設定・窓を設定する */
     void configure (int fftSizePoints, double sampleRate, const AveragingConfig& averaging,
                     juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod);
@@ -49,6 +56,9 @@ public:
         MainComponent 等からの表示用。getAveragesLockFree のエイリアス。 */
     int getAverages() const noexcept { return getAveragesLockFree(); }
 
+    /** 平均回数の上限（FIFO のときは保持フレーム数）。「N 回たまったら」の判定に使う */
+    int getAverageCapacity() const noexcept { return accumulator.getAverageCapacity(); }
+
     /** RTA/SPL解析器を登録する（解析スレッドへ常時入力を流す。nullで停止） */
     void setSplAnalyzer (RtaSplAnalyzer* analyzer) noexcept
     { splAnalyzer.store (analyzer, std::memory_order_release); }
@@ -63,7 +73,9 @@ public:
         minConfidence: 有効とみなす最小 confidence（既定 5.0） */
     [[nodiscard]] DelayEstimate estimateCurrentDelay (bool usePhat, double minConfidence = 5.0) const;
 
-    static constexpr int captureCapacity = 1 << 20; // 遅延推定用の直近バッファ（両ch合計で1MB）
+    // 遅延推定・THD 用の直近バッファ。2^21 サンプル（96 kHz で約 21.8 秒）: THD のスイープ 10 秒＋残響を
+    // 96 kHz でも取れる長さ（issue #114。2^20 だと 96 kHz で常に録音長不足になっていた）。両chで 16 MB
+    static constexpr int captureCapacity = 1 << 21;
 
 private:
     void run() override;
@@ -76,7 +88,14 @@ private:
     std::atomic<bool> resetRequested { false };
     std::atomic<std::uint64_t> measurementGeneration { 0 };
 
-    std::vector<float> readRef, readMeas;
+    std::vector<float> readRef, readMeas, delayedRef;
+
+    // Ref の遅延線（解析スレッドだけが触る）
+    std::atomic<int> requestedRefDelay { 0 };
+    int activeRefDelay = 0;
+    std::atomic<int> accumulatorRefDelay { 0 }; // 今の平均がどの遅延補償量で溜めたものか
+    std::vector<float> refDelayLine;
+    int refDelayWrite = 0;
 
     std::atomic<RtaSplAnalyzer*> splAnalyzer { nullptr }; // 解析スレッドから読む（構築後に一度だけ書く）
 

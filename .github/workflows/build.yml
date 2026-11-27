@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   pull_request:
 
+# 同じブランチで新しい push があれば古い実行は止める（ランナーの取り合いを減らす）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -12,18 +17,46 @@ jobs:
       matrix:
         os: [ macos-latest, windows-latest ]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Configure
-        run: cmake -S . -B build ${{ runner.os == 'Windows' && '' || '-DCMAKE_BUILD_TYPE=Release' }}
+      # issue #70: JUCE モジュールは毎回同じなので ccache で再利用する（macOS が 60 分で打ち切られていた）
+      - name: ccache
+        if: runner.os == 'macOS'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ hashFiles('.gitmodules', 'CMakeLists.txt') }}
+          max-size: 2G
+
+      - name: Install Ninja
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # macOS の CI はネイティブ（arm64）のみ。ユニバーサル（arm64 + x86_64）はコンパイルが2倍になるため、
+      # 配布ビルドはローカルで行う。Windows は従来どおり Visual Studio ジェネレータ
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel ${{ runner.os == 'Windows' && '--config Debug' || '' }}
 
       - name: Test
         run: ctest --test-dir build --output-on-failure ${{ runner.os == 'Windows' && '-C Debug' || '' }}
+
+      - name: ccache stats
+        if: runner.os == 'macOS'
+        run: ccache --show-stats || true

@@ -25,6 +25,10 @@ MainComponent::MainComponent()
     eeq::log::write ("--- Easy EQ assistant started ---");
     setOpaque (true);
 
+    // アプリ全体の LookAndFeel（ダイアログ・メニューもテーマに追従させる: issue #132）
+    applyLookAndFeelColours();
+    juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+
     topBar.onError = [this] (const juce::String& message) { showError (message); };
     topBar.onLiveModeRequested = [this]
     {
@@ -96,8 +100,9 @@ MainComponent::MainComponent()
             eeq::log::write (error.isEmpty() ? "project restored: " + projectFile.getFullPathName()
                                              : "project restore FAILED: " + error);
 
-            // ループバック校正（システム補正）を復元（仕様 6.1）
-            project.restoreSystemCorrection (correction);
+            // ループバック校正（システム補正）はプロジェクトからは復元しない（issue #121）。
+            // 補正はオーディオインターフェースの特性なので、正本はアプリ設定（下）に一本化する。
+            // プロジェクトから戻すと、クリアした補正が再起動で復活していた
 
             // タブ類に一覧の張り直しを促す（スナップショット等の生ポインタも入れ替わる）
             uiState.snapshotVersion.fetch_add (1);
@@ -121,7 +126,10 @@ MainComponent::MainComponent()
             }
             else
             {
+                // 復元できなかったことを利用者に知らせる（issue #89: 気づかないまま補正なしで測っていた）
                 eeq::log::write ("loopback correction restore FAILED (saved data was invalid)");
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                    strings::loopbackSection, strings::loopbackRestoreFailed, strings::okButton, this, nullptr);
             }
         }
     }
@@ -174,8 +182,7 @@ MainComponent::MainComponent()
                          + strings::wizardStep3 + "\n"
                          + strings::wizardStep4 + "\n\n"
                          + strings::shortcutHint + " / " + strings::emergencyStopHint + "\n"
-                         + juce::String (u8"※ 各ステップは「IR・遅延」タブ（ループバック校正）と「RTA・SPL」タブ")
-                         + juce::String (u8"（校正・ゲイン調整）から実行できます。Esc でいつでも出力を止められます。");
+                         + strings::wizardFootnote;
 
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon,
             strings::wizardTitle, guide, strings::wizardClose, this, nullptr);
@@ -189,6 +196,7 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
 
     for (auto& target : modalEscapeTargets)
         if (target != nullptr)
@@ -196,9 +204,16 @@ MainComponent::~MainComponent()
 
     modalEscapeTargets.clear();
     modalEscapeRoot = nullptr;
+
+    // 鳴らしたまま閉じてもポップ音を出さない（issue #105）: フェードアウトが終わるまで待ってから閉じる
+    engine.fadeOutAndWait (400);
     engine.saveSettings();
     // 最終保存は同期的に行う（自動保存がワーカースレッドのまま終了すると、
-    // 終了処理に書き込みが殺されて失われる可能性があるため）
+    // 終了処理に書き込みが殺されて失われる可能性があるため）。
+    // 進行中の自動保存（古い内容）が最終保存のあとに書き終わって上書きしないよう、先に完了を待つ（issue #122）
+    for (int i = 0; i < 300 && saveInFlight->load(); ++i)
+        juce::Thread::sleep (10);
+
     {
         const auto error = project.saveToFile (eeq::core::ProjectStore::defaultProjectFile());
 
@@ -230,9 +245,8 @@ void MainComponent::saveProjectIfPossible()
         if (error.isNotEmpty())
             eeq::log::write ("project auto-save FAILED: " + error);
 
-        // 次の保存を許可する（メッセージループが生きていれば非同期に戻す）。
-        // 終了処理でメッセージループが止まっていても、atomic なので安全
-        juce::MessageManager::callAsync ([inFlight] { inFlight->store (false); });
+        // 次の保存を許可する。終了処理が完了を待てるよう、ここで直接下ろす（atomic なので安全）
+        inFlight->store (false);
     });
 }
 
@@ -242,13 +256,41 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 }
 
+void MainComponent::applyLookAndFeelColours()
+{
+    // PopupMenu・AlertWindow・CallOutBox などは LookAndFeel の配色で描かれる（issue #132:
+    // 既定の V4 のままだとライトテーマでもダイアログやメニューが暗い配色のままだった）
+    using CS = juce::LookAndFeel_V4::ColourScheme;
+    lookAndFeel.setColourScheme (CS (theme::get (theme::ColourId::windowBackground),    // windowBackground
+                                     theme::get (theme::ColourId::panelBackground),     // widgetBackground
+                                     theme::get (theme::ColourId::panelBackground),     // menuBackground
+                                     theme::get (theme::ColourId::controlOutline),      // outline
+                                     theme::get (theme::ColourId::text),                // defaultText
+                                     theme::get (theme::ColourId::control),             // defaultFill
+                                     theme::get (theme::ColourId::text),                // highlightedText
+                                     theme::get (theme::ColourId::accent).withAlpha (0.35f), // highlightedFill
+                                     theme::get (theme::ColourId::text)));              // menuText
+    lookAndFeel.setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
+    lookAndFeel.setColour (juce::TabbedButtonBar::frontTextColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::TooltipWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::TooltipWindow::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::TooltipWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    lookAndFeel.setColour (juce::AlertWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::AlertWindow::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::AlertWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    lookAndFeel.setColour (juce::PopupMenu::backgroundColourId, theme::get (theme::ColourId::panelBackground));
+    lookAndFeel.setColour (juce::PopupMenu::textColourId, theme::get (theme::ColourId::text));
+    lookAndFeel.setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::get (theme::ColourId::accent).withAlpha (0.35f));
+    lookAndFeel.setColour (juce::PopupMenu::highlightedTextColourId, theme::get (theme::ColourId::text));
+}
+
 void MainComponent::applyThemeToComponents()
 {
+    applyLookAndFeelColours();
     // 生成時に各ウィジェットへ焼き込まれた色を、現在のテーマで塗り直す（issue #9/#50）
     eeq::ui::restyleTree (this);
 
     tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    getLookAndFeel().setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
 
     // addTab 時に焼き込んだタブ背景色も張り直す
     for (int i = 0; i < tabs.getNumTabs(); ++i)
@@ -336,6 +378,19 @@ void MainComponent::timerCallback()
         saveProjectIfPossible();
     }
 
+    // 適用中の遅延で Ref を時間合わせする（issue #106: 位相表示だけでなく H1 とコヒーレンスの偏りを無くす）
+    {
+        const auto applied = uiState.suspendReferenceDelay.load() ? 0.0 : uiState.appliedDelaySamples.load();
+        const auto wanted = juce::jlimit (0, eeq::dsp::MeasurementEngine::maxReferenceDelaySamples,
+                                          (int) std::lround (std::isfinite (applied) ? applied : 0.0));
+
+        if (wanted != engine.getMeasurement().getReferenceDelaySamples())
+        {
+            engine.getMeasurement().setReferenceDelaySamples (wanted);
+            eeq::log::write ("measurement: reference delay compensation = " + juce::String (wanted) + " samples");
+        }
+    }
+
     topBar.timerTick();
     bottomBar.update();
 
@@ -359,6 +414,9 @@ void MainComponent::timerCallback()
     limitTab.timerTick();
     venueTab.timerTick();
 
+    if (uiShowing && ! liveMode && currentTab == 5)
+        utilitiesTab.timerTick();
+
     if (liveMode)
         liveOverlay.timerTick();
 
@@ -366,9 +424,10 @@ void MainComponent::timerCallback()
 
     const auto status = engine.getStatusText();
     const auto watchdogWarningActive = (std::int32_t) (uiWatchdogWarningUntilMs - nowMs) > 0;
-    bottomBar.setStatusText (watchdogWarningActive
-                                 ? juce::String (u8"UI停止を検知：励起音を自動停止しました")
-                                 : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
+    const auto deviceStopNoticeActive = (std::int32_t) (deviceStopNoticeUntilMs - nowMs) > 0;
+    bottomBar.setStatusText (watchdogWarningActive ? strings::uiWatchdogStoppedNotice
+                             : deviceStopNoticeActive ? strings::deviceRestartStoppedNotice
+                             : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
 
     // デバイスが開き直されたら測定設定（サンプルレート）を合わせ直す
     if (engine.getDeviceGeneration() != lastSeenGeneration)
@@ -380,11 +439,26 @@ void MainComponent::timerCallback()
         //（ここでハードコードするとユーザーの設定が上書きされるため触らない）
     }
 
+    if (engine.consumeStoppedByDeviceRestart())
+    {
+        // デバイスが止まったので励起を止めた。再オープン後も自動では鳴らさない（issue #102）
+        deviceStopNoticeUntilMs = nowMs + 8000u;
+        eeq::log::write ("excitation: stopped because the audio device stopped (not resumed automatically)");
+    }
+
     if (engine.consumeNoiseReachedIdle())
         eeq::log::write ("excitation: reached idle (fade-out completed on audio thread)");
 
     if (engine.consumeExcitationFinished())
         eeq::log::write ("excitation: playback reached the end");
+
+    juce::String fallbackNotice;
+
+    if (engine.consumeFallbackNotice (fallbackNotice))
+    {
+        eeq::log::write ("audio: " + fallbackNotice);
+        showError (fallbackNotice);
+    }
 
     juce::String deviceError;
 

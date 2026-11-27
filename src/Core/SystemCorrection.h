@@ -103,6 +103,12 @@ public:
             || std::abs (frame.sampleRate - input.sampleRate) > 0.5)
             return;
 
+        // 補正後のフレームに織り込み済みの遅延（issue #108）:
+        //   H/H_loop = (G/C)·e^{-jω(T−L)}·e^{+jω(R−R_loop)}
+        // （T: 全遅延、L: 往復遅延、R/R_loop: それぞれの Ref 遅延補償量）。
+        // 「適用中の全遅延 − refDelaySamples」で位相が平らになるよう、L も織り込み済みとして記録する
+        out.refDelaySamples = input.refDelaySamples - frame.refDelaySamples + delaySamples.load();
+
         const auto halfBins = (int) input.transfer.size();
 
         for (int k = 1; k < halfBins; ++k)

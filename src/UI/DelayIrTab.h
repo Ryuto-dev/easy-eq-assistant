@@ -168,6 +168,8 @@ private:
     // 系統の選択（-1 = 全体）
     int exciteTarget = -1;
     int compareVersionSeen = -1;
+    std::unique_ptr<eeq::dsp::ImpulseResponse> compareIrA, compareIrB; // 比較用 IR のキャッシュ（issue #138）
+    std::uint64_t compareIrIdA = 0, compareIrIdB = 0;
     int irGraphHeight = 180;
 
     // ループバック校正の自動進行（issue #17/#31）

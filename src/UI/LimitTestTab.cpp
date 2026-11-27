@@ -21,7 +21,6 @@ constexpr const char* settingsStepKey = "limitTestStepDb";
 constexpr const char* settingsDurationKey = "limitTestDurationSec";
 constexpr const char* settingsAmpGainKey = "limitTestAmpGainDb";
 constexpr const char* settingsSpeakerKey = "limitTestSpeakerMaxW";
-constexpr const char* settingsSpeakerOhmKey = "limitTestSpeakerOhm";
 } // namespace
 
 void LimitTestTab::StepGraph::paint (juce::Graphics& g)
@@ -247,8 +246,25 @@ void LimitTestTab::overrideCeilingForTest()
     if (! ceilingOverridden)
     {
         ceilingBeforeTestDb = ctx.engine.getOutputCeilingDb();
+        // 出力レベルもテスト前の値を退避して、終了時に必ず戻す（issue #100）
+        levelBeforeTestDb = ctx.engine.getNoiseLevelDb();
         ceilingOverridden = true;
     }
+}
+
+std::optional<double> LimitTestTab::readCeilingInput()
+{
+    // 空欄・不正値・0 dBFS を超える値は受け付けない（issue #103: 空欄が 0 dBFS、"+6" が上限なしになっていた）
+    const auto text = ceilingEditor.getText().trim();
+    const auto value = text.getDoubleValue();
+
+    if (text.isEmpty() || ! text.containsAnyOf ("0123456789") || ! std::isfinite (value) || value > 0.0 || value < -60.0)
+    {
+        progressLabel.setText (strings::limitCeilingInvalid, juce::dontSendNotification);
+        return std::nullopt;
+    }
+
+    return value;
 }
 
 void LimitTestTab::restoreCeilingAfterTest()
@@ -256,7 +272,9 @@ void LimitTestTab::restoreCeilingAfterTest()
     if (ceilingOverridden)
     {
         ctx.engine.setOutputCeilingDb (ceilingBeforeTestDb);
+        ctx.engine.setNoiseLevelDb (levelBeforeTestDb);
         ceilingOverridden = false;
+        eeq::log::write ("limit test: output level restored to " + juce::String (levelBeforeTestDb, 1) + " dBFS");
         eeq::log::write ("limit test: output ceiling restored to "
                          + juce::String (ceilingBeforeTestDb, 1) + " dBFS");
     }
@@ -306,7 +324,12 @@ void LimitTestTab::startStepTest()
 
     // 安全設計（仕様 3.7）: 出力の上限（dBFS）を測定前に必ず設定する。
     // テスト終了時に元の上限へ戻せるよう、テスト前の値を保存しておく（issue #29）
-    const auto ceiling = ceilingEditor.getText().getDoubleValue();
+    const auto ceilingInput = readCeilingInput();
+
+    if (! ceilingInput.has_value())
+        return;
+
+    const auto ceiling = *ceilingInput;
     overrideCeilingForTest();
     ctx.engine.setOutputCeilingDb ((float) ceiling);
     ctx.settings.setValue (settingsCeilingKey, ceiling);
@@ -378,10 +401,16 @@ void LimitTestTab::startThermalTest()
         || ! acknowledgeToggle.getToggleState())
         return;
 
-    const auto ceiling = ceilingEditor.getText().getDoubleValue();
+    const auto ceilingInput = readCeilingInput();
+
+    if (! ceilingInput.has_value())
+        return;
+
+    const auto ceiling = *ceilingInput;
     overrideCeilingForTest();
     ctx.engine.setOutputCeilingDb ((float) ceiling);
-    thermalLevel = ctx.engine.getNoiseLevelDb();
+    // 熱圧縮テストのレベルも、ピークが天井でクリップしない範囲に抑える（issue #103）
+    thermalLevel = juce::jmin ((double) ctx.engine.getNoiseLevelDb(), ceiling - eeq::audio::AudioEngine::excitationCrestDb);
     thermalRunning = true;
     thermalStart = juce::Time::getCurrentTime();
     thermalDeadline = thermalStart + juce::RelativeTime::seconds (30.0);
@@ -425,7 +454,7 @@ void LimitTestTab::timerTick()
     // ---- レベルステップ ----
     if (stepPhase != Phase::idle)
     {
-        const auto ceiling = ceilingEditor.getText().getDoubleValue();
+        const auto ceiling = (double) ctx.engine.getOutputCeilingDb(); // 開始時に検証・設定した値
         const auto stepDb = std::max (0.5, stepEditor.getText().getDoubleValue());
         const auto maxDuration = std::max (10.0, durationEditor.getText().getDoubleValue());
 
@@ -472,7 +501,9 @@ void LimitTestTab::timerTick()
 
             stepLevel += stepDb;
 
-            if (stepLevel > ceiling)
+            // RMS で上げるので、ピーク（RMS + クレスト約 14 dB）が天井を超える手前で止める（issue #103:
+            // 以前は RMS が ceiling に届くまで上げ、最後の数ステップはハードクリップしたノイズになっていた）
+            if (stepLevel > ceiling - eeq::audio::AudioEngine::excitationCrestDb)
             {
                 stopTest (false);
                 return;
@@ -571,9 +602,27 @@ void LimitTestTab::timerTick()
                         harmonicText += (k == 2 ? "" : "  ") + juce::String (k) + juce::String (u8"次: ")
                                       + juce::String (result.harmonicPercent[(size_t) (k - 2)], 2) + "%";
 
+                    // 周波数ごとの THD（issue #114）: 代表値は最も歪んだ帯域。低域・中域・高域の値も並べる
+                    juce::String bandText;
+
+                    for (const auto target : { 63.0, 250.0, 1000.0, 4000.0 })
+                    {
+                        const eeq::dsp::ThdBand* nearest = nullptr;
+
+                        for (const auto& band : result.bands)
+                            if (nearest == nullptr || std::abs (std::log (band.centerHz / target))
+                                                          < std::abs (std::log (nearest->centerHz / target)))
+                                nearest = &band;
+
+                        if (nearest != nullptr && std::abs (std::log2 (nearest->centerHz / target)) < 0.5)
+                            bandText << "  " << juce::String (nearest->nominalHz, 0) << " Hz: "
+                                     << juce::String (nearest->thdPercent, 2) << "%";
+                    }
+
                     safeThis->thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
                                                     + " dBFS   THD: " + juce::String (result.thdPercent, 2)
-                                                    + "%   (" + harmonicText + ")",
+                                                    + "% @ " + juce::String (result.worstFrequencyHz, 0) + " Hz   ("
+                                                    + harmonicText + ")" + (bandText.isNotEmpty() ? "\n" + bandText.trim() : juce::String()),
                                                 juce::dontSendNotification);
                     eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)
                                      + "% at " + juce::String (level, 1) + " dBFS");

@@ -493,4 +493,27 @@ inline const juce::String clearProjectButton { u8"プロジェクトをクリア
 inline const juce::String systemsSetTarget { u8"測定対象にする" };
 inline const juce::String systemsSetTargetTooltip { u8"選択中の系統だけから励起信号を出す（行のダブルクリックでも可）" };
 
+inline const juce::String eqLevelAlignedPrefix { u8"ターゲットのレベル合わせ: " };
+inline const juce::String eqLevelAlignTooltip { u8"測定の絶対レベルは機器のゲインで決まるため、補正範囲内の中央値にターゲットを合わせてから EQ 案を作る" };
+
+inline const juce::String limitCeilingInvalid { u8"出力上限は −60〜0 dBFS の数値で入力してください" };
+
+inline const juce::String uiWatchdogStoppedNotice { u8"UI停止を検知：励起音を自動停止しました" };
+inline const juce::String deviceRestartStoppedNotice { u8"オーディオデバイスが停止したため励起音を止めました（自動では再開しません）" };
+
+inline const juce::String loopbackRestoreFailed { u8"保存されていたループバック校正を読み込めませんでした。補正なしで測定しています。IR・遅延タブで測り直してください。" };
+
+inline const juce::String eqBandFreqTooltip { u8"中心周波数 (Hz)。10 Hz〜fs×0.45" };
+inline const juce::String eqBandGainTooltip { u8"ゲイン (dB)。−24〜+24 dB" };
+inline const juce::String eqBandQTooltip { u8"Q（帯域の鋭さ）。0.1〜30" };
+
+inline const juce::String wizardFootnote { u8"※ 各ステップは「IR・遅延」タブ（ループバック校正）と「RTA・SPL」タブ（校正・ゲイン調整）から実行できます。Esc でいつでも出力を止められます。" };
+inline const juce::String calibrationNoSignal { u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。" };
+inline const juce::String calibrationMeterRange { u8"騒音計の値は 30〜140 dB で入力してください" };
+inline const juce::String calibrationAcquiring { u8"A/Fast の新しい測定値を取得しています…" };
+inline const juce::String rtaScaleUncalibrated { u8"dBFS（未校正）" };
+inline const juce::String rtaScaleCalibrated { u8"dB SPL（校正済み）" };
+inline const juce::String averagesPrefix { u8"平均: " };
+inline const juce::String averagesSuffix { u8" 回" };
+
 } // namespace eeq::strings

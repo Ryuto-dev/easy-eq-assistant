@@ -187,3 +187,130 @@ TEST (EQProposer, FlatInputNeedsNoBands)
     EXPECT_TRUE (result.bands.empty());
     EXPECT_TRUE (result.converged);
 }
+
+namespace
+{
+std::vector<double> measureCascade (const std::vector<eeq::dsp::peq::Band>& bands, const std::vector<double>& grid,
+                                    double offsetDb = 0.0)
+{
+    eeq::dsp::peq::Cascade room;
+    room.setBands (bands, sampleRate);
+    std::vector<double> measured;
+
+    for (const auto f : grid)
+        measured.push_back (room.magnitudeDbAt (f, sampleRate) + offsetDb);
+
+    return measured;
+}
+
+eeq::dsp::peq::Band bell (double f, double gainDb, double q)
+{
+    eeq::dsp::peq::Band b;
+    b.type = eeq::dsp::peq::Band::Type::bell;
+    b.frequency = f;
+    b.gainDb = gainDb;
+    b.q = q;
+    return b;
+}
+} // namespace
+
+TEST (EQProposer, FlatButAttenuatedMeasurementNeedsNoBands)
+{
+    // #109: フラットで全体が −12 dB の測定。レベル合わせが無いと +3 dB の帯域を量産していた
+    const auto grid = makeGrid (40.0, 16000.0);
+    auto input = makeInput (grid, std::vector<double> (grid.size(), -12.0));
+
+    const auto result = eeq::dsp::proposeEQ (input);
+
+    EXPECT_TRUE (result.bands.empty());
+    EXPECT_TRUE (result.converged);
+    EXPECT_NEAR (result.appliedLevelOffsetDb, -12.0, 1.0e-9);
+
+    // 自動レベル合わせを切ると、手動オフセット（既定 0 dB）がそのまま使われる
+    input.autoLevelAlign = false;
+    const auto manual = eeq::dsp::proposeEQ (input);
+    EXPECT_DOUBLE_EQ (manual.appliedLevelOffsetDb, 0.0);
+    EXPECT_FALSE (manual.bands.empty());
+
+    input.levelOffsetDb = -12.0;
+    const auto manualMatched = eeq::dsp::proposeEQ (input);
+    EXPECT_TRUE (manualMatched.bands.empty());
+}
+
+TEST (EQProposer, LevelAlignmentRecoversPeqUnderGainOffset)
+{
+    // #109: 既知の PEQ を −12 dB の全体ゲインの下に置いても同じ帯域が提案される
+    const auto grid = makeGrid (40.0, 16000.0);
+    const auto measured = measureCascade ({ bell (1000.0, 6.0, 4.0), bell (250.0, -5.0, 2.0) }, grid, -12.0);
+    auto input = makeInput (grid, measured);
+
+    const auto result = eeq::dsp::proposeEQ (input);
+    const auto reference = eeq::dsp::proposeEQ (makeInput (grid, measureCascade ({ bell (1000.0, 6.0, 4.0),
+                                                                                    bell (250.0, -5.0, 2.0) },
+                                                                                  grid)));
+
+    EXPECT_NEAR (result.appliedLevelOffsetDb, -12.0 + reference.appliedLevelOffsetDb, 1.0e-6);
+    EXPECT_TRUE (result.converged);
+    ASSERT_EQ (result.bands.size(), reference.bands.size());
+
+    for (size_t i = 0; i < result.bands.size(); ++i)
+    {
+        EXPECT_NEAR (result.bands[i].frequency, reference.bands[i].frequency, 1.0e-6);
+        EXPECT_NEAR (result.bands[i].gainDb, reference.bands[i].gainDb, 1.0e-6);
+        EXPECT_NEAR (result.bands[i].q, reference.bands[i].q, 1.0e-6);
+    }
+
+    // 最初の帯域は 1 kHz 付近の約 −6 dB カット
+    EXPECT_NEAR (result.bands[0].gainDb, -6.0, 0.3);
+}
+
+TEST (EQProposer, ValleySkipsDoNotConsumeBandBudget)
+{
+    // #110: 狭い −15 dB ノッチ3つ + +6 dB ピーク2つ。maxBands=3 でも、ピークへのカットは提案される
+    const auto grid = makeGrid (40.0, 16000.0);
+    const auto measured = measureCascade ({ bell (300.0, -15.0, 12.0), bell (1500.0, -15.0, 12.0),
+                                            bell (5000.0, -15.0, 12.0), bell (120.0, 6.0, 2.0),
+                                            bell (2800.0, 6.0, 2.0) },
+                                          grid);
+    auto input = makeInput (grid, measured);
+    input.maxBands = 3;
+
+    const auto result = eeq::dsp::proposeEQ (input);
+
+    // 修正前は3回の試行がすべてノッチのスキップで消費され、帯域が0本だった
+    ASSERT_EQ ((int) result.bands.size(), 3);
+
+    bool cut120 = false, cut2800 = false;
+
+    for (const auto& band : result.bands)
+    {
+        if (band.gainDb < -5.0)
+            cut120 = cut120 || std::abs (std::log2 (band.frequency / 120.0)) < 1.0 / 12.0;
+        if (band.gainDb < -5.0)
+            cut2800 = cut2800 || std::abs (std::log2 (band.frequency / 2800.0)) < 1.0 / 12.0;
+    }
+
+    EXPECT_TRUE (cut120);
+    EXPECT_TRUE (cut2800);
+}
+
+TEST (EQProposer, QEstimateInterpolatesHalfGainCrossings)
+{
+    // #117: グリッド点上（40·2^(56/12) ≈ 1015.9 Hz）の Q=4 / Q=2 のピーク。
+    // 半値点を補間しないと Q=4 が 5.93、Q=2 が 2.14 と推定されていた
+    const auto grid = makeGrid (40.0, 16000.0);
+    const auto fc = 40.0 * std::pow (2.0, 56.0 / 12.0);
+
+    for (const auto trueQ : { 4.0, 2.0 })
+    {
+        auto input = makeInput (grid, measureCascade ({ bell (fc, 6.0, trueQ) }, grid));
+        input.maxBands = 1;
+
+        const auto result = eeq::dsp::proposeEQ (input);
+
+        ASSERT_EQ ((int) result.bands.size(), 1);
+        EXPECT_NEAR (result.bands[0].frequency, fc, 1.0e-6);
+        EXPECT_NEAR (result.bands[0].gainDb, -6.0, 0.15);
+        EXPECT_NEAR (result.bands[0].q, trueQ, trueQ * 0.05) << "true Q = " << trueQ;
+    }
+}

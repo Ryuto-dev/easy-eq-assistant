@@ -167,6 +167,7 @@ if(EASYEQ_BUILD_TESTS)
     FetchContent_Declare(googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG        v1.17.0
+        GIT_SHALLOW    TRUE
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
@@ -193,6 +194,7 @@ if(EASYEQ_BUILD_TESTS)
         src/Audio/AudioEngine.cpp
         src/Core/Log.cpp
         src/Core/ProjectStore.cpp
+        src/Core/Exporters.cpp
         src/DSP/TransferFunctionAccumulator.cpp
         src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp

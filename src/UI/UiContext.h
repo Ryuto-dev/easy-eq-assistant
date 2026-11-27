@@ -25,6 +25,8 @@ struct UiState
     std::atomic<bool> loopbackEnabled { true };      // システム補正のON/OFF（仕様 6.1）
     std::atomic<uint32_t> snapshotVersion { 0 };     // スナップショット一覧の更新カウンタ
     std::atomic<uint32_t> eqVersion { 0 };           // ターゲット/予測カーブの更新カウンタ
+    // Ref 遅延補償を一時的に 0 にする（ループバック校正中。往復遅延だけの系を測るため: issue #106）
+    std::atomic<bool> suspendReferenceDelay { false };
 
     // 以下はメッセージスレッドだけから触る
     int smoothingDenom = 6;                          // 測定パネルのスムージング
@@ -32,6 +34,7 @@ struct UiState
     std::vector<eeq::dsp::GridPoint> targetPoints;    // ターゲット曲線（EQ案タブが更新）
     std::vector<eeq::dsp::GridPoint> predictionPoints; // EQ予測（補正後）カーブ
     std::vector<eeq::dsp::peq::Band> proposedBands;   // 補正EQ案（EQ案タブが更新）
+    double targetLevelOffsetDb = 0.0;                 // ターゲットを測定の全体レベルへ合わせた量（issue #109）
 };
 
 // タブに渡す共有コンテキスト

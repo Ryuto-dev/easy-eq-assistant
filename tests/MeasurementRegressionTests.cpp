@@ -331,3 +331,37 @@ TEST_F (GraphTest, StyledTextEditorDoesNotSwallowEscape)
     EXPECT_FALSE (editor.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)));
     EXPECT_FALSE (editor.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)));
 }
+
+#include "../src/Core/SystemCorrection.h"
+
+// ---- issue #108: ループバック補正と「遅延を適用」を併用しても往復遅延を二重に引かない ----
+TEST (MeasurementRegression, CorrectionAndAppliedDelayGiveFlatPhase)
+{
+    constexpr int n = 8192;
+    constexpr double fs = 48000.0;
+    constexpr double loopDelay = 240.0;   // L: インターフェースの往復遅延
+    constexpr double totalDelay = 720.0;  // T: 出力→スピーカー→マイク→入力の全遅延（L を含む）
+
+    // ループバック校正: Ref 遅延補償なし（R_loop = 0）で測った H_loop = e^{-jωL}
+    auto loop = makeDelayFrame (n, fs, loopDelay);
+    loop.refDelaySamples = 0.0;
+    eeq::core::SystemCorrection correction;
+    correction.setCorrection (loop, loopDelay);
+
+    // 本測定: 遅延を適用（A = T）して Ref を T だけ遅らせたフレーム。位相は残り 0
+    auto measured = makeDelayFrame (n, fs, 0.0);
+    measured.refDelaySamples = totalDelay;
+
+    eeq::dsp::SpectrumFrame corrected;
+    correction.apply (measured, corrected, true);
+
+    // 補正後のフレームに織り込み済みの遅延は R − R_loop + L
+    EXPECT_DOUBLE_EQ (corrected.refDelaySamples, totalDelay - 0.0 + loopDelay);
+
+    // 表示: 適用中の全遅延 A = T から残りを求めて平滑化の前に回すと、位相は平ら
+    const auto points = smoothToLogGrid (corrected, 6, 100.0, 15000.0, 100, 80.0f,
+                                         corrected.residualDelayFor (totalDelay));
+
+    for (const auto& p : points)
+        EXPECT_NEAR (p.phaseDeg, 0.0f, 0.5f) << "f=" << p.freq;
+}

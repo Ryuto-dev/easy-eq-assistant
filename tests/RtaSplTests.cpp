@@ -68,7 +68,7 @@ TEST (RtaSpl, CWeightingMatchesIecTable)
     EXPECT_NEAR (RtaSplAnalyzer::cWeightingDb (8000.0), -3.0, 0.3);
 }
 
-TEST (RtaSpl, PeakReadsSampleAmplitudePlusOffset)
+TEST (RtaSpl, PeakIsSineRmsReferencedLpeak)
 {
     eeq::dsp::RtaSplAnalyzer analyzer;
     analyzer.configure (sampleRate, 3, 0.5);
@@ -80,7 +80,10 @@ TEST (RtaSpl, PeakReadsSampleAmplitudePlusOffset)
     analyzer.copySpl (spl);
 
     ASSERT_TRUE (spl.hasSignal);
-    EXPECT_NEAR (spl.peakDb, 20.0 * std::log10 (0.5) + 94.0, 0.01);
+    // #112: 0 dB は正弦波の RMS 基準。振幅 0.5 の正弦波は Leq = 20log(0.5) + 94 = 87.98 dB、
+    // Lpeak はその +3.01 dB = 90.99 dB（旧実装は 87.98 dB を返していた）
+    EXPECT_NEAR (spl.peakDb, 20.0 * std::log10 (0.5) + 94.0 + 3.0103, 0.01);
+    EXPECT_NEAR (spl.peakDb - spl.leqSessionDb, 3.0103, 0.05);
 }
 
 TEST (RtaSpl, WeightingDifferenceMatchesDefinition)
@@ -128,13 +131,16 @@ TEST (RtaSpl, FullBandReferenceMakesBinCenteredFullScaleSineZeroDbfs)
     analyzer.configure (sampleRate, 3, 0.1);
     analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::zWeighted);
 
-    feed (analyzer, makeSine (4.0 * sampleRate / (double) (1 << eeq::dsp::RtaSplAnalyzer::fftOrder), 1.0, 3.0));
+    // 時間領域の SPL では Fast の時定数だと 47 Hz のリップル（±0.06 dB）が残るので Slow で読む
+    analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::slow);
+    feed (analyzer, makeSine (4.0 * sampleRate / (double) (1 << eeq::dsp::RtaSplAnalyzer::fftOrder), 1.0, 8.0));
 
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
     analyzer.copySpl (spl);
 
     ASSERT_TRUE (spl.hasSignal);
     EXPECT_NEAR (spl.currentDb, 0.0, 0.05);
+    EXPECT_NEAR (spl.leqSessionDb, 0.0, 0.05);
 }
 
 TEST (RtaSpl, AdjacentLowBandsPartitionBoundaryBinPower)
@@ -169,9 +175,9 @@ TEST (RtaSpl, ToneLandsInCorrectBand)
     eeq::dsp::RtaSplAnalyzer analyzer;
     analyzer.configure (sampleRate, 3, 0.5);
 
-    // 帯域中心そのものの周波数を使う
-    // （中心は 20·2^(k/3) の幾何系列）
-    feed (analyzer, makeSine (20.0 * std::pow (2.0, 23.0 / 3.0), 0.5, 1.5));
+    // 帯域中心そのものの周波数を使う（IEC 61260: 1000·10^(0.3n/3)。n=6 → 3981 Hz）
+    const auto toneFreq = eeq::dsp::RtaSplAnalyzer::exactBandCenter (6, 3);
+    feed (analyzer, makeSine (toneFreq, 0.5, 1.5));
 
     eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
     analyzer.copyRta (frame);
@@ -191,8 +197,8 @@ TEST (RtaSpl, ToneLandsInCorrectBand)
         }
     }
 
-    const auto toneFreq = 20.0 * std::pow (2.0, 23.0 / 3.0);
-    EXPECT_NEAR (frame.centerFreq[(size_t) best], toneFreq, toneFreq * 0.05);
+    EXPECT_NEAR (frame.centerFreq[(size_t) best], toneFreq, 1.0e-6);
+    EXPECT_DOUBLE_EQ (frame.nominalFreq[(size_t) best], 4000.0);
 }
 
 TEST (RtaSpl, WhiteNoiseBandsRiseThreeDbPerOctave)
@@ -260,4 +266,145 @@ TEST (RtaSpl, RtaScaleTopUsesOffsetDirectly)
     EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (0.0), 0.0f);
     EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (134.0), 134.0f);
     EXPECT_EQ (eeq::dsp::RtaSplAnalyzer::rtaScaleTopDb (-6.0), -6.0f);
+}
+
+namespace
+{
+// IEC 61672-1 のトーンバースト試験: 定常の 4 kHz 正弦波の表示値に対する、
+// 長さ T のバーストの最大表示値の差 [dB]
+double toneburstResponseDb (eeq::dsp::RtaSplAnalyzer::TimeConstant timeConstant, double burstSeconds)
+{
+    eeq::dsp::RtaSplAnalyzer analyzer;
+    analyzer.configure (sampleRate, 3, 0.5);
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
+    analyzer.setTimeConstant (timeConstant);
+
+    // 定常値（Slow でも十分収束する 8 秒）
+    feed (analyzer, makeSine (4000.0, 0.5, 8.0));
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot steady;
+    analyzer.copySpl (steady);
+
+    analyzer.resetSpl();
+    feed (analyzer, std::vector<float> ((size_t) sampleRate, 0.0f)); // 1 秒の無音
+
+    // 4 kHz は 12 サンプル周期なので、バーストは整数周期で終わる
+    const auto burst = makeSine (4000.0, 0.5, burstSeconds);
+    double maxDb = -300.0;
+
+    for (size_t start = 0; start < burst.size(); start += 16)
+    {
+        analyzer.process (burst.data() + start, (int) std::min ((size_t) 16, burst.size() - start));
+        eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+        analyzer.copySpl (spl);
+        maxDb = std::max (maxDb, spl.currentDb);
+    }
+
+    return maxDb - steady.currentDb;
+}
+} // namespace
+
+// #111: Fast / Slow は時間領域で 2 乗 → 指数平滑する。IEC 61672-1 表 4 の基準値
+// （10·log10(1 − e^(−T/τ))）に、Class 1 の許容差より十分小さい ±0.3 dB で一致する。
+// 旧実装（8192 点 Hann 窓のフレームエネルギーを平滑）は 200 ms −1.35 / 10 ms −12.6 / 1 ms −22.6 だった
+TEST (RtaSpl, FastToneburstResponseMatchesIec61672)
+{
+    using TC = eeq::dsp::RtaSplAnalyzer::TimeConstant;
+    EXPECT_NEAR (toneburstResponseDb (TC::fast, 0.200), -1.0, 0.3);
+    EXPECT_NEAR (toneburstResponseDb (TC::fast, 0.010), -11.0, 0.3);
+    EXPECT_NEAR (toneburstResponseDb (TC::fast, 0.001), -21.0, 0.3);
+}
+
+TEST (RtaSpl, SlowToneburstResponseMatchesIec61672)
+{
+    using TC = eeq::dsp::RtaSplAnalyzer::TimeConstant;
+    EXPECT_NEAR (toneburstResponseDb (TC::slow, 0.500), -4.1, 0.3);
+    EXPECT_NEAR (toneburstResponseDb (TC::slow, 0.200), -7.4, 0.3);
+}
+
+// #111: SPL 経路の重み付け IIR は、20 Hz〜16 kHz で IEC 61672 の定義式に ±0.5 dB で一致する
+TEST (RtaSpl, WeightingIirMatchesDefinition)
+{
+    using W = eeq::dsp::RtaSplAnalyzer::Weighting;
+
+    for (const auto fs : { 44100.0, 48000.0, 96000.0 })
+    {
+        for (int n = -17; n <= 12; ++n)
+        {
+            const auto f = eeq::dsp::RtaSplAnalyzer::exactBandCenter (n, 10);
+
+            EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::weightingFilterResponseDb (W::aWeighted, f, fs),
+                         eeq::dsp::RtaSplAnalyzer::aWeightingDb (f), 0.5) << "A fs=" << fs << " f=" << f;
+            EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::weightingFilterResponseDb (W::cWeighted, f, fs),
+                         eeq::dsp::RtaSplAnalyzer::cWeightingDb (f), 0.5) << "C fs=" << fs << " f=" << f;
+        }
+
+        EXPECT_NEAR (eeq::dsp::RtaSplAnalyzer::weightingFilterResponseDb (W::zWeighted, 50.0, fs), 0.0, 1.0e-12);
+    }
+}
+
+// #116: 帯域中心は IEC 61260 の基数10（1000·10^(0.3n/b)）。1 kHz バンドの中心が 1000 Hz ちょうどで、
+// 48 kHz では上端が fs/2 未満なので 20 kHz バンドを含む（旧実装は 1015.9 Hz、最上位 16.26 kHz）
+TEST (RtaSpl, BandCentresFollowIec61260Base10)
+{
+    eeq::dsp::RtaSplAnalyzer analyzer;
+    analyzer.configure (48000.0, 3, 0.5);
+
+    eeq::dsp::RtaSplAnalyzer::RtaFrame frame;
+    analyzer.copyRta (frame);
+
+    ASSERT_EQ (frame.centerFreq.size(), (size_t) 31); // 20 Hz〜20 kHz の 1/3 oct は 31 バンド
+    ASSERT_EQ (frame.nominalFreq.size(), frame.centerFreq.size());
+
+    EXPECT_NEAR (frame.centerFreq.front(), 19.953, 0.001);
+    EXPECT_DOUBLE_EQ (frame.nominalFreq.front(), 20.0);
+    EXPECT_NEAR (frame.centerFreq[17], 1000.0, 1.0e-9);
+    EXPECT_DOUBLE_EQ (frame.nominalFreq[17], 1000.0);
+    EXPECT_NEAR (frame.centerFreq.back(), 19952.6, 0.1);
+    EXPECT_DOUBLE_EQ (frame.nominalFreq.back(), 20000.0);
+
+    const double expectedNominal[] = { 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500,
+                                       630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000,
+                                       10000, 12500, 16000, 20000 };
+
+    for (size_t i = 0; i < frame.nominalFreq.size(); ++i)
+        EXPECT_NEAR (frame.nominalFreq[i], expectedNominal[i], 1.0e-9) << i;
+
+    // 44.1 kHz では 20 kHz バンドの上端（22.39 kHz）が fs/2 を超えるので含めない
+    eeq::dsp::RtaSplAnalyzer analyzer441;
+    analyzer441.configure (44100.0, 3, 0.5);
+    analyzer441.copyRta (frame);
+    ASSERT_EQ (frame.centerFreq.size(), (size_t) 30);
+    EXPECT_DOUBLE_EQ (frame.nominalFreq.back(), 16000.0);
+
+    // 1/6 oct: 1/3 oct と共通の帯域は R10 の公称値、それ以外は有効数字3桁
+    EXPECT_DOUBLE_EQ (eeq::dsp::RtaSplAnalyzer::nominalBandFrequency (eeq::dsp::RtaSplAnalyzer::exactBandCenter (2, 6), 6),
+                      1250.0);
+    EXPECT_DOUBLE_EQ (eeq::dsp::RtaSplAnalyzer::nominalBandFrequency (eeq::dsp::RtaSplAnalyzer::exactBandCenter (1, 6), 6),
+                      1120.0);
+}
+
+// #119 (3): 重み付けを切り替えたら Leq をリセットする（A と C を混ぜない）
+TEST (RtaSpl, ChangingWeightingRestartsLeq)
+{
+    eeq::dsp::RtaSplAnalyzer analyzer;
+    analyzer.configure (sampleRate, 3, 0.5);
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
+    analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+
+    // 100 Hz: A = −19.1 dB、C = −0.3 dB
+    const auto tone = makeSine (100.0, 0.5, 3.0);
+    feed (analyzer, tone);
+
+    analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::cWeighted);
+    feed (analyzer, tone);
+
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
+    analyzer.copySpl (spl);
+
+    const auto expectedC = 20.0 * std::log10 (0.5) + eeq::dsp::RtaSplAnalyzer::cWeightingDb (100.0);
+
+    // 混ざっていると (A と C のエネルギー平均で) 約 −3 dB 低く出る
+    EXPECT_NEAR (spl.leqSessionDb, expectedC, 0.1);
+    EXPECT_NEAR (spl.leq1minDb, expectedC, 0.1);
+    EXPECT_NEAR (spl.sessionSeconds, 3.0, 0.01);
 }

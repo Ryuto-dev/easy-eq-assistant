@@ -22,6 +22,14 @@ struct AudioEngineCallbackTestAccess
     {
         engine.audioDeviceIOCallbackWithContext (nullptr, 0, &output, 1, samples, {});
     }
+
+    static void render2 (AudioEngine& engine, float* out0, float* out1, int samples)
+    {
+        float* outs[] = { out0, out1 };
+        engine.audioDeviceIOCallbackWithContext (nullptr, 0, outs, 2, samples, {});
+    }
+
+    static void stopDevice (AudioEngine& engine) { engine.audioDeviceStopped(); }
 };
 }
 
@@ -248,6 +256,162 @@ TEST (Audio, UiWatchdogAcceptsFreshHeartbeatBefore8192SampleCallbackAt44100Hz)
         EXPECT_FLOAT_EQ (rmsOf (output, 0), 0.0f);
         EXPECT_FALSE (engine.consumeUiWatchdogStop());
     }
+}
+
+
+class TwoOutputTestDevice final : public juce::AudioIODevice
+{
+public:
+    TwoOutputTestDevice() : AudioIODevice ("Two outputs", "Test") {}
+
+    static constexpr int blockSize = 256;
+    static constexpr double sampleRate = 48000.0;
+
+    juce::StringArray getOutputChannelNames() override { return { "Out 1", "Out 2" }; }
+    juce::StringArray getInputChannelNames() override { return {}; }
+    juce::Array<double> getAvailableSampleRates() override { return { sampleRate }; }
+    juce::Array<int> getAvailableBufferSizes() override { return { blockSize }; }
+    int getDefaultBufferSize() override { return blockSize; }
+    juce::String open (const juce::BigInteger&, const juce::BigInteger&, double, int) override { return {}; }
+    void close() override {}
+    bool isOpen() override { return true; }
+    void start (juce::AudioIODeviceCallback*) override {}
+    void stop() override {}
+    bool isPlaying() override { return false; }
+    juce::String getLastError() override { return {}; }
+    int getCurrentBufferSizeSamples() override { return blockSize; }
+    double getCurrentSampleRate() override { return sampleRate; }
+    int getCurrentBitDepth() override { return 32; }
+    juce::BigInteger getActiveOutputChannels() const override { return juce::BigInteger (3); }
+    juce::BigInteger getActiveInputChannels() const override { return {}; }
+    int getOutputLatencyInSamples() override { return 0; }
+    int getInputLatencyInSamples() override { return 0; }
+};
+
+// issue #102: デバイス停止中に止めた励起は、再オープンしても鳴り出さない
+TEST (Audio, StopDuringDeviceRestartIsNotUndoneOnReopen)
+{
+    using eeq::audio::AudioEngine;
+    using Access = eeq::audio::AudioEngineCallbackTestAccess;
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    TwoOutputTestDevice device;
+    AudioEngine engine (nullptr);
+    std::vector<float> a (TwoOutputTestDevice::blockSize), b (TwoOutputTestDevice::blockSize);
+
+    Access::prepare (engine, device);
+    engine.startExcitation();
+
+    for (int i = 0; i < 200; ++i) // フェードイン完了まで
+    {
+        engine.kickUiWatchdog();
+        Access::render2 (engine, a.data(), b.data(), (int) a.size());
+    }
+
+    ASSERT_TRUE (engine.isExcitationAudible());
+
+    // デバイスが止まる → その間に Esc → 再オープン
+    Access::stopDevice (engine);
+    engine.emergencyStop();
+    Access::prepare (engine, device);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        engine.kickUiWatchdog();
+        Access::render2 (engine, a.data(), b.data(), (int) a.size());
+        EXPECT_FLOAT_EQ (rmsOf (a, 0), 0.0f) << "block " << i;
+    }
+
+    EXPECT_FALSE (engine.isExcitationAudible());
+    EXPECT_TRUE (engine.consumeStoppedByDeviceRestart());
+
+    // 停止を押していなくても、デバイスが止まったら自動では再開しない（安全側）
+    engine.startExcitation();
+
+    for (int i = 0; i < 200; ++i)
+    {
+        engine.kickUiWatchdog();
+        Access::render2 (engine, a.data(), b.data(), (int) a.size());
+    }
+
+    Access::stopDevice (engine);
+    Access::prepare (engine, device);
+    engine.kickUiWatchdog();
+    Access::render2 (engine, a.data(), b.data(), (int) a.size());
+    EXPECT_FLOAT_EQ (rmsOf (a, 0), 0.0f);
+}
+
+// issue #104: 鳴っている最中のルーティング切替は、旧chをフェードアウト → 新chを 0 からフェードイン
+TEST (Audio, RoutingChangeWhileAudibleFadesInsteadOfJumping)
+{
+    using eeq::audio::AudioEngine;
+    using Access = eeq::audio::AudioEngineCallbackTestAccess;
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    TwoOutputTestDevice device;
+    AudioEngine engine (nullptr);
+    engine.setOutputRoutingMask (1); // ch1 だけ
+    Access::prepare (engine, device);
+    engine.setNoiseLevelDb (-20.0f);
+    engine.startExcitation();
+
+    std::vector<float> a (TwoOutputTestDevice::blockSize), b (TwoOutputTestDevice::blockSize);
+
+    for (int i = 0; i < 200; ++i)
+    {
+        engine.kickUiWatchdog();
+        Access::render2 (engine, a.data(), b.data(), (int) a.size());
+    }
+
+    const auto steadyRms = rmsOf (a, 0);
+    ASSERT_GT (steadyRms, 0.05);
+
+    // ch2 へ切替
+    engine.setOutputRoutingMask (2);
+    std::vector<float> allA, allB;
+
+    for (int i = 0; i < 200; ++i)
+    {
+        engine.kickUiWatchdog();
+        Access::render2 (engine, a.data(), b.data(), (int) a.size());
+        allA.insert (allA.end(), a.begin(), a.end());
+        allB.insert (allB.end(), b.begin(), b.end());
+    }
+
+    // ch2 の最初の 10 ms はまだ小さい（いきなりフルレベルにならない）
+    const auto firstMsRms = [] (const std::vector<float>& v, size_t start, size_t count)
+    {
+        double sum = 0.0;
+        for (size_t i = start; i < start + count; ++i)
+            sum += (double) v[i] * v[i];
+        return std::sqrt (sum / (double) count);
+    };
+
+    size_t firstNonZero = 0;
+    while (firstNonZero < allB.size() && allB[firstNonZero] == 0.0f)
+        ++firstNonZero;
+
+    ASSERT_LT (firstNonZero, allB.size());
+    EXPECT_LT (firstMsRms (allB, firstNonZero, 480), steadyRms * 0.2);
+
+    // ch2 が鳴り始めた時点では ch1 はもう無音（同時に両方から出ない）
+    for (size_t i = firstNonZero; i < allA.size(); ++i)
+        ASSERT_EQ (allA[i], 0.0f) << i;
+
+    // 最終的には ch2 だけが定常レベル
+    EXPECT_NEAR (rmsOf (b, 0), steadyRms, steadyRms * 0.25);
+    EXPECT_FLOAT_EQ (rmsOf (a, 0), 0.0f);
+}
+
+// issue #126: 64ch でもマスクの計算が未定義動作にならない
+TEST (Audio, ChannelMaskHandles64Channels)
+{
+    using eeq::audio::AudioEngine;
+    EXPECT_EQ (AudioEngine::channelMaskFor (0), 0ull);
+    EXPECT_EQ (AudioEngine::channelMaskFor (2), 3ull);
+    EXPECT_EQ (AudioEngine::channelMaskFor (63), 0x7fffffffffffffffull);
+    EXPECT_EQ (AudioEngine::channelMaskFor (64), ~0ull);
+    EXPECT_EQ (AudioEngine::channelMaskFor (128), ~0ull);
 }
 
 } // namespace

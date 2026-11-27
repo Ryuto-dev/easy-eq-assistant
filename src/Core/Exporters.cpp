@@ -16,14 +16,17 @@ namespace
 class TextFileWriter
 {
 public:
-    explicit TextFileWriter (const juce::File& file)
-        : stream (file.createOutputStream())
+    // 一時ファイルに書き、finalize() で対象と差し替える（issue #120: 同名に書き出すと
+    // 既存ファイルの末尾へ追記されて CSV/REW が壊れていた）
+    explicit TextFileWriter (const juce::File& fileToWrite)
+        : target (fileToWrite), temp (fileToWrite)
     {
+        stream = temp.getFile().createOutputStream();
+
         if (stream != nullptr && stream->openedOk())
         {
             const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
-            stream->write (bom, 3);
-            ok = true;
+            ok = stream->write (bom, 3);
         }
     }
 
@@ -31,20 +34,24 @@ public:
 
     void writeLine (const std::string& line)
     {
-        if (stream != nullptr)
-            stream->write (line.data(), (size_t) line.size());
+        if (stream != nullptr && ok)
+            ok = stream->write (line.data(), (size_t) line.size());
     }
 
-    bool finalize() const
+    bool finalize()
     {
-        if (stream == nullptr)
+        if (stream == nullptr || ! ok)
             return false;
 
         stream->flush();
-        return stream->getStatus().wasOk();
+        const auto wasOk = stream->getStatus().wasOk();
+        stream.reset();
+        return wasOk && temp.overwriteTargetFileWithTemporary();
     }
 
 private:
+    juce::File target;
+    juce::TemporaryFile temp;
     std::unique_ptr<juce::FileOutputStream> stream;
     bool ok = false;
 };
@@ -117,22 +124,72 @@ juce::String writeSnapshotRewText (const eeq::dsp::SpectrumFrame& frame, const j
                              : juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
 }
 
+juce::String writeFileAtomically (const juce::File& file, const std::function<bool (juce::OutputStream&)>& writeBody)
+{
+    juce::TemporaryFile temp (file);
+
+    {
+        std::unique_ptr<juce::FileOutputStream> stream (temp.getFile().createOutputStream());
+
+        if (stream == nullptr || ! stream->openedOk())
+            return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
+
+        if (! writeBody (*stream))
+            return juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
+
+        stream->flush();
+
+        if (! stream->getStatus().wasOk())
+            return juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName()
+                 + " (" + stream->getStatus().getErrorMessage() + ")";
+    }
+
+    if (! temp.overwriteTargetFileWithTemporary())
+        return juce::String (u8"ファイルを置き換えられませんでした: ") + file.getFullPathName();
+
+    return {};
+}
+
+juce::String writePng (const juce::Image& image, const juce::File& file)
+{
+    return writeFileAtomically (file, [&image] (juce::OutputStream& out)
+    {
+        juce::PNGImageFormat png;
+        return png.writeImageToStream (image, out);
+    });
+}
+
 juce::String writeImpulseResponseWav (const eeq::dsp::ImpulseResponse& ir, const juce::File& file)
 {
     if (ir.samples.empty())
         return juce::String (u8"インパルス応答がありません");
 
-    juce::WavAudioFormat wavFormat;
-    std::unique_ptr<juce::AudioFormatWriter> writer (
-        wavFormat.createWriterFor (new juce::FileOutputStream (file),
-                                   ir.sampleRate, 1, 32, {}, 0));
+    juce::TemporaryFile temp (file);
 
-    if (writer == nullptr)
-        return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
+    {
+        auto stream = std::make_unique<juce::FileOutputStream> (temp.getFile());
 
-    const auto* samples = ir.samples.data();
-    writer->writeFromFloatArrays (&samples, 1, (int) ir.samples.size());
-    writer.reset(); // flush
+        if (! stream->openedOk())
+            return juce::String (u8"ファイルに書き込めませんでした: ") + file.getFullPathName();
+
+        juce::WavAudioFormat wavFormat;
+        auto* rawStream = stream.get();
+        std::unique_ptr<juce::AudioFormatWriter> writer (
+            wavFormat.createWriterFor (rawStream, ir.sampleRate, 1, 32, {}, 0));
+
+        if (writer == nullptr)
+            return juce::String (u8"WAV を作成できませんでした: ") + file.getFullPathName(); // stream は unique_ptr が解放する
+
+        stream.release(); // 以降は writer が所有する
+
+        const auto* samples = ir.samples.data();
+
+        if (! writer->writeFromFloatArrays (&samples, 1, (int) ir.samples.size()))
+            return juce::String (u8"ファイルへの書き込みに失敗しました: ") + file.getFullPathName();
+    } // writer の破棄でヘッダを確定して閉じる
+
+    if (! temp.overwriteTargetFileWithTemporary())
+        return juce::String (u8"ファイルを置き換えられませんでした: ") + file.getFullPathName();
 
     return {};
 }

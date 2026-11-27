@@ -307,8 +307,13 @@ void RtaSplTab::refreshFromSettings()
 
         floorLevels.clear();
 
-        for (const auto value : readArray (levelsVar))
-            floorLevels.push_back ((float) value);
+        // フロアは校正オフセット抜きの dBFS で保存する（issue #123）。旧形式（取得時のオフセット込み）は
+        // どのオフセットで取ったか分からないので使わない（S/N が 100 dB 以上ずれるのを防ぐ）
+        if (ctx.settings.getValue (juce::String (settingsFloorKey) + "Units") == "dbfs")
+            for (const auto value : readArray (levelsVar))
+                floorLevels.push_back ((float) value);
+        else
+            floorCenters.clear();
     }
 
     weightingCombo.onChange();
@@ -352,6 +357,7 @@ void RtaSplTab::timerTick()
     if (! analyzer.tryCopyAll (frame, spl))
         return; // 解析中なら前回表示を維持し、UIスレッドは待たない
     rtaCenters = frame.centerFreq;
+    rtaNominals = frame.nominalFreq.size() == frame.centerFreq.size() ? frame.nominalFreq : frame.centerFreq;
     rtaLevels = frame.levelDb;
     rtaPeakLevels = frame.peakHoldDb;
     lastSplDb = spl.currentDb;
@@ -380,6 +386,12 @@ void RtaSplTab::timerTick()
         noiseFloorMeasuring = false;
         floorCenters = rtaCenters;
         floorLevels = rtaLevels;
+
+        // 取得時の校正オフセットを引いて dBFS で持つ（issue #123）。比較は現在のオフセットを足して行う
+        for (auto& level : floorLevels)
+            if (level > -200.0f)
+                level -= (float) ctx.engine.getSplAnalyzer().getCalibrationOffsetDb();
+
         noiseFloorButton.setButtonText (strings::snrNoiseFloorButton);
 
         // 設定に保存する
@@ -393,6 +405,7 @@ void RtaSplTab::timerTick()
 
         ctx.settings.setValue (settingsFloorCentersKey, centerTokens.joinIntoString (","));
         ctx.settings.setValue (settingsFloorKey, levelTokens.joinIntoString (","));
+        ctx.settings.setValue (juce::String (settingsFloorKey) + "Units", "dbfs");
         ctx.settings.saveIfNeeded();
         eeq::log::write ("noise floor captured (" + juce::String (floorCenters.size()) + " bands)");
     }
@@ -414,7 +427,7 @@ void RtaSplTab::timerTick()
                     && floorLevels[i] > -200.0f && rtaLevels[i] > -200.0f)
                 {
                     sumSignal += std::pow (10.0, rtaLevels[i] / 10.0);
-                    sumFloor += std::pow (10.0, floorLevels[i] / 10.0);
+                    sumFloor += std::pow (10.0, floorLevelNow (i) / 10.0);
                     ++validBands;
                 }
             }
@@ -482,13 +495,24 @@ void RtaSplTab::processCalibrationPending()
     {
         calibrationOffsetPending = false;
         calibrationOffsetLabel.setText (
-            juce::String (u8"校正用の音を入力で検出できません。音源・入力ゲイン・接続を確認してください。"),
+            strings::calibrationNoSignal,
             juce::dontSendNotification);
     }
 }
 
+float RtaSplTab::floorLevelNow (size_t index) const
+{
+    // 保存したフロア（dBFS）を、表示中の RTA と同じ基準（現在の校正オフセット込み）にする
+    return floorLevels[index] + (float) ctx.engine.getSplAnalyzer().getCalibrationOffsetDb();
+}
+
 void RtaSplTab::timerTickBackground()
 {
+    // 非表示でもサンプルレートの変化には追従する（issue #113: 本番モード・SPL ログ・上限測定は
+    // RTA タブを開かずに使うため、ここで張り直さないと古い fs のフィルタ・時定数で計算し続けた）
+    if (std::abs (ctx.engine.getCurrentSampleRate() - configuredSampleRate) > 0.5)
+        applyAnalyzerConfig();
+
     // 非表示タブ用の軽量ティック（issue #55）: 校正オフセット待ちの進行だけを行う
     processCalibrationPending();
 }
@@ -515,7 +539,7 @@ void RtaSplTab::applyCalibrationOffset()
 
     if (! std::isfinite (meterValue) || meterValue < 30.0 || meterValue > 140.0)
     {
-        calibrationOffsetLabel.setText (juce::String (u8"騒音計の値は 30〜140 dB で入力してください"),
+        calibrationOffsetLabel.setText (strings::calibrationMeterRange,
                                         juce::dontSendNotification);
         return;
     }
@@ -537,7 +561,7 @@ void RtaSplTab::applyCalibrationOffset()
     calibrationOffsetPending = true;
     calibrationMeterValue = meterValue;
     calibrationDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
-    calibrationOffsetLabel.setText (juce::String (u8"A/Fast の新しい測定値を取得しています…"),
+    calibrationOffsetLabel.setText (strings::calibrationAcquiring,
                                     juce::dontSendNotification);
 }
 
@@ -622,7 +646,7 @@ void RtaSplTab::updateSnHint()
         if (rtaCenters[i] < 100.0 || rtaCenters[i] > 10000.0)
             continue;
 
-        const auto snr = rtaLevels[i] - floorLevels[i];
+        const auto snr = rtaLevels[i] - floorLevelNow (i);
 
         if (snr < 10.0)
             lowSnr = true;
@@ -682,7 +706,7 @@ void RtaSplTab::paint (juce::Graphics& g)
             if (rtaLevels[(size_t) i] < -200.0f || floorLevels[(size_t) i] < -200.0f)
                 continue;
 
-            const auto snr = rtaLevels[(size_t) i] - floorLevels[(size_t) i];
+            const auto snr = rtaLevels[(size_t) i] - floorLevelNow ((size_t) i);
             const auto colour = snr >= 20.0f ? theme::get (theme::ColourId::ok).withAlpha (0.10f)
                               : snr >= 10.0f ? theme::get (theme::ColourId::warn).withAlpha (0.10f)
                                              : theme::get (theme::ColourId::danger).withAlpha (0.12f);
@@ -734,13 +758,20 @@ void RtaSplTab::paint (juce::Graphics& g)
 
     for (int i = 0; i < count; ++i)
     {
-        const auto f = rtaCenters[(size_t) i];
-        const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
+        // ラベルは公称周波数（IEC 61260 の 1 kHz 基準: issue #116）のオクターブ系列だけ
+        const auto f = i < (int) rtaNominals.size() ? rtaNominals[(size_t) i] : rtaCenters[(size_t) i];
+        static constexpr double labelled[] = { 31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0 };
+        bool show = false;
 
-        if (std::abs (stepsFrom20 - std::round (stepsFrom20)) >= 0.05)
+        for (const auto l : labelled)
+            show = show || std::abs (f - l) < l * 0.01;
+
+        if (! show)
             continue;
 
-        const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
+        const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k"
+                                      : (f < 100.0 && std::abs (f - std::round (f)) > 0.01 ? juce::String (f, 1)
+                                                                                           : juce::String ((int) f));
         const auto x = plotArea.getX() + ((float) i + 0.5f) * barWidth;
         g.drawText (text, (int) x - 22, (int) plotArea.getBottom() + 2, 44, 12, juce::Justification::centred);
     }
@@ -766,8 +797,8 @@ void RtaSplTab::paint (juce::Graphics& g)
     }
 
     g.setColour (theme::get (theme::ColourId::gridText));
-    g.drawText (std::abs (splTopDb) < 0.01f ? juce::String (u8"dBFS（未校正）")
-                                            : juce::String (u8"dB SPL（校正済み）"),
+    g.drawText (std::abs (splTopDb) < 0.01f ? strings::rtaScaleUncalibrated
+                                            : strings::rtaScaleCalibrated,
                 (int) plotArea.getX () - 40, (int) plotArea.getY () - 18, 150, 12,
                 juce::Justification::centredLeft);
 }
@@ -828,9 +859,13 @@ void RtaSplTab::resized()
     calibrationMeterEditor.setBounds (calRow2.removeFromLeft (70));
     calRow2.removeFromLeft (6);
     calibrationApplyButton.setBounds (calRow2.removeFromLeft (120));
-    calibrationOffsetLabel.setBounds (calRow2);
-    auto calRow3 = calibrationPanel.removeFromTop (26);
-    calibrationResetButton.setBounds (calRow3.removeFromLeft (120));
+    // 校正結果・エラーは専用の行に置き、2行まで折り返して全文を読めるようにする（issue #137:
+    // 1100 px 幅では残り幅が約 8 px しかなく、エラー文が読めなかった）
+    auto calRow3 = calibrationPanel.removeFromTop (34);
+    calibrationResetButton.setBounds (calRow3.removeFromLeft (120).withHeight (26));
+    calRow3.removeFromLeft (6);
+    calibrationOffsetLabel.setBounds (calRow3);
+    calibrationOffsetLabel.setMinimumHorizontalScale (1.0f);
     calibrationPanel.removeFromTop (2);
     calibrationGuideLabel.setBounds (calibrationPanel);
 
