@@ -150,8 +150,21 @@ int TransferFunctionAccumulator::feedSamples (const float* refSamples, const flo
 
     for (int i = 0; i < numSamples; ++i)
     {
-        assemblyRef[(size_t) assemblyPos] = refSamples[i];
-        assemblyMeas[(size_t) assemblyPos] = measSamples[i];
+        // 非有限値（NaN/Inf）は 0 にする。1サンプルでも Welch 平均に入ると
+        // std::max / jlimit をすり抜けて、リセットするまで結果を汚染し続ける（#119）
+        auto r = refSamples[i];
+        auto m = measSamples[i];
+
+        if (! std::isfinite (r) || ! std::isfinite (m))
+        {
+            nonFiniteSamples.fetch_add ((std::isfinite (r) ? 0 : 1) + (std::isfinite (m) ? 0 : 1),
+                                        std::memory_order_relaxed);
+            r = std::isfinite (r) ? r : 0.0f;
+            m = std::isfinite (m) ? m : 0.0f;
+        }
+
+        assemblyRef[(size_t) assemblyPos] = r;
+        assemblyMeas[(size_t) assemblyPos] = m;
         assemblyPos = (assemblyPos + 1) % fftSize;
         ++totalFed;
 
@@ -299,6 +312,8 @@ void TransferFunctionAccumulator::updateResult()
     result.refPowerDb.resize (halfBins);
     result.measPowerDb.resize (halfBins);
 
+    const auto coherenceDefined = result.hasReliableCoherence();
+
     for (size_t k = 0; k < halfBins; ++k)
     {
         const auto xx = std::max (gxx[k], 1e-30);
@@ -312,7 +327,9 @@ void TransferFunctionAccumulator::updateResult()
         phaseDeg = std::remainder (phaseDeg, 360.0); // −180..180 に折り返す（仕様 3.1）
         result.phaseDeg[k] = (float) phaseDeg;
 
-        result.coherence[k] = (float) juce::jlimit (0.0, 1.0, std::norm (gxy[k]) / (xx * yy));
+        // 平均1回では |Gxy|² = Gxx·Gyy なので γ² は全 bin で 1 になる。未確定として 0 を返す（#119）
+        result.coherence[k] = coherenceDefined ? (float) juce::jlimit (0.0, 1.0, std::norm (gxy[k]) / (xx * yy))
+                                               : 0.0f;
 
         // 窓ゲインは補正していない相対値（S/N表示では差を見るため問題ない）
         result.refPowerDb[k] = (float) (10.0 * std::log10 (xx));

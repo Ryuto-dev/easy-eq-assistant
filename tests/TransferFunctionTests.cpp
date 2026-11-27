@@ -3,6 +3,8 @@
 #include "DSP/TransferFunctionAccumulator.h"
 
 #include <cmath>
+#include <limits>
+#include <random>
 #include <vector>
 
 // 仕様 7.2「既知の応答で検証する」: 理論値が既知の信号（ゲインと遅延を持つ系）を
@@ -82,4 +84,92 @@ TEST (TransferFunctionAccumulator, ResetClearsAverages)
     eeq::dsp::SpectrumFrame frame;
     accumulator.copyResult (frame);
     EXPECT_EQ (frame.averages, 0);
+}
+
+// #119 (1): NaN / Inf が1サンプル入っても Welch 平均を汚染しない（0 に置き換える）
+TEST (TransferFunctionAccumulator, NonFiniteInputIsSanitized)
+{
+    constexpr int fftSize = 2048;
+    constexpr int bin = 64;
+
+    eeq::dsp::TransferFunctionAccumulator accumulator;
+    accumulator.configure (fftSize, 48000.0, { eeq::dsp::AveragingConfig::Mode::cumulative, 256 },
+                           juce::dsp::WindowingFunction<float>::hann);
+
+    const auto total = fftSize * 8;
+    std::vector<float> ref ((size_t) total), meas ((size_t) total);
+
+    for (int i = 0; i < total; ++i)
+    {
+        ref[(size_t) i] = (float) std::sin (2.0 * juce::MathConstants<double>::pi * bin * i / (double) fftSize);
+        meas[(size_t) i] = 0.5f * ref[(size_t) i];
+    }
+
+    meas[(size_t) fftSize + 100] = std::numeric_limits<float>::quiet_NaN();
+    ref[(size_t) fftSize * 3] = std::numeric_limits<float>::infinity();
+
+    accumulator.feedSamples (ref.data(), meas.data(), total);
+
+    eeq::dsp::SpectrumFrame frame;
+    accumulator.copyResult (frame);
+
+    EXPECT_EQ (accumulator.getNonFiniteSampleCount(), 2);
+
+    for (size_t k = 0; k < frame.transfer.size(); ++k)
+    {
+        ASSERT_TRUE (std::isfinite (frame.magnitudeDb[k])) << k;
+        ASSERT_TRUE (std::isfinite (frame.coherence[k])) << k;
+        ASSERT_TRUE (std::isfinite (frame.transfer[k].real()) && std::isfinite (frame.transfer[k].imag())) << k;
+    }
+
+    // 1サンプルの欠落でも推定値はほぼ変わらない（−6.02 dB）
+    EXPECT_NEAR (frame.magnitudeDb[(size_t) bin], -6.02f, 0.1f);
+}
+
+// #119 (2): 平均1回のコヒーレンスは定義上 1.0 になるので未確定（0）として返す
+TEST (TransferFunctionAccumulator, CoherenceIsUndefinedWithSingleAverage)
+{
+    constexpr int fftSize = 2048;
+
+    eeq::dsp::TransferFunctionAccumulator accumulator;
+    accumulator.configure (fftSize, 48000.0, { eeq::dsp::AveragingConfig::Mode::cumulative, 256 },
+                           juce::dsp::WindowingFunction<float>::hann);
+
+    // 無相関なノイズ同士: 本来 γ² ≈ 0 だが、平均1回では全 bin 1.0 になっていた
+    std::mt19937 rng (3);
+    std::uniform_real_distribution<float> dist (-0.5f, 0.5f);
+    std::vector<float> ref ((size_t) fftSize * 4), meas ((size_t) fftSize * 4);
+
+    for (size_t i = 0; i < ref.size(); ++i)
+    {
+        ref[i] = dist (rng);
+        meas[i] = dist (rng);
+    }
+
+    accumulator.feedSamples (ref.data(), meas.data(), fftSize); // ちょうど1フレーム
+
+    eeq::dsp::SpectrumFrame frame;
+    accumulator.copyResult (frame);
+
+    ASSERT_EQ (frame.averages, 1);
+    EXPECT_FALSE (frame.hasReliableCoherence());
+
+    for (const auto c : frame.coherence)
+        ASSERT_EQ (c, 0.0f);
+
+    // 2回目以降は通常どおり計算する（無相関なので低い値になる）
+    accumulator.feedSamples (ref.data() + fftSize, meas.data() + fftSize, fftSize * 3);
+    accumulator.copyResult (frame);
+
+    ASSERT_GE (frame.averages, 2);
+    EXPECT_TRUE (frame.hasReliableCoherence());
+
+    double mean = 0.0;
+
+    for (const auto c : frame.coherence)
+        mean += c;
+
+    mean /= (double) frame.coherence.size();
+    EXPECT_GT (mean, 0.0);
+    EXPECT_LT (mean, 0.6);
 }

@@ -41,9 +41,13 @@ struct SpectrumFrame
     std::vector<std::complex<float>> transfer; // H1（複素）
     std::vector<float> magnitudeDb;            // H1 の振幅 (dB)
     std::vector<float> phaseDeg;               // H1 の位相（−180..180、生位相）
-    std::vector<float> coherence;              // γ²（0..1）
+    std::vector<float> coherence;              // γ²（0..1）。平均2回未満では未確定なので全 bin 0（#119）
     std::vector<float> refPowerDb;             // Ref の自己パワー (dB)（S/N表示用）
     std::vector<float> measPowerDb;            // Meas の自己パワー (dB)
+
+    /** コヒーレンスが意味を持つか。平均1回では γ² は定義上すべて 1 になり
+        「信頼できる」と誤表示されるため、2回以上で初めて確定とみなす（#119） */
+    [[nodiscard]] bool hasReliableCoherence() const noexcept { return averages >= 2; }
 };
 
 class TransferFunctionAccumulator
@@ -65,6 +69,9 @@ public:
     void copyResult (SpectrumFrame& resultOut) const;
 
     int getAverages() const;
+
+    /** 入力に含まれていた非有限値（NaN/Inf）の数。0 に置き換えて処理している（#119） */
+    long long getNonFiniteSampleCount() const noexcept { return nonFiniteSamples.load (std::memory_order_relaxed); }
 
 private:
     void processFrame();
@@ -97,6 +104,7 @@ private:
     std::vector<std::complex<double>> gxy;
     long long averages = 0;
     std::atomic<int> publishedAverages { 0 };
+    std::atomic<long long> nonFiniteSamples { 0 };
 
     // FIFO 平均用: フレームごとの自己/相互パワー（float で保持してメモリを抑える）
     struct FifoSlot
