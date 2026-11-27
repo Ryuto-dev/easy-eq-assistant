@@ -1319,9 +1319,12 @@ void TransferFunctionTab::exportGraphPng()
                 return;
 
             const auto image = safeThis->graph.createComponentSnapshot (safeThis->graph.getLocalBounds(), true, 2.0f);
-            juce::PNGImageFormat png;
-            juce::FileOutputStream stream (file);
-            png.writeImageToStream (image, stream);
+            const auto error = eeq::core::exporters::writePng (image, file);
+
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        strings::snapshotExportTitle, error, strings::okButton,
+                                                        nullptr, nullptr);
         });
 }
 

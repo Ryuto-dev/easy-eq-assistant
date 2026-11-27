@@ -156,3 +156,54 @@ TEST (Utilities, ClipDb)
     EXPECT_NEAR (eeq::util::clipDb (-5.0, 0.0, 10.0), 0.0, 1.0e-9);
     EXPECT_NEAR (eeq::util::clipDb (15.0, 0.0, 10.0), 10.0, 1.0e-9);
 }
+
+#include "Core/Exporters.h"
+
+// issue #120: 同じパスへ書き出すと既存ファイルの末尾に追記され、CSV/WAV が壊れていた
+TEST (Exporters, WritingTwiceReplacesInsteadOfAppending)
+{
+    const auto file = juce::File::createTempFile (".csv");
+    file.replaceWithText ("OLD CONTENT THAT MUST DISAPPEAR\n");
+
+    std::vector<eeq::dsp::peq::Band> bands (1);
+    bands[0].frequency = 1000.0;
+    bands[0].gainDb = -3.0;
+    bands[0].q = 2.0;
+
+    ASSERT_TRUE (eeq::core::exporters::writeEQProposalCsv (bands, file).isEmpty());
+    const auto first = file.loadFileAsString();
+    ASSERT_TRUE (eeq::core::exporters::writeEQProposalCsv (bands, file).isEmpty());
+    const auto second = file.loadFileAsString();
+
+    EXPECT_FALSE (second.contains ("OLD CONTENT"));
+    EXPECT_EQ (first, second);
+    EXPECT_EQ (second.indexOf ("type,frequency_hz"), second.lastIndexOf ("type,frequency_hz"));
+
+    // WAV: 2回目の書き出しで長さの違う IR を書いても、読み戻すと2回目の内容だけ
+    eeq::dsp::ImpulseResponse ir;
+    ir.sampleRate = 48000.0;
+    ir.samples.assign (1000, 0.25f);
+    const auto wav = juce::File::createTempFile (".wav");
+    ASSERT_TRUE (eeq::core::exporters::writeImpulseResponseWav (ir, wav).isEmpty());
+    ir.samples.assign (300, -0.5f);
+    ASSERT_TRUE (eeq::core::exporters::writeImpulseResponseWav (ir, wav).isEmpty());
+
+    juce::WavAudioFormat format;
+    std::unique_ptr<juce::AudioFormatReader> reader (format.createReaderFor (new juce::FileInputStream (wav), true));
+    ASSERT_NE (reader, nullptr);
+    EXPECT_EQ (reader->lengthInSamples, 300);
+    juce::AudioBuffer<float> buffer (1, 300);
+    reader->read (&buffer, 0, 300, 0, true, false);
+    EXPECT_FLOAT_EQ (buffer.getSample (0, 10), -0.5f);
+
+    file.deleteFile();
+    wav.deleteFile();
+}
+
+// 書き込めない場所はエラーとして返す（成功を装わない）
+TEST (Exporters, UnwritableTargetReportsError)
+{
+    std::vector<eeq::dsp::peq::Band> bands (1);
+    const auto file = juce::File ("/nonexistent_dir_for_eeq_test/sub/x.csv");
+    EXPECT_FALSE (eeq::core::exporters::writeEQProposalCsv (bands, file).isEmpty());
+}

@@ -133,6 +133,7 @@ public:
     void restoreSystemCorrection (eeq::core::SystemCorrection& outCorrection) const;
 
 private:
+    static juce::String writeProjectJson (const juce::var& object, const juce::File& file);
     static juce::var venueToVar (const Venue& venue);
     static Venue venueFromVar (const juce::var& v);
     static juce::var snapshotToVar (const Snapshot& snapshot);

@@ -193,6 +193,7 @@ if(EASYEQ_BUILD_TESTS)
         src/Audio/AudioEngine.cpp
         src/Core/Log.cpp
         src/Core/ProjectStore.cpp
+        src/Core/Exporters.cpp
         src/DSP/TransferFunctionAccumulator.cpp
         src/DSP/MeasurementEngine.cpp
         src/DSP/DelayEstimator.cpp

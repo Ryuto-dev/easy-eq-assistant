@@ -24,6 +24,7 @@ public:
 
     /** 非表示タブ用の軽量ティック: 校正オフセット待ちの進行だけを行う（issue #55） */
     void timerTickBackground();
+    [[nodiscard]] float floorLevelNow (size_t index) const;
     void paint (juce::Graphics&) override;
     void resized() override;
 

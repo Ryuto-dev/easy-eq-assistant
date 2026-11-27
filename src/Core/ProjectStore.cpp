@@ -445,6 +445,24 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
     return venue;
 }
 
+juce::String ProjectStore::writeProjectJson (const juce::var& object, const juce::File& file)
+{
+    if (! file.getParentDirectory().exists())
+        file.getParentDirectory().createDirectory();
+
+    // 直前の版を1世代だけ残す（壊れた保存・誤操作からの復旧用）
+    if (file.existsAsFile())
+        file.copyFileTo (file.withFileExtension (file.getFileExtension().trimCharactersAtStart (".") + ".bak"));
+
+    // アトミック書き込み（issue #38 / #122）: replaceWithText は呼び出しごとに一意な一時ファイルへ書き、
+    // rename（POSIX）/ ReplaceFile（Windows）で置き換える。以前は固定名 .tmp を自動保存と終了時保存で
+    // 共有し、delete→rename の間に競合すると last_project.eea が消えることがあった
+    if (! file.replaceWithText (juce::JSON::toString (object)))
+        return juce::String (u8"保存ファイルを書き込めませんでした: ") + file.getFullPathName();
+
+    return {};
+}
+
 juce::String ProjectStore::saveToFile (const juce::File& file) const
 {
     // インスタンス版: 会場データ + システム補正も保存する
@@ -463,23 +481,7 @@ juce::String ProjectStore::saveToFile (const juce::File& file) const
     root->setProperty ("currentVenueIndex", currentVenueIndex);
     root->setProperty ("systemCorrection", correctionToVar (correctionFrame_, correctionDelaySamples_, correctionMeasuredAt_, correctionActive_));
 
-    if (! file.getParentDirectory().exists())
-        file.getParentDirectory().createDirectory();
-
-    // アトミック書き込み（issue #38）: まず一時ファイルへ書き、成功したら置き換える。
-    // 書き込みの最中にクラッシュ・電源断しても既存の .eea が壊れない
-    const auto tmp = file.getSiblingFile (file.getFileName() + ".tmp");
-
-    if (! tmp.replaceWithText (juce::JSON::toString (object)))
-        return juce::String (u8"一時ファイルに書き込めませんでした: ") + tmp.getFullPathName();
-
-    if (! tmp.moveFileTo (file))
-    {
-        tmp.deleteFile();
-        return juce::String (u8"保存ファイルを置き換えられませんでした: ") + file.getFullPathName();
-    }
-
-    return {};
+    return writeProjectJson (object, file);
 }
 
 juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
@@ -503,23 +505,7 @@ juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, i
     root->setProperty ("venues", venueArray);
     root->setProperty ("currentVenueIndex", currentIndex);
 
-    if (! file.getParentDirectory().exists())
-        file.getParentDirectory().createDirectory();
-
-    // アトミック書き込み（issue #38）: まず一時ファイルへ書き、成功したら置き換える。
-    // 書き込みの最中にクラッシュ・電源断しても既存の .eea が壊れない
-    const auto tmp = file.getSiblingFile (file.getFileName() + ".tmp");
-
-    if (! tmp.replaceWithText (juce::JSON::toString (object)))
-        return juce::String (u8"一時ファイルに書き込めませんでした: ") + tmp.getFullPathName();
-
-    if (! tmp.moveFileTo (file))
-    {
-        tmp.deleteFile();
-        return juce::String (u8"保存ファイルを置き換えられませんでした: ") + file.getFullPathName();
-    }
-
-    return {};
+    return writeProjectJson (object, file);
 }
 
 juce::String ProjectStore::loadFromFile (const juce::File& file)

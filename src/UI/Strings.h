@@ -501,4 +501,6 @@ inline const juce::String limitCeilingInvalid { u8"出力上限は −60〜0 dBF
 inline const juce::String uiWatchdogStoppedNotice { u8"UI停止を検知：励起音を自動停止しました" };
 inline const juce::String deviceRestartStoppedNotice { u8"オーディオデバイスが停止したため励起音を止めました（自動では再開しません）" };
 
+inline const juce::String loopbackRestoreFailed { u8"保存されていたループバック校正を読み込めませんでした。補正なしで測定しています。IR・遅延タブで測り直してください。" };
+
 } // namespace eeq::strings

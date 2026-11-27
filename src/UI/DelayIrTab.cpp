@@ -355,6 +355,8 @@ DelayIrTab::DelayIrTab (UiContext& context)
                 safeThis->ctx.correction.clear();
                 safeThis->ctx.settings.setValue ("loopbackCorrection", juce::var());
                 safeThis->ctx.settings.saveIfNeeded();
+                // プロジェクト側の写しも無効にする（issue #121: クリアしても再起動で復活していた）
+                safeThis->ctx.project.setSystemCorrection (safeThis->ctx.correction);
                 safeThis->updateLoopbackUi();
             }));
     };

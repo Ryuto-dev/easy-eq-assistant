@@ -1,6 +1,7 @@
 #include "VenueTab.h"
 
 #include "../Core/Log.h"
+#include "../Core/Exporters.h"
 #include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"
@@ -393,8 +394,9 @@ void VenueTab::loadProjectConfirmed()
             const auto error = safeThis->ctx.project.loadFromFile (file);
             safeThis->statusLabel.setText (error.isEmpty() ? strings::venueLoadOk : strings::venueLoadFailed + ": " + error,
                                            juce::dontSendNotification);
-            // ループバック校正（システム補正）を復元（仕様 6.1）
-            safeThis->ctx.project.restoreSystemCorrection (safeThis->ctx.correction);
+            // ループバック校正（システム補正）は読み込んだプロジェクトからは適用しない（issue #121）。
+            // 補正はこの機材で測ったもの（アプリ設定）を使い続ける。別の会場ファイルの補正を
+            // 黙って上書き・残留させない
             safeThis->ctx.state.snapshotVersion.fetch_add (1);
             safeThis->refreshVenueList();
             safeThis->loadSelectedVenueFields();
@@ -480,9 +482,12 @@ void VenueTab::exportReportPng()
             if (file == juce::File())
                 return;
 
-            juce::PNGImageFormat png;
-            juce::FileOutputStream stream (file);
-            png.writeImageToStream (image, stream);
+            const auto error = eeq::core::exporters::writePng (image, file);
+
+            if (error.isNotEmpty())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                                        strings::snapshotExportTitle, error, strings::okButton,
+                                                        nullptr, nullptr);
         });
 }
 

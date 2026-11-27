@@ -15,6 +15,16 @@ namespace eeq::core::exporters
 // 補正EQ案: CSV / テキスト
 // （画面の図のPNGは UI 側で createComponentSnapshot から保存する）
 
+/** ファイルを「書き終えてから差し替える」方式で書く（issue #120）。
+    一時ファイルに書き、writeBody が true を返して書き込みに成功したときだけ対象を置き換える。
+    既存ファイルへの追記（JUCE の FileOutputStream は既存ファイルの末尾に書く）や、
+    途中で失敗したときの中途半端なファイルを防ぐ。戻り値: エラーメッセージ（成功時は空） */
+[[nodiscard]] juce::String writeFileAtomically (const juce::File& file,
+                                                const std::function<bool (juce::OutputStream&)>& writeBody);
+
+/** 画像を PNG で書く（writeFileAtomically 経由） */
+[[nodiscard]] juce::String writePng (const juce::Image& image, const juce::File& file);
+
 /** 測定データを CSV（freq, magnitudeDb, phaseDeg, coherence）で書き出す */
 [[nodiscard]] juce::String writeSnapshotCsv (const eeq::dsp::SpectrumFrame& frame, const juce::File& file);
 

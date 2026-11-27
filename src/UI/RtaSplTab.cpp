@@ -307,8 +307,13 @@ void RtaSplTab::refreshFromSettings()
 
         floorLevels.clear();
 
-        for (const auto value : readArray (levelsVar))
-            floorLevels.push_back ((float) value);
+        // フロアは校正オフセット抜きの dBFS で保存する（issue #123）。旧形式（取得時のオフセット込み）は
+        // どのオフセットで取ったか分からないので使わない（S/N が 100 dB 以上ずれるのを防ぐ）
+        if (ctx.settings.getValue (juce::String (settingsFloorKey) + "Units") == "dbfs")
+            for (const auto value : readArray (levelsVar))
+                floorLevels.push_back ((float) value);
+        else
+            floorCenters.clear();
     }
 
     weightingCombo.onChange();
@@ -381,6 +386,12 @@ void RtaSplTab::timerTick()
         noiseFloorMeasuring = false;
         floorCenters = rtaCenters;
         floorLevels = rtaLevels;
+
+        // 取得時の校正オフセットを引いて dBFS で持つ（issue #123）。比較は現在のオフセットを足して行う
+        for (auto& level : floorLevels)
+            if (level > -200.0f)
+                level -= (float) ctx.engine.getSplAnalyzer().getCalibrationOffsetDb();
+
         noiseFloorButton.setButtonText (strings::snrNoiseFloorButton);
 
         // 設定に保存する
@@ -394,6 +405,7 @@ void RtaSplTab::timerTick()
 
         ctx.settings.setValue (settingsFloorCentersKey, centerTokens.joinIntoString (","));
         ctx.settings.setValue (settingsFloorKey, levelTokens.joinIntoString (","));
+        ctx.settings.setValue (juce::String (settingsFloorKey) + "Units", "dbfs");
         ctx.settings.saveIfNeeded();
         eeq::log::write ("noise floor captured (" + juce::String (floorCenters.size()) + " bands)");
     }
@@ -415,7 +427,7 @@ void RtaSplTab::timerTick()
                     && floorLevels[i] > -200.0f && rtaLevels[i] > -200.0f)
                 {
                     sumSignal += std::pow (10.0, rtaLevels[i] / 10.0);
-                    sumFloor += std::pow (10.0, floorLevels[i] / 10.0);
+                    sumFloor += std::pow (10.0, floorLevelNow (i) / 10.0);
                     ++validBands;
                 }
             }
@@ -488,8 +500,19 @@ void RtaSplTab::processCalibrationPending()
     }
 }
 
+float RtaSplTab::floorLevelNow (size_t index) const
+{
+    // 保存したフロア（dBFS）を、表示中の RTA と同じ基準（現在の校正オフセット込み）にする
+    return floorLevels[index] + (float) ctx.engine.getSplAnalyzer().getCalibrationOffsetDb();
+}
+
 void RtaSplTab::timerTickBackground()
 {
+    // 非表示でもサンプルレートの変化には追従する（issue #113: 本番モード・SPL ログ・上限測定は
+    // RTA タブを開かずに使うため、ここで張り直さないと古い fs のフィルタ・時定数で計算し続けた）
+    if (std::abs (ctx.engine.getCurrentSampleRate() - configuredSampleRate) > 0.5)
+        applyAnalyzerConfig();
+
     // 非表示タブ用の軽量ティック（issue #55）: 校正オフセット待ちの進行だけを行う
     processCalibrationPending();
 }
@@ -623,7 +646,7 @@ void RtaSplTab::updateSnHint()
         if (rtaCenters[i] < 100.0 || rtaCenters[i] > 10000.0)
             continue;
 
-        const auto snr = rtaLevels[i] - floorLevels[i];
+        const auto snr = rtaLevels[i] - floorLevelNow (i);
 
         if (snr < 10.0)
             lowSnr = true;
@@ -683,7 +706,7 @@ void RtaSplTab::paint (juce::Graphics& g)
             if (rtaLevels[(size_t) i] < -200.0f || floorLevels[(size_t) i] < -200.0f)
                 continue;
 
-            const auto snr = rtaLevels[(size_t) i] - floorLevels[(size_t) i];
+            const auto snr = rtaLevels[(size_t) i] - floorLevelNow ((size_t) i);
             const auto colour = snr >= 20.0f ? theme::get (theme::ColourId::ok).withAlpha (0.10f)
                               : snr >= 10.0f ? theme::get (theme::ColourId::warn).withAlpha (0.10f)
                                              : theme::get (theme::ColourId::danger).withAlpha (0.12f);
