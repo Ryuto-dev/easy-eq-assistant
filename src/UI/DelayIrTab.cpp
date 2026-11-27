@@ -477,9 +477,55 @@ DelayIrTab::DelayIrTab (UiContext& context)
     updateDelayReadout();
     updateLoopbackUi();
     rebuildSystemList();
+
+    // IR再構築ワーカーを開始（issue #65）
+    irWorker.start();
 }
 
 DelayIrTab::~DelayIrTab() = default; // SystemListModel の完全型が必要（unique_ptr）
+
+// IR再構築をバックグラウンドワーカーに要求（issue #65）
+void DelayIrTab::requestIrRebuild (const eeq::dsp::SpectrumFrame& frame)
+{
+    const auto width = juce::jmax (100, getWidth() - 100);
+    const auto now = juce::Time::getCurrentTime();
+
+    // 平均回数の増加による再構築は250 ms以上の間隔を空ける（issue #37）
+    if (frame.averages > cachedIrAverages && now < irRebuildAllowed)
+        return;
+
+    // サンプルレートも含めてキャッシュの鍵にする
+    if (frame.averages > 0 && (frame.averages != cachedIrAverages || width != cachedIrWidth
+                               || frame.fftSize != cachedIrFftSize
+                               || std::abs (frame.sampleRate - cachedIrSampleRate) > 0.5))
+    {
+        // バックグラウンドワーカーにフレームを渡す（shared_ptrでコピー）
+        auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
+        if (framePtr)
+            irWorker.submit ({ framePtr });
+        irRebuildAllowed = now + juce::RelativeTime::milliseconds (250);
+    }
+}
+
+// IR再構築ワーカーの結果をチェック
+void DelayIrTab::checkIrRebuildResult()
+{
+    IrRebuildWorker::Result result;
+    if (irWorker.takeResult (result))
+    {
+        cachedIr = std::move (result.ir);
+        // cachedIrAverages 等は requestIrRebuild 側で更新するが、ここでも念のため
+        auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
+        if (framePtr)
+        {
+            cachedIrAverages = framePtr->averages;
+            cachedIrWidth = juce::jmax (100, getWidth() - 100);
+            cachedIrFftSize = framePtr->fftSize;
+            cachedIrSampleRate = framePtr->sampleRate;
+        }
+        repaint();
+    }
+}
 
 void DelayIrTab::timerTick()
 {
@@ -490,10 +536,13 @@ void DelayIrTab::timerTick()
     // ループバック校正の自動進行（issue #17/#31/#55）
     processLoopbackRanging();
 
+    // IR再構築ワーカーの結果をチェック（issue #65: バックグラウンドで重いFFTを実行）
+    checkIrRebuildResult();
+
     // IRの再構築が必要か（平均数・幅・FFTサイズが変わったら）
     auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
     if (framePtr)
-        rebuildIrIfDirty (*framePtr);
+        requestIrRebuild (*framePtr);
 
     // ---- 温度変化による遅延のずれ予測（仕様 3.8）----
     // 遅延を適用したときの気温を基準に、現在の気温でのずれを計算する
@@ -704,34 +753,6 @@ void DelayIrTab::paint (juce::Graphics& g)
     }
 }
 
-void DelayIrTab::rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame)
-{
-    const auto width = juce::jmax (100, getWidth() - 100);
-
-    // 平均回数の増加による再構築は250 ms以上の間隔を空ける（issue #37）:
-    // 測定中は15 Hzで平均が増えるが、IRの再構築（2N点の逆FFT）をその頻度で
-    // 行う必要はなく、見た目も4回/秒で十分追従する。サイズやレートの変更は
-    // 即座に反映させるため間引かない
-    const auto now = juce::Time::getCurrentTime();
-
-    if (frame.averages > cachedIrAverages && now < irRebuildAllowed)
-        return;
-
-    // サンプルレートも含めてキャッシュの鍵にする（レートが変わると時間軸がずれる）
-    if (frame.averages > 0 && (frame.averages != cachedIrAverages || width != cachedIrWidth
-                               || frame.fftSize != cachedIrFftSize
-                               || std::abs (frame.sampleRate - cachedIrSampleRate) > 0.5))
-    {
-        cachedIr = std::make_unique<eeq::dsp::ImpulseResponse> (eeq::dsp::buildImpulseResponse (frame));
-        cachedIrAverages = frame.averages;
-        cachedIrWidth = width;
-        cachedIrFftSize = frame.fftSize;
-        cachedIrSampleRate = frame.sampleRate;
-        irRebuildAllowed = now + juce::RelativeTime::milliseconds (250);
-        repaint();
-    }
-}
-
 void DelayIrTab::runDelayMeasurement()
 {
     usePhat = phatToggle.getToggleState();
@@ -922,10 +943,10 @@ void DelayIrTab::processLoopbackRanging()
     if (! loopbackRanging)
         return;
 
-    eeq::dsp::SpectrumFrame rangingFrame;
-    ctx.engine.getMeasurement().copyLatestResult (rangingFrame);
+    // 進行確認はロックフリーの平均回数のみで行う（issue #67: DSPロック＋459KBコピーを回避）
+    const auto avg = ctx.engine.getMeasurement().getAveragesLockFree();
 
-    if (rangingFrame.averages >= 16)
+    if (avg >= 16)
     {
         finishLoopbackMeasurement();
     }
@@ -939,8 +960,7 @@ void DelayIrTab::processLoopbackRanging()
         loopbackStatusLabel.setText (
             juce::String (u8"測定できませんでした（入力に信号が届いていません。出力→入力の接続と入力chの割り当てを確認してください）"),
             juce::dontSendNotification);
-        eeq::log::write ("loopback: deadline reached with averages="
-                         + juce::String (rangingFrame.averages));
+        eeq::log::write ("loopback: deadline reached with averages=" + juce::String (avg));
     }
 }
 

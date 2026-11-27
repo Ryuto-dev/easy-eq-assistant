@@ -104,6 +104,14 @@ void FrequencyGraphView::setOverlays (const std::vector<OverlaySource>& sources,
     repaint();
 }
 
+void FrequencyGraphView::setOverlayColumns (const std::vector<std::vector<OverlayColumn>>& columns, int version)
+{
+    overlayColumns = columns;
+    overlayVersion = version;
+    // columns はワーカーで計算済みなので再計算不要
+    repaint();
+}
+
 juce::Rectangle<float> FrequencyGraphView::plotArea() const
 {
     return getLocalBounds().toFloat().withTrimmedLeft (dBLabelStripWidth + 6).withTrimmedRight (10)
@@ -560,6 +568,81 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     strokeColumnCurve (g, columns, lower, livePhaseColour, 1.2f, true, false, dimmedAlpha,
                        phaseOfLive, phaseY,
                        [] (const DisplayColumn& column) { return column.coherence >= coherenceThreshold; });
+
+    // ---- 凡例（左上に表示）----
+    // ライブ測定 + オーバーレイの色と名前を表示
+    struct LegendEntry { juce::String name; juce::Colour colour; bool dashed; float thickness; };
+    std::vector<LegendEntry> legendEntries;
+
+    // ライブ測定（メイン）
+    if (liveFrame.averages > 0 && ! columns.empty())
+    {
+        legendEntries.push_back ({ strings::liveMeasurementLabel,
+                                   theme::get (theme::ColourId::accent), false, 1.2f });
+    }
+
+    // オーバーレイ（スナップショット、ターゲット、予測、差分）
+    for (size_t s = 0; s < overlaySources.size(); ++s)
+    {
+        if (! overlayColumns[s].empty())
+        {
+            legendEntries.push_back ({ overlaySources[s].name,
+                                       overlaySources[s].colour,
+                                       overlaySources[s].dashed,
+                                       overlaySources[s].thickness });
+        }
+    }
+
+    if (! legendEntries.empty())
+    {
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        float legendX = ampArea.getX() + 8.0f;
+        float legendY = ampArea.getY() + 4.0f;
+        const float lineLen = 24.0f;
+        const float lineGap = 6.0f;
+        const float textGap = 8.0f;
+        const float rowHeight = 16.0f;
+
+        // 背景
+        float maxTextWidth = 0.0f;
+        const auto& font = g.getCurrentFont();
+        for (const auto& entry : legendEntries)
+            maxTextWidth = juce::jmax (maxTextWidth, juce::GlyphArrangement::getStringWidth (font, entry.name));
+
+        const float boxWidth = lineLen + lineGap + textGap + maxTextWidth + 12.0f;
+        const float boxHeight = legendEntries.size() * rowHeight + 8.0f;
+
+        g.setColour (juce::Colours::black.withAlpha (0.65f));
+        g.fillRoundedRectangle (legendX - 4.0f, legendY - 4.0f, boxWidth, boxHeight, 4.0f);
+
+        for (size_t i = 0; i < legendEntries.size(); ++i)
+        {
+            const auto& entry = legendEntries[i];
+            const float y = legendY + (float) i * rowHeight + rowHeight * 0.5f;
+            const float lineX = legendX;
+
+            // 線（実線/破線）
+            g.setColour (entry.colour);
+            if (entry.dashed)
+            {
+                const float dashPattern[] = { 5.0f, 3.0f };
+                g.drawDashedLine ({ lineX, y, lineX + lineLen, y }, dashPattern, 2, entry.thickness);
+            }
+            else
+            {
+                g.drawLine (lineX, y, lineX + lineLen, y, entry.thickness);
+            }
+
+            // テキスト
+            g.setColour (theme::get (theme::ColourId::text).withAlpha (0.9f));
+            g.drawText (entry.name,
+                        (int) (lineX + lineLen + lineGap),
+                        (int) (y - rowHeight * 0.5f),
+                        (int) (maxTextWidth + textGap),
+                        (int) rowHeight,
+                        juce::Justification::centredLeft);
+        }
+    }
 
     // ---- カーソル読み取り（仕様 5.2）----
     if (hoverColumn >= 0 && hoverColumn < (int) columns.size())

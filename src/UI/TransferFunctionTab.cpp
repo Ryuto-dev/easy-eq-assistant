@@ -128,11 +128,132 @@ private:
 };
 
 
+// オーバーレイ（スナップショット/ターゲット/予測/差分）の平滑化用ワーカー（issue #66）
+class TransferFunctionTab::OverlaySmoothingWorker final : private juce::Thread
+{
+public:
+    struct Request
+    {
+        std::uint64_t generation = 0;
+        std::vector<FrequencyGraphView::OverlaySource> sources;
+        int smoothing = 6;
+        double viewMin = 20.0;
+        double viewMax = 20000.0;
+        int plotWidth = 2;
+        double liveSampleRate = 48000.0;
+    };
+
+    struct Result
+    {
+        std::uint64_t generation = 0;
+        std::vector<std::vector<FrequencyGraphView::OverlayColumn>> columns;
+        int smoothing = 6;
+    };
+
+    OverlaySmoothingWorker() : juce::Thread ("Overlay smoothing") {}
+    ~OverlaySmoothingWorker() override { stopThread (-1); }
+
+    void start() { startThread (juce::Thread::Priority::low); }
+
+    void submit (Request request)
+    {
+        const juce::ScopedLock sl (lock);
+        pending = std::move (request);
+        hasPending = true;
+    }
+
+    bool takeResult (Result& result)
+    {
+        const juce::ScopedLock sl (lock);
+        if (! hasResult) return false;
+        result = std::move (completed);
+        hasResult = false;
+        return true;
+    }
+
+private:
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            Request request;
+            bool haveRequest = false;
+            {
+                const juce::ScopedLock sl (lock);
+                if (hasPending)
+                {
+                    request = std::move (pending);
+                    hasPending = false;
+                    haveRequest = true;
+                }
+            }
+            if (! haveRequest)
+            {
+                juce::Thread::sleep (4);
+                continue;
+            }
+            if (request.sources.empty() || threadShouldExit())
+                continue;
+
+            Result result;
+            result.generation = request.generation;
+            result.smoothing = request.smoothing;
+            result.columns.resize (request.sources.size());
+
+            const auto effectiveMax = std::min (request.viewMax, request.liveSampleRate * 0.5);
+            const auto width = request.plotWidth;
+
+            for (size_t s = 0; s < request.sources.size(); ++s)
+            {
+                const auto& source = request.sources[s];
+                auto& out = result.columns[s];
+
+                if (source.frame != nullptr)
+                {
+                    const auto points = eeq::dsp::smoothToLogGrid (*source.frame, request.smoothing,
+                                                                   request.viewMin, effectiveMax, width);
+                    out.resize (points.size());
+                    for (size_t i = 0; i < points.size(); ++i)
+                        out[i] = { points[i].freq, { (float) points[i].h.real(), (float) points[i].h.imag() } };
+                }
+                else if (source.points != nullptr)
+                {
+                    // 点列（ターゲット/予測）はグリッドにそのまま乗る
+                    const auto& in = *source.points;
+                    out.clear();
+                    for (const auto& point : in)
+                    {
+                        if (point.freq < request.viewMin || point.freq > effectiveMax)
+                            continue;
+                        out.push_back ({ point.freq, { (float) point.h.real(), (float) point.h.imag() } });
+                    }
+                }
+            }
+
+            {
+                const juce::ScopedLock sl (lock);
+                completed = std::move (result);
+                hasResult = true;
+            }
+        }
+    }
+
+    juce::CriticalSection lock;
+    Request pending;
+    Result completed;
+    bool hasPending = false;
+    bool hasResult = false;
+};
+
+
 TransferFunctionTab::TransferFunctionTab (UiContext& context)
     : ctx (context)
 {
     liveSmoothingWorker = std::make_unique<LiveSmoothingWorker>();
     liveSmoothingWorker->start();
+
+    overlaySmoothingWorker = std::make_unique<OverlaySmoothingWorker>();
+    overlaySmoothingWorker->start();
 
     addAndMakeVisible (graph);
 
@@ -333,6 +454,32 @@ void TransferFunctionTab::timerTick()
         graph.setLiveFrameCached (displayedPoints, displayedFrame, displayedSmoothing,
                                   ctx.state.appliedDelaySamples.load(), ctx.state.showRawPhase.load());
 
+    // オーバーレイ平滑化ワーカーの結果をチェック（issue #66: paint内での重い平滑化を回避）
+    OverlaySmoothingWorker::Result overlayResult;
+    if (overlaySmoothingWorker->takeResult (overlayResult) && overlayResult.generation == settingsGeneration)
+    {
+        graph.setOverlayColumns (overlayResult.columns, ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load());
+        cachedOverlaySmoothing = overlayResult.smoothing;
+        cachedOverlayVersion = ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load();
+    }
+
+    // オーバーレイが必要かチェック（スナップショット/設定変更時、またはスムージング/ビュー変更時）
+    const auto overlayVersion = ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load();
+    const bool overlayNeeded = overlayVersion != cachedOverlayVersion
+                            || smoothing != cachedOverlaySmoothing
+                            || smoothingChanged
+                            || std::abs (viewMin - cachedViewMin) > 1.0e-9
+                            || std::abs (viewMax - cachedViewMax) > 1.0e-9
+                            || plotWidth != cachedPlotWidth;
+
+    if (overlayNeeded)
+    {
+        ++settingsGeneration;
+        rebuildOverlays(); // OverlaySource を作成してワーカーに送る
+        cachedOverlayVersion = overlayVersion;
+        cachedOverlaySmoothing = smoothing;
+    }
+
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion
         || smoothingChanged)
@@ -347,8 +494,8 @@ void TransferFunctionTab::refreshSnapshotList()
 
     snapshotList.updateContent();
     updateDiffCombos();
-    rebuildOverlays();
     hintLabel.setVisible (ctx.project.snapshots().empty());
+    // rebuildOverlays() は timerTick でオーバーレイワーカーへ送信するためここでは呼ばない
 }
 
 void TransferFunctionTab::rebuildOverlays()
@@ -404,8 +551,16 @@ void TransferFunctionTab::rebuildOverlays()
         sources.push_back (source);
     }
 
-    graph.setOverlays (sources, ctx.state.snapshotVersion.load() * 31 + ctx.state.eqVersion.load(),
-                       smoothing);
+    // オーバーレイ平滑化ワーカーに送信（issue #66: paint内での重い平滑化を回避）
+    OverlaySmoothingWorker::Request request;
+    request.generation = settingsGeneration;
+    request.sources = std::move (sources);
+    request.smoothing = smoothing;
+    request.viewMin = graph.getViewMinForCache();
+    request.viewMax = graph.getViewMaxForCache();
+    request.plotWidth = graph.getPlotWidthForCache();
+    request.liveSampleRate = ctx.engine.getCurrentSampleRate();
+    overlaySmoothingWorker->submit (std::move (request));
 }
 
 void TransferFunctionTab::computeDiffCurve()
@@ -427,7 +582,7 @@ void TransferFunctionTab::computeDiffCurve()
     if (indexA < 0 || indexB < 0 || indexA >= (int) snapshots.size() || indexB >= (int) snapshots.size()
         || indexA == indexB)
     {
-        rebuildOverlays();
+        // timerTick でオーバーレイワーカーへ送信されるのを待つ
         return;
     }
 
@@ -452,7 +607,7 @@ void TransferFunctionTab::computeDiffCurve()
         diffPoints[i].count = columnsA[i].count;
     }
 
-    rebuildOverlays();
+    // timerTick でオーバーレイワーカーへ送信される（eqVersion が変わるため）
 }
 
 void TransferFunctionTab::updateDiffCombos()

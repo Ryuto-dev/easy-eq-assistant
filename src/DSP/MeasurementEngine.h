@@ -40,7 +40,14 @@ public:
         まだフレームがなければ nullptr を返す。複数タブが同時に読める。 */
     std::shared_ptr<const SpectrumFrame> getLatestFrame() const;
     
-    int getAverages() const;
+    /** 現在の平均回数を取得する（ロックフリー: issue #67）。
+        copyLatestResult のように重いコピー・ロックを避け、UIからの進行確認用。 */
+    int getAveragesLockFree() const noexcept
+    { return accumulator.getAverages(); }
+
+    /** 現在の平均回数を取得する（ロックフリー: issue #67）。
+        MainComponent 等からの表示用。getAveragesLockFree のエイリアス。 */
+    int getAverages() const noexcept { return getAveragesLockFree(); }
 
     /** RTA/SPL解析器を登録する（解析スレッドへ常時入力を流す。nullで停止） */
     void setSplAnalyzer (RtaSplAnalyzer* analyzer) noexcept

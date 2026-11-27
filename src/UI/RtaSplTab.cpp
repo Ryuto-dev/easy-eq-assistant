@@ -687,6 +687,7 @@ void RtaSplTab::paint (juce::Graphics& g)
         }
     }
 
+    bool anySignal = false;
     for (int i = 0; i < count; ++i)
     {
         const auto level = rtaLevels[(size_t) i];
@@ -694,6 +695,7 @@ void RtaSplTab::paint (juce::Graphics& g)
         if (level < -200.0f)
             continue;
 
+        anySignal = true;
         const auto normalized = juce::jlimit (0.0f, 1.0f, (level - (splTopDb - rangeDb)) / rangeDb);
         const auto h = normalized * plotArea.getHeight();
         const auto x = plotArea.getX() + (float) i * barWidth;
@@ -711,6 +713,14 @@ void RtaSplTab::paint (juce::Graphics& g)
             g.setColour (theme::get (theme::ColourId::warn));
             g.fillRect (x + 1.0f, py - 1.5f, std::max (1.0f, barWidth - 2.0f), 1.5f);
         }
+    }
+
+    // 無音時の表示（OS音量0やマイク未接続等で入力がない場合）
+    if (! anySignal)
+    {
+        g.setColour (theme::get (theme::ColourId::textDim));
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawText (strings::rtaNoSignal, plotArea, juce::Justification::centred);
     }
 
     // バンドのラベル（主要な1/3オクターブ中心だけ）

@@ -52,7 +52,7 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
     };
     addAndMakeVisible (exitButton);
 
-    // ウォーターフォール切替（仕様 5.4.1）
+    // ウォーターフォール切替（仕様 5.4.1） - デフォルトON（垂直表示・RTAと帯域合わせ）
     styleButton (waterfallButton);
     waterfallButton.setButtonText (strings::liveWaterfallToggle);
     waterfallButton.onClick = [this]
@@ -61,12 +61,15 @@ LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
 
         if (waterfallVisible)
         {
+            // RTAと同じ帯域分解能（1/3オクターブ）で垂直ウォーターフォール
             waterfall.configure (3, (double) waterfallSeconds, -100.0, -40.0);
             waterfall.clear();
-            waterfallImage = juce::Image(); // キャッシュも空から積み直す
-            lastWaterfallPush = {};        // 次の timerTick ですぐ1列目を積む
+            waterfallImage = juce::Image();
+            lastWaterfallPush = {};
         }
     };
+    waterfallVisible = true; // デフォルトON
+    waterfall.configure (3, (double) waterfallSeconds, -100.0, -40.0);
     addAndMakeVisible (waterfallButton);
 
     for (auto* label : { &splLabel, &leqLabel, &peakLabel, &sessionLabel })
@@ -218,18 +221,21 @@ void LiveModeOverlay::pushWaterfallColumn()
     if (bands < 1 || rows < 1)
         return;
 
-    // 既存の画像を1列分左へずらす（別画像へ描いてから差し替える。同一画像への
-    // 自己コピーを避けるため）。新しい列は右端に描く
+    // 垂直ウォーターフォール: 時間は縦軸（下が新しい）、周波数は横軸（RTAと合わせる）
+    // 既存画像を1行分上へずらし、最新行を下端に描く
     juce::Image shifted (juce::Image::ARGB, imgW, imgH, true);
     {
         juce::Graphics gs (shifted);
         const auto bands2 = waterfall.numBands();
-        const auto rowH = (float) imgH / (float) juce::jmax (1, bands2);
-        const auto colW = (float) imgW / (float) juce::jmax (1, waterfallSeconds * 2);
-        const auto shiftPx = (int) juce::jmax (1.0f, colW);
-        gs.drawImageAt (waterfallImage, -shiftPx, 0);
+        const auto colW = (float) imgW / (float) juce::jmax (1, bands2); // 周波数=横
+        const auto rowH = (float) imgH / (float) juce::jmax (1, waterfallSeconds * 2); // 時間=縦
+        const auto shiftPy = (int) juce::jmax (1.0f, rowH);
 
-        const auto& levels = waterfall.row (rows - 1); // 最新列
+        // 既存を上へシフト
+        gs.drawImageAt (waterfallImage, 0, -shiftPy);
+
+        // 最新行（rows-1）を下端に描く
+        const auto& levels = waterfall.row (rows - 1);
         const auto lo = (float) waterfall.getMinDb();
         const auto hi = (float) waterfall.getMaxDb();
 
@@ -240,8 +246,7 @@ void LiveModeOverlay::pushWaterfallColumn()
 
             const auto normalized = juce::jlimit (0.0f, 1.0f, (levels[(size_t) b] - lo) / (hi - lo));
             gs.setColour (waterfallColour (normalized));
-            gs.fillRect ((float) (imgW - shiftPx), (float) (bands2 - 1 - b) * rowH,
-                         (float) shiftPx, juce::jmax (1.0f, rowH));
+            gs.fillRect ((float) b * colW, (float) (imgH - shiftPy), juce::jmax (1.0f, colW), (float) juce::jmax (1, shiftPy));
         }
     }
 
@@ -324,14 +329,42 @@ void LiveModeOverlay::paintWaterfall (juce::Graphics& g, const juce::Rectangle<f
     g.setColour (theme::get (theme::ColourId::grid));
     g.drawRect (area, 1.0f);
 
-    // 全履歴の矩形を毎フレーム描き直す代わりに、積み上げ済みの画像を1枚貼る（issue #24）。
-    // 新しい列は timerTick（0.5秒ごと）で pushWaterfallColumn が右端に描き足す
+    // 垂直ウォーターフォール: 時間は縦軸（下が現在）、周波数は横軸（RTAと合わせる）
     if (waterfallImage.isValid())
         g.drawImageAt (waterfallImage, (int) area.getX(), (int) area.getY());
 
+    // 周波数ラベル（RTAと合わせる）
+    if (! rtaCenters.empty())
+    {
+        g.setColour (theme::get (theme::ColourId::gridText));
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+
+        const auto count = (int) rtaCenters.size();
+        const auto barWidth = area.getWidth() / (float) count;
+
+        for (int i = 0; i < count; ++i)
+        {
+            const auto f = rtaCenters[(size_t) i];
+
+            if (f < 30.0 || f > 16000.0)
+                continue;
+
+            // 1/3オクターブの標準中心だけラベル
+            const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
+
+            if (std::abs (stepsFrom20 - std::round (stepsFrom20)) < 0.05)
+            {
+                const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
+                const auto x = area.getX() + ((float) i + 0.5f) * barWidth;
+                g.drawText (text, (int) x - 20, (int) area.getBottom() + 2, 40, 12,
+                            juce::Justification::centred);
+            }
+        }
+    }
+
     g.setColour (theme::get (theme::ColourId::gridText));
     g.setFont (juce::Font (juce::FontOptions (11.0f)));
-    g.drawText (strings::liveWaterfallToggle + juce::String (u8"（右端が現在）"), (int) area.getX() + 4,
+    g.drawText (strings::liveWaterfallToggle + juce::String (u8"（下端が現在）"), (int) area.getX() + 4,
                 (int) area.getY() - 16, 300, 14, juce::Justification::centredLeft);
 }
 void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>& area)
@@ -352,6 +385,7 @@ void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>&
     const auto rangeTop = peakLevel > -200.0f ? peakLevel : 0.0f;
     const auto rangeBottom = rangeTop - 60.0f;
 
+    bool anySignal = false;
     for (int i = 0; i < count; ++i)
     {
         const auto db = rtaLevels[(size_t) i];
@@ -359,12 +393,21 @@ void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>&
         if (db < -200.0f)
             continue;
 
+        anySignal = true;
         const auto normalized = juce::jlimit (0.0f, 1.0f, (db - rangeBottom) / 60.0f);
         const auto h = normalized * plot.getHeight();
         const auto x = plot.getX() + (float) i * barWidth;
 
         g.setColour (theme::get (theme::ColourId::accent).withAlpha (0.65f));
         g.fillRect (x + 1.0f, plot.getBottom() - h, barWidth - 2.0f, h);
+    }
+
+    // 無音時の表示（OS音量0やマイク未接続等で入力がない場合）
+    if (! anySignal)
+    {
+        g.setColour (theme::get (theme::ColourId::textDim));
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawText (strings::rtaNoSignal, plot, juce::Justification::centred);
     }
 
     g.setColour (theme::get (theme::ColourId::gridText));

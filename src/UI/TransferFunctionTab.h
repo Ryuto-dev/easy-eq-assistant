@@ -37,6 +37,7 @@ public:
 
 private:
     class LiveSmoothingWorker;
+    class OverlaySmoothingWorker;
 
     // ListBoxModel
     int getNumRows() override;
@@ -64,6 +65,7 @@ private:
 
     // ---- 表示用平滑化はワーカーで計算し、UIと共有ポインタで受け渡す ----
     std::unique_ptr<LiveSmoothingWorker> liveSmoothingWorker;
+    std::unique_ptr<OverlaySmoothingWorker> overlaySmoothingWorker;
     std::shared_ptr<const eeq::dsp::SpectrumFrame> lastRequestedFrame;
     std::shared_ptr<const eeq::dsp::SpectrumFrame> displayedFrame;
     std::shared_ptr<const std::vector<eeq::dsp::GridPoint>> displayedPoints;
@@ -74,6 +76,11 @@ private:
     double cachedViewMin = 0.0;
     double cachedViewMax = 0.0;
     int cachedPlotWidth = 0;
+
+    // オーバーレイ平滑化結果のキャッシュ
+    std::vector<std::vector<FrequencyGraphView::OverlayColumn>> cachedOverlayColumns;
+    int cachedOverlaySmoothing = -1;
+    uint32_t cachedOverlayVersion = 0;
 };
 
 } // namespace eeq::ui

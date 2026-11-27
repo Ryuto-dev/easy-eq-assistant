@@ -66,6 +66,7 @@ inline const juce::String outputDeviceLabel { u8"出力デバイス" };
 // ---- タブ・共通 ----
 inline const juce::String tabTransferFunction { u8"伝達関数" };
 inline const juce::String tabDelayIr { u8"IR・遅延" };
+inline const juce::String liveMeasurementLabel { u8"測定中（ライブ）" };
 inline const juce::String tabRtaSpl { u8"RTA・SPL" };
 inline const juce::String tabLiveMode { u8"本番モード" };
 inline const juce::String tabEQ { u8"EQ案" };
@@ -159,6 +160,7 @@ inline const juce::String compareNoSnapshots { u8"比較するスナップショ
 inline const juce::String rtaSection { u8"RTA" };
 inline const juce::String rtaBandsLabel { u8"バンド" };
 inline const juce::String rtaPeakHoldButton { u8"ピークホールド解除" };
+inline const juce::String rtaNoSignal { u8"入力信号がありません（マイク・デバイス設定を確認）" };
 inline const juce::String splResetButton { u8"SPLリセット" };
 inline const juce::String rtaAvgTimeLabel { u8"平均時間" };
 inline const juce::String splSection { u8"SPL" };

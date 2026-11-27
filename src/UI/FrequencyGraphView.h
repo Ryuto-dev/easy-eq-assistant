@@ -54,6 +54,17 @@ public:
     /** オーバーレイを差し替える（version が変わったときだけ再計算する） */
     void setOverlays (const std::vector<OverlaySource>& sources, int version, int smoothingOctDenom);
 
+public:
+    /** オーバーレイの平滑化済み列（バックグラウンドワーカーからの結果用） */
+    struct OverlayColumn
+    {
+        double freq = 0.0;
+        std::complex<float> h;
+    };
+
+    /** オーバーレイ平滑化済みの列を直接設定する（issue #66: バックグラウンドワーカーからの結果） */
+    void setOverlayColumns (const std::vector<std::vector<OverlayColumn>>& columns, int version);
+
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
@@ -71,12 +82,6 @@ private:
         double freq = 0.0;
         std::complex<float> h;
         float coherence = 0.0f;
-    };
-
-    struct OverlayColumn
-    {
-        double freq = 0.0;
-        std::complex<float> h;
     };
 
     void rebuildLive();

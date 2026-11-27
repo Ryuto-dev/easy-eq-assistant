@@ -65,10 +65,7 @@ std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestFrame() const
     return publishedFrame;
 }
 
-int MeasurementEngine::getAverages() const
-{
-    return accumulator.getAverages();
-}
+// getAverages はヘッダーで inline 定義済み（noexcept 付き）
 
 bool MeasurementEngine::copyRecentSamples (int numSamples, std::vector<float>& refOut,
                                            std::vector<float>& measOut) const

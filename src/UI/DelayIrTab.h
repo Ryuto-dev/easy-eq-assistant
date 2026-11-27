@@ -11,6 +11,82 @@
 namespace eeq::ui
 {
 
+// IR再構築用のバックグラウンドワーカー（issue #65: UIスレッドから重いFFTを移動）
+class IrRebuildWorker final : private juce::Thread
+{
+public:
+    struct Request
+    {
+        std::shared_ptr<const eeq::dsp::SpectrumFrame> frame;
+    };
+
+    struct Result
+    {
+        std::unique_ptr<eeq::dsp::ImpulseResponse> ir;
+    };
+
+    IrRebuildWorker() : juce::Thread ("IR reconstruction") {}
+    ~IrRebuildWorker() override { stopThread (-1); }
+
+    void start() { startThread (juce::Thread::Priority::low); }
+
+    void submit (Request request)
+    {
+        const juce::ScopedLock sl (lock);
+        pending = std::move (request);
+        hasPending = true;
+    }
+
+    bool takeResult (Result& result)
+    {
+        const juce::ScopedLock sl (lock);
+        if (! hasResult) return false;
+        result = std::move (completed);
+        hasResult = false;
+        return true;
+    }
+
+private:
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            Request request;
+            bool haveRequest = false;
+            {
+                const juce::ScopedLock sl (lock);
+                if (hasPending)
+                {
+                    request = std::move (pending);
+                    hasPending = false;
+                    haveRequest = true;
+                }
+            }
+            if (! haveRequest)
+            {
+                juce::Thread::sleep (4);
+                continue;
+            }
+            if (! request.frame) continue;
+
+            Result result;
+            result.ir = std::make_unique<eeq::dsp::ImpulseResponse> (eeq::dsp::buildImpulseResponse (*request.frame));
+
+            {
+                const juce::ScopedLock sl (lock);
+                completed = std::move (result);
+                hasResult = true;
+            }
+        }
+    }
+
+    juce::CriticalSection lock;
+    Request pending;
+    bool hasPending = false;
+    Result completed;
+    bool hasResult = false;
+};
+
 // 「IR・遅延」タブ（仕様 3.3）。
 // - 相互相関による遅延検出（GCC-PHAT切替・放物線補間）、遅延の適用（位相補正）
 // - インパルス応答の表示（時間軸とETC。ピーク位置を0 msに揃えられる）
@@ -45,7 +121,8 @@ private:
     void refreshDistanceFromManualDelay();
 
     // ---- IR ----
-    void rebuildIrIfDirty (const eeq::dsp::SpectrumFrame& frame);
+    void requestIrRebuild (const eeq::dsp::SpectrumFrame& frame);
+    void checkIrRebuildResult();
 
     // ---- ループバック校正 ----
     void measureLoopback();
@@ -79,6 +156,9 @@ private:
     bool peakAligned = true;
     bool showEtc = true;
     juce::Range<float> irTimeRangeMs { -20.0f, 100.0f };
+
+    // IR再構築ワーカー（バックグラウンド）
+    IrRebuildWorker irWorker;
 
     // 系統の選択（-1 = 全体）
     int exciteTarget = -1;
