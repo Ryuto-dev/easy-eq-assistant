@@ -18,10 +18,14 @@ constexpr double defaultTemperatureC = 20.0;
 /** ループバック測定の妥当性検証（issue #31）。不合格の理由を返す（空文字なら合格）。
     ケーブル直結の電気系統は「無音でなく・高コヒーレンス・平坦」であることを使って、
     部屋の測定結果を誤って補正として保存することを防ぐ */
-juce::String validateLoopbackFrame (const eeq::dsp::SpectrumFrame& frame)
+// ループバックに必要な平均回数。FIFO で保持数が 16 未満に設定されていてもその上限で判定する
+int loopbackRequiredAverages (int capacity) noexcept { return juce::jlimit (4, 16, capacity); }
+
+juce::String validateLoopbackFrame (const eeq::dsp::SpectrumFrame& frame, int requiredAverages)
 {
-    if (frame.fftSize < 256 || frame.averages < 16)
-        return juce::String (u8"平均が不足しています（16回以上の平均が必要です）");
+    if (frame.fftSize < 256 || frame.averages < requiredAverages)
+        return juce::String (u8"平均が不足しています（") + juce::String (requiredAverages)
+             + juce::String (u8"回以上の平均が必要です）");
 
     // 無音でないこと: Meas 入力の実効パワーが -60 dBFS を超える bin がある
     float bestMeas = -300.0f;
@@ -1038,6 +1042,10 @@ void DelayIrTab::measureLoopback()
 
     auto& measurement = ctx.engine.getMeasurement();
 
+    // 往復遅延だけの系を測るので、Ref の遅延補償は一時的に外す（issue #106。外さないと
+    // 直前に適用していた音響の遅延ぶん時間がずれ、コヒーレンスが落ちて検証に通らない）
+    ctx.state.suspendReferenceDelay.store (true);
+
     // ループバック専用の測定としてやり直す。通常測定の平均を使わないので、
     // 測定中の部屋の応答を誤って保存することがない
     measurement.resetAverages();
@@ -1057,6 +1065,7 @@ void DelayIrTab::measureLoopback()
 void DelayIrTab::finishLoopbackMeasurement()
 {
     loopbackRanging = false;
+    ctx.state.suspendReferenceDelay.store (false);
     loopbackMeasureButton.setEnabled (true);
     loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
 
@@ -1067,7 +1076,7 @@ void DelayIrTab::finishLoopbackMeasurement()
     eeq::dsp::SpectrumFrame frame;
     measurement.copyLatestResult (frame);
 
-    const auto error = validateLoopbackFrame (frame);
+    const auto error = validateLoopbackFrame (frame, loopbackRequiredAverages (measurement.getAverageCapacity()));
 
     if (error.isNotEmpty())
     {
@@ -1127,13 +1136,14 @@ void DelayIrTab::processLoopbackRanging()
     // 進行確認はロックフリーの平均回数のみで行う（issue #67: DSPロック＋459KBコピーを回避）
     const auto avg = ctx.engine.getMeasurement().getAveragesLockFree();
 
-    if (avg >= 16)
+    if (avg >= loopbackRequiredAverages (ctx.engine.getMeasurement().getAverageCapacity()))
     {
         finishLoopbackMeasurement();
     }
     else if (juce::Time::getCurrentTime() > loopbackDeadline)
     {
         loopbackRanging = false;
+        ctx.state.suspendReferenceDelay.store (false);
         loopbackMeasureButton.setEnabled (true);
         loopbackMeasureButton.setButtonText (strings::loopbackMeasureButton);
         ctx.engine.stopExcitation();

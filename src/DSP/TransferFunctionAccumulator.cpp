@@ -40,6 +40,10 @@ void TransferFunctionAccumulator::configure (int fftSizePoints, double newSample
     fftSize = points;
     sampleRate = newSampleRate;
     config = averaging;
+    averageCapacity.store (averaging.mode == AveragingConfig::Mode::fifo
+                               ? juce::jlimit (1, AveragingConfig::maxFifoFrames, averaging.maxAverages)
+                               : std::numeric_limits<int>::max(),
+                           std::memory_order_relaxed);
 
     if (structural)
     {

@@ -200,6 +200,7 @@ juce::var ProjectStore::frameToVar (const eeq::dsp::SpectrumFrame& frame)
     o->setProperty ("fftSize", frame.fftSize);
     o->setProperty ("sampleRate", frame.sampleRate);
     o->setProperty ("averages", frame.averages);
+    o->setProperty ("refDelaySamples", frame.refDelaySamples);
 
     // 振幅/位相は複素伝達関数から復元できるので保存しない（復元時に作る）
     std::vector<float> re (frame.transfer.size()), im (frame.transfer.size());
@@ -228,6 +229,7 @@ eeq::dsp::SpectrumFrame ProjectStore::frameFromVar (const juce::var& v)
         frame.fftSize = o->getProperty ("fftSize");
         frame.sampleRate = o->getProperty ("sampleRate");
         frame.averages = o->getProperty ("averages");
+        frame.refDelaySamples = getPropertyWithDefault (o, "refDelaySamples", 0.0);
 
         // 破損したファイルの fftSize で巨大な確保や負のサイズ変換をしない
         if (frame.fftSize < 256 || frame.fftSize > (1 << 20) || (frame.fftSize & (frame.fftSize - 1)) != 0)

@@ -15,6 +15,8 @@ MeasurementEngine::MeasurementEngine (SampleRingBuffer& ringToUse)
 {
     readRef.resize (16384);
     readMeas.resize (16384);
+    delayedRef.resize (16384);
+    refDelayLine.assign ((size_t) maxReferenceDelaySamples + 1, 0.0f);
     captureRef.resize (captureCapacity, 0.0f);
     captureMeas.resize (captureCapacity, 0.0f);
     startThread (juce::Thread::Priority::low);
@@ -48,6 +50,11 @@ void MeasurementEngine::resetAverages()
     accumulator.resetAverages();
 }
 
+void MeasurementEngine::setReferenceDelaySamples (int samples) noexcept
+{
+    requestedRefDelay.store (juce::jlimit (0, maxReferenceDelaySamples, samples), std::memory_order_relaxed);
+}
+
 void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const AveragingConfig& averaging,
                                    juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod)
 {
@@ -57,6 +64,7 @@ void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const A
 void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
 {
     accumulator.copyResult (resultOut);
+    resultOut.refDelaySamples = (double) accumulatorRefDelay.load (std::memory_order_acquire);
 }
 
 std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestFrame() const
@@ -151,6 +159,14 @@ void MeasurementEngine::run()
 
     while (! threadShouldExit())
     {
+        // Ref の遅延補償量が変わったら、古い時間合わせで溜めた平均は捨てる（issue #106）
+        if (const auto wanted = requestedRefDelay.load (std::memory_order_relaxed); wanted != activeRefDelay)
+        {
+            activeRefDelay = wanted;
+            accumulator.resetAverages();
+            accumulatorRefDelay.store (wanted, std::memory_order_release);
+        }
+
         if (resetRequested.exchange (false, std::memory_order_acq_rel))
         {
             const auto generation = measurementGeneration.load (std::memory_order_acquire);
@@ -192,12 +208,30 @@ void MeasurementEngine::run()
             const auto skip = std::min (samplesToSkipForMeasurement, got);
             samplesToSkipForMeasurement -= skip;
 
+            // Ref を遅延線に通す（測定していなくても常に流し、履歴を保っておく）。
+            // 遅延量を変えた直後でも、過去の Ref が残っているので即座に正しく揃う
+            {
+                const auto lineSize = (int) refDelayLine.size();
+
+                for (int i = 0; i < got; ++i)
+                {
+                    refDelayLine[(size_t) refDelayWrite] = readRef[(size_t) i];
+                    auto readPos = refDelayWrite - activeRefDelay;
+
+                    if (readPos < 0)
+                        readPos += lineSize;
+
+                    delayedRef[(size_t) i] = refDelayLine[(size_t) readPos];
+                    refDelayWrite = (refDelayWrite + 1) % lineSize;
+                }
+            }
+
             int framesDone = 0;
             if (measuring.load (std::memory_order_relaxed)
                 && measurementReady.load (std::memory_order_acquire)
                 && got > skip)
             {
-                framesDone = accumulator.feedSamples (readRef.data() + skip,
+                framesDone = accumulator.feedSamples (delayedRef.data() + skip,
                                                       readMeas.data() + skip,
                                                       got - skip);
             }
@@ -205,12 +239,14 @@ void MeasurementEngine::run()
             // フレームが完了したら結果を公開（UIスレッドへ、複数購読可・非破壊的）
             if (framesDone > 0)
             {
-                auto frame = std::make_shared<const SpectrumFrame>();
-                accumulator.copyResult (*const_cast<SpectrumFrame*>(frame.get()));
-                
+ 
+                auto frame = std::make_shared<SpectrumFrame>();
+                accumulator.copyResult (*frame);
+                frame->refDelaySamples = (double) activeRefDelay;
+
                 {
                     const juce::ScopedLock sl (framePublishLock);
-                    publishedFrame = frame;
+                    publishedFrame = std::move (frame);
                 }
             }
 

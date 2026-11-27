@@ -109,11 +109,24 @@ ImpulseResponse buildImpulseResponse (const SpectrumFrame& frame, const ImpulseR
     const auto weights = binWeights (frame, options);
     std::vector<float> buffer ((size_t) n * 2, 0.0f);
 
+    // フレームに織り込み済みの遅延（Ref 遅延補償・システム補正: issue #106 / #108）を戻して、
+    // IR を実時間（出力から入力まで）の位置に置く。e^{-j2πkE/N} を掛けると E サンプル遅れる
+    const auto embedded = frame.refDelaySamples;
+
     for (int k = 0; k <= n / 2; ++k)
     {
         const auto w = weights[(size_t) k];
-        buffer[(size_t) k * 2] = w > 0.0f ? frame.transfer[(size_t) k].real() * w : 0.0f;
-        buffer[(size_t) k * 2 + 1] = w > 0.0f ? frame.transfer[(size_t) k].imag() * w : 0.0f;
+
+        if (w <= 0.0f)
+            continue;
+
+        auto h = std::complex<double> (frame.transfer[(size_t) k].real(), frame.transfer[(size_t) k].imag()) * (double) w;
+
+        if (embedded != 0.0)
+            h *= std::polar (1.0, -2.0 * juce::MathConstants<double>::pi * (double) k * embedded / (double) n);
+
+        buffer[(size_t) k * 2] = (float) h.real();
+        buffer[(size_t) k * 2 + 1] = (float) h.imag();
     }
 
     for (int k = n / 2 + 1; k < n; ++k)

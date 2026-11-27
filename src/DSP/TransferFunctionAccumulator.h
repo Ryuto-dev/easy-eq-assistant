@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include <atomic>
+#include <limits>
 #include <complex>
 #include <vector>
 
@@ -48,6 +49,17 @@ struct SpectrumFrame
     /** コヒーレンスが意味を持つか。平均1回では γ² は定義上すべて 1 になり
         「信頼できる」と誤表示されるため、2回以上で初めて確定とみなす（#119） */
     [[nodiscard]] bool hasReliableCoherence() const noexcept { return averages >= 2; }
+
+    // このフレームの位相からすでに取り除かれている遅延（サンプル。issue #106 / #108）。
+    //  - 解析時に Ref を遅らせて時間合わせした量（MeasurementEngine の遅延線）
+    //  - システム補正を掛けたフレームでは、補正で打ち消した往復遅延も含む
+    // 真の伝達関数は  H_true = transfer · e^{-j2πf·refDelaySamples/fs}。
+    // 位相表示の補正量は「適用中の遅延 − refDelaySamples」、IR はこの分だけ後ろへずらすと実時間になる
+    double refDelaySamples = 0.0;
+
+    /** 位相表示で打ち消すべき残りの遅延（適用中の全遅延から、フレームに織り込み済みの分を引く） */
+    [[nodiscard]] double residualDelayFor (double appliedTotalDelaySamples) const noexcept
+    { return appliedTotalDelaySamples - refDelaySamples; }
 };
 
 class TransferFunctionAccumulator
@@ -69,6 +81,9 @@ public:
     void copyResult (SpectrumFrame& resultOut) const;
 
     int getAverages() const;
+
+    /** 平均の上限（FIFO は保持フレーム数で頭打ちになる。それ以外は上限なし） */
+    int getAverageCapacity() const noexcept { return averageCapacity.load (std::memory_order_relaxed); }
 
     /** 入力に含まれていた非有限値（NaN/Inf）の数。0 に置き換えて処理している（#119） */
     long long getNonFiniteSampleCount() const noexcept { return nonFiniteSamples.load (std::memory_order_relaxed); }
@@ -104,6 +119,7 @@ private:
     std::vector<std::complex<double>> gxy;
     long long averages = 0;
     std::atomic<int> publishedAverages { 0 };
+    std::atomic<int> averageCapacity { std::numeric_limits<int>::max() };
     std::atomic<long long> nonFiniteSamples { 0 };
 
     // FIFO 平均用: フレームごとの自己/相互パワー（float で保持してメモリを抑える）

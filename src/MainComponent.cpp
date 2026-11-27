@@ -336,6 +336,19 @@ void MainComponent::timerCallback()
         saveProjectIfPossible();
     }
 
+    // 適用中の遅延で Ref を時間合わせする（issue #106: 位相表示だけでなく H1 とコヒーレンスの偏りを無くす）
+    {
+        const auto applied = uiState.suspendReferenceDelay.load() ? 0.0 : uiState.appliedDelaySamples.load();
+        const auto wanted = juce::jlimit (0, eeq::dsp::MeasurementEngine::maxReferenceDelaySamples,
+                                          (int) std::lround (std::isfinite (applied) ? applied : 0.0));
+
+        if (wanted != engine.getMeasurement().getReferenceDelaySamples())
+        {
+            engine.getMeasurement().setReferenceDelaySamples (wanted);
+            eeq::log::write ("measurement: reference delay compensation = " + juce::String (wanted) + " samples");
+        }
+    }
+
     topBar.timerTick();
     bottomBar.update();
 

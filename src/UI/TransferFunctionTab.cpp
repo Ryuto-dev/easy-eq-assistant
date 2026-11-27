@@ -21,7 +21,7 @@ public:
         double viewMin = 20.0;
         double viewMax = 20000.0;
         int plotWidth = 2;
-        double delayCompensationSamples = 0.0; // 位相の遅延補正（平滑化の前に回す: issue #107）
+        double appliedDelaySamples = 0.0; // 適用中の全遅延。フレームに織り込み済みの分を引いて平滑化の前に回す（#106/#107）
         bool applyCorrection = false;
         std::uint64_t correctionGeneration = 0;
         eeq::core::SystemCorrection* correction = nullptr;
@@ -107,7 +107,8 @@ private:
             auto calculated = std::make_shared<std::vector<eeq::dsp::GridPoint>> (
                 eeq::dsp::smoothToLogGrid (*displayFrame, request.smoothing, request.viewMin,
                                            std::min (request.viewMax, displayFrame->sampleRate * 0.5),
-                                           request.plotWidth, 80.0f, request.delayCompensationSamples));
+                                           request.plotWidth, 80.0f,
+                                           displayFrame->residualDelayFor (request.appliedDelaySamples)));
 
             Result result;
             result.generation = request.generation;
@@ -731,7 +732,7 @@ void TransferFunctionTab::timerTick()
             request.viewMin = viewMin;
             request.viewMax = viewMax;
             request.plotWidth = plotWidth;
-            request.delayCompensationSamples = delaySamples;
+            request.appliedDelaySamples = delaySamples;
             request.applyCorrection = applyCorrection;
             request.correctionGeneration = correctionGeneration;
             request.correction = &ctx.correction;
@@ -805,7 +806,10 @@ void TransferFunctionTab::requestOverlaysIfNeeded()
         item.key = snapshotKey (snapshot.id);
         item.frame = sharedFrameFor (snapshot);
         item.smoothing = snapshot.smoothingOverride >= 0 ? snapshot.smoothingOverride : globalSmoothing;
-        item.delayCompensationSamples = snapshot.showPhase ? snapshot.delaySamples + snapshot.delayOffset : 0.0;
+        // 位相を出すときは、保存時に適用していた遅延＋表示オフセットから、フレームに織り込み済みの分を引いて回す
+        item.delayCompensationSamples = snapshot.showPhase
+                                            ? snapshot.frame.residualDelayFor (snapshot.delaySamples + snapshot.delayOffset)
+                                            : 0.0;
         key << "|" << item.key << ":" << item.smoothing << ":" << item.delayCompensationSamples;
         request.items.push_back (std::move (item));
     }
