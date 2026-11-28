@@ -168,6 +168,7 @@ endif()
 target_compile_definitions(EasyEQAssistant PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    NOMINMAX=1 # windows.h の min/max マクロを抑止する（std::min/std::max が壊れるため）
 )
 
 target_link_libraries(EasyEQAssistant PRIVATE
@@ -259,6 +260,7 @@ if(EASYEQ_BUILD_TESTS)
     target_compile_definitions(EasyEQTests PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        NOMINMAX=1 # windows.h の min/max マクロを抑止する（std::min/std::max が壊れるため）
     )
     target_link_libraries(EasyEQTests PRIVATE
         gtest_main
