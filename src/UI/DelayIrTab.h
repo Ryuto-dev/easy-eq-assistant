@@ -232,7 +232,8 @@ private:
     juce::Label compareFineLabel;
     juce::TextButton compareRecordButton;
     std::vector<juce::Rectangle<int>> cardRects; // セクションのカード（paint が描く）
-    juce::Rectangle<int> irPlotArea; // 提案を「入れる値」へ記録（2026-11 リデザイン）
+    juce::Rectangle<int> irPlotArea;
+    const void* lastIrFramePointer = nullptr; // 最後に IR を作った結果（新しい結果が出たら作り直す） // 提案を「入れる値」へ記録（2026-11 リデザイン）
     // 直近の提案（記録ボタン用）
     juce::String proposalDelaySystem, proposalPolaritySystem, proposalNote;
     double proposalDelayMs = 0.0;

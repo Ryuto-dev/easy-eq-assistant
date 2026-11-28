@@ -1,3 +1,4 @@
+#include <utility>
 #include "DelayIrTab.h"
 
 #include "ApplyValues.h"
@@ -600,12 +601,16 @@ void DelayIrTab::requestIrRebuild (const eeq::dsp::SpectrumFrame& frame)
     const auto width = juce::jmax (100, getWidth() - 100);
     const auto now = juce::Time::getCurrentTime();
 
-    // 平均回数の増加による再構築は250 ms以上の間隔を空ける（issue #37）
-    if (frame.averages > cachedIrAverages && now < irRebuildAllowed)
+    // 結果の更新による再構築は250 ms以上の間隔を空ける（issue #37）
+    if (now < irRebuildAllowed)
         return;
 
-    // サンプルレートも含めてキャッシュの鍵にする
-    if (frame.averages > 0 && (frame.averages != cachedIrAverages || width != cachedIrWidth
+    // 新しい結果が出るたびに作り直す。FIFO/指数平均では平均回数が上限で止まるため、
+    // 回数の変化だけを見ていると IR が最初の 16 回の時点で固まっていた
+    const auto* framePointer = &frame;
+    const bool newFrame = framePointer != lastIrFramePointer;
+
+    if (frame.averages > 0 && (newFrame || frame.averages != cachedIrAverages || width != cachedIrWidth
                                || frame.fftSize != cachedIrFftSize
                                || std::abs (frame.sampleRate - cachedIrSampleRate) > 0.5))
     {
@@ -613,6 +618,7 @@ void DelayIrTab::requestIrRebuild (const eeq::dsp::SpectrumFrame& frame)
         auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
         if (framePtr)
             irWorker.submit ({ framePtr });
+        lastIrFramePointer = framePointer;
         irRebuildAllowed = now + juce::RelativeTime::milliseconds (250);
     }
 }
@@ -822,7 +828,12 @@ void DelayIrTab::paint (juce::Graphics& g)
                     juce::Justification::centred);
     }
 
+    // 曲線はグラフの枠の中だけに描く（下限より小さい値が下のカードへはみ出さないように）
+    const juce::Graphics::ScopedSaveState clipState (g);
+    g.reduceClipRegion (irArea.toNearestInt());
+
     juce::Path curve;
+    bool curveStarted = false; // Path::isEmpty() は始点だけのパスも空とみなす
 
     if (showEtc)
     {
@@ -842,6 +853,10 @@ void DelayIrTab::paint (juce::Graphics& g)
         auto etcY = [&] (float db)
         { return irArea.getBottom() - (db - minDb) / std::max (1.0f, maxDb - minDb) * (irArea.getHeight() - 24.0f); };
 
+        // 1 ピクセルの列ごとに最大値を取ってエンベロープとして描く（全サンプルを結ぶと塗りつぶしに見える）
+        const auto columns = juce::jmax (1, (int) irArea.getWidth());
+        std::vector<float> columnMax ((size_t) columns, -1.0e9f);
+
         for (size_t i = 0; i < ir.samples.size(); ++i)
         {
             const auto timeMs = (double) i * 1000.0 / sampleRate;
@@ -849,14 +864,32 @@ void DelayIrTab::paint (juce::Graphics& g)
             if (timeMs < t0 || timeMs > t1)
                 continue;
 
-            const auto x = timeToX (timeMs);
-            const auto y = etcY (etc[i]);
+            const auto column = juce::jlimit (0, columns - 1, (int) (timeToX (timeMs) - irArea.getX()));
+            columnMax[(size_t) column] = std::max (columnMax[(size_t) column], etc[i]);
+        }
 
-            if (curve.isEmpty())
+        juce::Path fill;
+        fill.startNewSubPath (irArea.getX(), irArea.getBottom());
+
+        for (int c = 0; c < columns; ++c)
+        {
+            if (columnMax[(size_t) c] < -1.0e8f)
+                continue;
+
+            const auto x = irArea.getX() + (float) c + 0.5f;
+            const auto y = etcY (std::max (columnMax[(size_t) c], minDb));
+            fill.lineTo (x, y);
+
+            if (! std::exchange (curveStarted, true))
                 curve.startNewSubPath (x, y);
             else
                 curve.lineTo (x, y);
         }
+
+        fill.lineTo (irArea.getRight(), irArea.getBottom());
+        fill.closeSubPath();
+        g.setColour (theme::get (theme::ColourId::accent).withAlpha (0.12f));
+        g.fillPath (fill);
 
         g.setColour (theme::get (theme::ColourId::accent));
         g.strokePath (curve, juce::PathStrokeType (1.2f));
@@ -882,7 +915,7 @@ void DelayIrTab::paint (juce::Graphics& g)
             const auto x = timeToX (timeMs);
             const auto y = midY - ir.samples[i] * scaleY;
 
-            if (curve.isEmpty())
+            if (! std::exchange (curveStarted, true))
                 curve.startNewSubPath (x, y);
             else
                 curve.lineTo (x, y);
@@ -1552,7 +1585,7 @@ void DelayIrTab::resized()
     etcToggle.setBounds (toggles.removeFromLeft (170));
     peakAlignToggle.setBounds (toggles.removeFromLeft (190));
     rawPhaseToggle.setBounds (toggles.removeFromLeft (150));
-    irArea.removeFromBottom (6);
+    irArea.removeFromBottom (22); // 時間の目盛りの数字
     irArea.removeFromTop (4);
     irPlotArea = irArea;
 

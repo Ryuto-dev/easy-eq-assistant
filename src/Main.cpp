@@ -55,9 +55,9 @@ public:
         auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent());
         if (content != nullptr)
             content->prepareScreenshot (argAfter ("--page").isNotEmpty() ? argAfter ("--page").getIntValue() : -1,
-                                        args.contains ("--light"), args.contains ("--live"));
+                                        args.contains ("--light"), args.contains ("--live"), args.contains ("--measure"));
 
-        juce::Timer::callAfterDelay (4000, [this, target]
+        juce::Timer::callAfterDelay (args.contains ("--measure") ? 10000 : 4000, [this, target]
         {
             if (mainWindow != nullptr)
                 if (auto* c = mainWindow->getContentComponent())

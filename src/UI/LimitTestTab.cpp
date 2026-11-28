@@ -1,3 +1,4 @@
+#include <utility>
 #include "LimitTestTab.h"
 
 #include "../Core/Log.h"
@@ -56,13 +57,14 @@ void LimitTestTab::StepGraph::paint (juce::Graphics& g)
 
     // SPLカーブ
     juce::Path path;
+    bool pathStarted = false; // Path::isEmpty() は始点だけのパスも空とみなす
 
     for (size_t i = 0; i < levels.size(); ++i)
     {
         const auto x = xOf (levels[i]);
         const auto y = yOf (spl[i]);
 
-        if (path.isEmpty())
+        if (! std::exchange (pathStarted, true))
             path.startNewSubPath (x, y);
         else
             path.lineTo (x, y);
@@ -105,12 +107,14 @@ void LimitTestTab::ThermalGraph::paint (juce::Graphics& g)
 
     juce::Path path;
 
+    bool pathStarted = false; // Path::isEmpty() は始点だけのパスも空とみなす
+
     for (const auto& sample : samples)
     {
         const auto x = area.getX() + (float) (sample.first / std::max (1.0e-9, tMax)) * area.getWidth();
         const auto y = area.getBottom() - (float) ((sample.second - splMin) / (splMax - splMin)) * area.getHeight();
 
-        if (path.isEmpty())
+        if (! std::exchange (pathStarted, true))
             path.startNewSubPath (x, y);
         else
             path.lineTo (x, y);

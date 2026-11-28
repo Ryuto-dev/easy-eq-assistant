@@ -47,7 +47,7 @@ public:
     bool keyPressed (const juce::KeyPress& key) override;
 
     /** 画面の確認用（--screenshot）: ページ・テーマ・本番モードを切り替える */
-    void prepareScreenshot (int page, bool light, bool live);
+    void prepareScreenshot (int page, bool light, bool live, bool measure = false);
     bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
 private:

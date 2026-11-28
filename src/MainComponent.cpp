@@ -346,8 +346,21 @@ void MainComponent::showPage (int page)
     resized();
 }
 
-void MainComponent::prepareScreenshot (int page, bool light, bool live)
+void MainComponent::prepareScreenshot (int page, bool light, bool live, bool measure)
 {
+    if (measure)
+    {
+        // 実機で鳴らして測りながら撮る（デバイスが開くのを待ってから）
+        juce::Component::SafePointer<MainComponent> safeThis (this);
+        juce::Timer::callAfterDelay (1500, [safeThis]
+        {
+            if (safeThis == nullptr)
+                return;
+            safeThis->engine.startExcitation();
+            safeThis->engine.getMeasurement().startMeasurement();
+        });
+    }
+
     if (light != (theme::mode() == theme::Mode::light))
     {
         theme::setMode (light ? theme::Mode::light : theme::Mode::dark);
