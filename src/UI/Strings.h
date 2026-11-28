@@ -681,4 +681,10 @@ inline const juce::String resolutionMtw { u8"MTW（帯域ごとに窓長）" };
 inline const juce::String resolutionSingle { u8"単一 FFT" };
 inline const juce::String resolutionTooltip { u8"MTW: 低域は長い窓で細かく、高域は短い窓で反射に汚されずに見る（遅延を合わせているときに有効）" };
 
+inline const juce::String noticeRefSilent { u8"Ref が鳴っていません（発振 N か外部の信号を確認）" };
+inline const juce::String noticeFewAverages { u8"平均がまだ少ない（数秒待つと落ち着きます）" };
+inline const juce::String noticeNoDelay { u8"遅延が未設定です（D で検出）。位相が回り、コヒーレンスも下がります" };
+inline const juce::String noticeNoDelayMtw { u8"遅延が未設定です（D で検出）。合わせると MTW（高域を短い窓で）に切り替わります" };
+inline const juce::String noticeCorrectionStale { u8"ループバック補正を測ったときと FFT サイズ・レートが違うため、補正していません" };
+
 } // namespace eeq::strings

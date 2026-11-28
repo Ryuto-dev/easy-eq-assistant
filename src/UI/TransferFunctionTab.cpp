@@ -776,6 +776,31 @@ void TransferFunctionTab::timerTick()
     graph.setClipWarning (ctx.engine.getMeasurement().isMeasuring()
                           && (ctx.engine.getRefMeter().clip.load() || ctx.engine.getMeasMeter().clip.load()));
 
+    // 表示が信用しきれない理由を、グラフの上に自分から出す（ロードマップ B-3）
+    {
+        juce::StringArray notices;
+        auto& measurement = ctx.engine.getMeasurement();
+
+        if (measurement.isMeasuring())
+        {
+            const auto refPeak = ctx.engine.getRefMeter().peakLinear.load();
+
+            if (refPeak < 1.0e-4f) // −80 dBFS 未満
+                notices.add (strings::noticeRefSilent);
+            else if (measurement.getAverages() < 4)
+                notices.add (strings::noticeFewAverages);
+
+            if (std::abs (ctx.state.appliedDelaySamples.load()) < 0.5)
+                notices.add (measurement.isMtwEnabled() ? strings::noticeNoDelayMtw : strings::noticeNoDelay);
+        }
+
+        if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load())
+            if (const auto latest = measurement.getLatestFrame(); latest != nullptr && ! ctx.correction.matches (*latest))
+                notices.add (strings::noticeCorrectionStale);
+
+        graph.setNotices (notices);
+    }
+
     // ---- 重ね描き ----
     if (ctx.state.snapshotVersion.load() != lastSeenSnapshotVersion
         || ctx.state.eqVersion.load() != lastSeenEqVersion)

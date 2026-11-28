@@ -103,6 +103,8 @@ public:
 
     /** 入力クリップ警告（issue #146）: true の間グラフ上に警告を出す */
     void setClipWarning (bool clipped);
+    /** 「この表示はまだ信用しきれない」理由（平均不足・Ref 無音・補正の不一致など。ロードマップ B-3） */
+    void setNotices (const juce::StringArray& notices);
 
     /** 位相の遅延補正値（サンプル）と生位相表示 */
     double getAppliedDelaySamples() const noexcept { return appliedDelaySamples; }
@@ -202,6 +204,7 @@ private:
     bool coherenceBlankingEnabled = false;
     float coherenceThreshold = 0.8f; // 仕様 4.1 の既定しきい値
     bool clipWarning = false;
+    juce::StringArray notices;
 
     std::vector<Marker> markers;
     int nextMarkerColourIndex = 0;

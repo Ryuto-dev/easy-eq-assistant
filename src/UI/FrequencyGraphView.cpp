@@ -470,6 +470,15 @@ void FrequencyGraphView::setCoherenceThreshold (float threshold)
     }
 }
 
+void FrequencyGraphView::setNotices (const juce::StringArray& newNotices)
+{
+    if (newNotices != notices)
+    {
+        notices = newNotices;
+        repaint();
+    }
+}
+
 void FrequencyGraphView::setClipWarning (bool clipped)
 {
     if (clipWarning != clipped)
@@ -891,6 +900,27 @@ void FrequencyGraphView::paint (juce::Graphics& g)
         g.setColour (juce::Colours::white);
         g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
         g.drawText (strings::graphClipWarning, box, juce::Justification::centred);
+    }
+
+    // 信頼性の注意（クリップの下に並べる。控えめな注意色の帯）
+    {
+        auto y = ampArea.getY() + (clipWarning ? 32.0f : 6.0f);
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+
+        for (const auto& notice : notices)
+        {
+            const auto width = juce::jmin (ampArea.getWidth() - 20.0f,
+                                           juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), notice) + 28.0f);
+            const auto box = juce::Rectangle<float> (ampArea.getCentreX() - width * 0.5f, y, width, 22.0f);
+            const auto warn = theme::get (theme::ColourId::warn);
+            g.setColour (theme::get (theme::ColourId::graphBackground).withAlpha (0.85f));
+            g.fillRoundedRectangle (box, 11.0f);
+            g.setColour (warn.withAlpha (0.7f));
+            g.drawRoundedRectangle (box.reduced (0.5f), 11.0f, 1.0f);
+            g.setColour (warn);
+            g.drawText (notice, box, juce::Justification::centred);
+            y += 26.0f;
+        }
     }
 }
 
