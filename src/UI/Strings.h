@@ -659,4 +659,10 @@ inline const juce::String liveCurrentLevel { u8"現在の音圧" };
 inline const juce::String tracesTitle { u8"トレース" };
 inline const juce::String tracesHint { u8"S で今の測定を保存。チェックで表示、選ぶと右で調整できます" };
 
+inline const juce::String delayBreakdownPrefix { u8"うち機器の遅延 " };
+inline const juce::String delaySystemFromOs { u8"（OS の申告値）" };
+inline const juce::String delaySystemFromLoopback { u8"（ループバック補正で測定）" };
+inline const juce::String delayBreakdownRest { u8"、残り " };
+inline const juce::String delayBreakdownNote { u8"。内部参照の遅延は機器の処理時間を含むため、距離そのものではありません（残りにもスピーカー内部の処理が入ります）" };
+
 } // namespace eeq::strings

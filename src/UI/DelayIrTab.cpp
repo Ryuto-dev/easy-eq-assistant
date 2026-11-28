@@ -1027,17 +1027,49 @@ void DelayIrTab::updateDelayReadout()
 
     // 表示: ms / サンプル / 距離（気温から。仕様 3.3）
     const auto ms = eeq::acoustics::delayMsForSamples (lastEstimate.delaySamples, sampleRate);
-    const auto metres = eeq::acoustics::distanceMetresForDelay (ms, temperature);
+
+    // 内部参照では、測った遅延は「アプリが出した瞬間 → 出力機器 → スピーカー → 空気 → マイク → 入力機器」の全体。
+    // 機器のレイテンシ（数十 ms）が大半なので、距離に直すときは差し引く。差し引く量は
+    // ループバック補正があればその往復遅延、無ければ OS が申告する入出力のレイテンシ
+    // （スピーカー内部の DSP 処理は申告されないことが多く、その分は残る）
+    const bool internalRef = ctx.engine.isRefInternal();
+    double systemMs = 0.0;
+    juce::String systemSource;
+
+    if (internalRef)
+    {
+        if (ctx.correction.isActive() && ctx.state.loopbackEnabled.load())
+        {
+            systemMs = eeq::acoustics::delayMsForSamples (ctx.correction.getRoundtripDelaySamples(), sampleRate);
+            systemSource = strings::delaySystemFromLoopback;
+        }
+        else
+        {
+            systemMs = eeq::acoustics::delayMsForSamples ((double) ctx.engine.getReportedRoundTripLatency(), sampleRate);
+            systemSource = strings::delaySystemFromOs;
+        }
+    }
+
+    const auto acousticMs = juce::jmax (0.0, ms - systemMs);
+    const auto metres = eeq::acoustics::distanceMetresForDelay (acousticMs, temperature);
     const auto feet = metres * 3.28084;
 
-    delayValueLabel.setText (juce::String (ms, 2) + " ms  /  "
-                                 + juce::String (lastEstimate.delaySamples, 1) + " " + strings::delaySamplesUnit
-                                 + "  /  " + juce::String (metres, 2) + " m  /  " + juce::String (feet, 1) + " ft",
-                             juce::dontSendNotification);
+    if (internalRef)
+        delayValueLabel.setText (juce::String (ms, 2) + " ms  /  " + juce::String (lastEstimate.delaySamples, 1) + " "
+                                     + strings::delaySamplesUnit,
+                                 juce::dontSendNotification);
+    else
+        delayValueLabel.setText (juce::String (ms, 2) + " ms  /  "
+                                     + juce::String (lastEstimate.delaySamples, 1) + " " + strings::delaySamplesUnit
+                                     + "  /  " + juce::String (metres, 2) + " m  /  " + juce::String (feet, 1) + " ft",
+                                 juce::dontSendNotification);
 
     // 提案値の妥当性チェック（仕様 3.3.2）: 距離を算出して確認を促す
-    const auto checkText = strings::delayDistanceCheckLabel + " " + juce::String (metres, 1) + " "
-                         + strings::delayDistanceCheckSuffix;
+    const auto checkText = internalRef
+        ? strings::delayBreakdownPrefix + juce::String (systemMs, 1) + " ms" + systemSource
+              + strings::delayBreakdownRest + juce::String (acousticMs, 1) + " ms ≈ " + juce::String (metres, 1) + " m"
+              + strings::delayBreakdownNote
+        : strings::delayDistanceCheckLabel + " " + juce::String (metres, 1) + " " + strings::delayDistanceCheckSuffix;
     distanceCheckLabel.setText (checkText, juce::dontSendNotification);
 
     // 手動入力と10%以上ずれていたら警告（仕様 3.3.2）
@@ -1632,7 +1664,7 @@ void DelayIrTab::resized()
     }
     manualApplyButton.setBounds (manualRow.removeFromLeft (juce::jmin (140, manualRow.getWidth())));
     manualWarnLabel.setBounds (delayPanel.removeFromTop (26));
-    distanceCheckLabel.setBounds (delayPanel.removeFromTop (26));
+    distanceCheckLabel.setBounds (delayPanel.removeFromTop (44));
     delayProposalLabel.setBounds (delayPanel);
 
     // ---- 右上: ループバック補正 ----

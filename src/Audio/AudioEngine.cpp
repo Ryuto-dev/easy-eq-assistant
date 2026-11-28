@@ -979,6 +979,13 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     currentSampleRate.store (sampleRate, std::memory_order_relaxed);
     currentBufferSize.store (device->getCurrentBufferSizeSamples(), std::memory_order_relaxed);
 
+    // OS が申告する入出力のレイテンシ（デバイス内部の遅延＋安全マージン＋バッファ）。
+    // 内部参照で測った遅延にはこれが含まれる（空間の伝搬時間だけではない）
+    reportedInputLatency.store (device->getInputLatencyInSamples(), std::memory_order_relaxed);
+    reportedOutputLatency.store (device->getOutputLatencyInSamples(), std::memory_order_relaxed);
+    eeq::log::write ("device latency (reported): input=" + juce::String (device->getInputLatencyInSamples())
+                     + " output=" + juce::String (device->getOutputLatencyInSamples()) + " samples");
+
     // 測定ストリーム用のスクラッチ（ここはメッセージスレッドなので確保してよい）
     const auto needed = juce::jmax (8192, device->getCurrentBufferSizeSamples());
 

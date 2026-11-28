@@ -72,6 +72,9 @@ public:
     bool checkInputHealth (juce::uint32 nowMs);
     double getCurrentSampleRate() const noexcept { return currentSampleRate.load (std::memory_order_relaxed); }
     int getCurrentBufferSize() const noexcept { return currentBufferSize.load (std::memory_order_relaxed); }
+    /** OS が申告する入力＋出力のレイテンシ（サンプル）。内部参照の遅延にはこれが含まれる */
+    int getReportedRoundTripLatency() const noexcept
+    { return reportedInputLatency.load (std::memory_order_relaxed) + reportedOutputLatency.load (std::memory_order_relaxed); }
     juce::String getStatusText() const;
 
     // ---- チャンネル割当（デバイスのチャンネル番号・0開始。負は特別値）----
@@ -333,6 +336,7 @@ private:
 
     std::atomic<double> currentSampleRate { 48000.0 };
     std::atomic<int> currentBufferSize { 512 };
+    std::atomic<int> reportedInputLatency { 0 }, reportedOutputLatency { 0 };
     std::atomic<uint32_t> deviceGeneration { 0 };
 
     // 入力の健全性（checkInputHealth 用）。オーディオスレッドが書き、メッセージスレッドが読んで戻す
