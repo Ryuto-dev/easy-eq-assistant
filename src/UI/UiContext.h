@@ -16,6 +16,8 @@
 namespace eeq::ui
 {
 
+class SweepSession;
+
 // タブ間で共有するUI側の状態（位相の遅延補正値など。測定そのものは AudioEngine が持つ）
 struct UiState
 {
@@ -57,6 +59,7 @@ struct UiContext
     eeq::core::ProjectStore& project;
     eeq::core::SystemCorrection& correction;
     UiState& state;
+    SweepSession* sweep = nullptr; // スイープ測定（MainComponent が持つ。構築後に設定する）
 
     /** 表示・スナップショット・EQ 案に使う最新の結果。MTW が有効で遅延を合わせているときは
         帯域ごとに窓長を変えたフレーム、そうでなければ単一 FFT のフレーム（ロードマップ B-2）。

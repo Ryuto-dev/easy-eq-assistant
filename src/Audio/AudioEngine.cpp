@@ -407,9 +407,15 @@ void AudioEngine::setSweep (std::vector<float> sweepSamples)
     excitationSource.store (ExcitationSource::sweep, std::memory_order_relaxed);
 }
 
-bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& errorOut)
+bool AudioEngine::decodeWavExcitation (const juce::File& file, double deviceRate, std::vector<float>& out,
+                                       juce::String& errorOut, juce::String& summaryOut)
 {
-    std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
+    // スレッド安全（メッセージスレッド以外から呼んでよい）: 自前の AudioFormatManager を使う。
+    // 2026-11: iCloud 上の長い曲をメッセージスレッドで読んで UI が数十秒固まっていたため、
+    // 読み込みはバックグラウンドで行い、公開（publishWavExcitation）だけをメッセージスレッドで行う
+    juce::AudioFormatManager localFormats;
+    localFormats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (localFormats.createReaderFor (file));
 
     if (reader == nullptr)
     {
@@ -419,10 +425,10 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
     }
 
     const auto fileRate = reader->sampleRate > 0.0 ? reader->sampleRate : 48000.0;
-    const auto deviceRate = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 48000.0;
+    if (! (deviceRate > 0.0))
+        deviceRate = 48000.0;
 
     // メモリ保護（issue #105）: 10 分まで、かつ読み込みバッファ（全ch）を 64M サンプル（256 MB）以内にする。
-    // 以前は 20 分を全chそのまま読んでいたため、192 kHz ステレオで約 2.7 GB になり落ちていた
     const auto channels = juce::jmax (1, (int) reader->numChannels);
     const auto maxByDuration = (juce::int64) (10.0 * 60.0 * fileRate);
     const auto maxByMemory = (juce::int64) (64 * 1024 * 1024) / channels;
@@ -455,7 +461,7 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
             fileMono[(size_t) i] = std::isfinite (value) ? value : 0.0f;
         }
 
-        // デバイスのサンプルレートへ変換する（issue #105: 44.1 kHz のファイルを 48 kHz で鳴らすと 9% 速くなっていた）
+        // デバイスのサンプルレートへ変換する（issue #105）
         if (std::abs (fileRate - deviceRate) > 0.5)
         {
             const auto ratio = fileRate / deviceRate; // 入力サンプル / 出力サンプル
@@ -477,9 +483,7 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
         return false;
     }
 
-    // WAVはピーク1.0へ正規化して保持する（issue #29）。レベル設定（dBFS）は
-    // オーディオスレッドでピーク基準として掛かるので、どのファイルでも
-    // 「設定した dBFS ＝ ピーク」が一致する
+    // WAVはピーク1.0へ正規化して保持する（issue #29）
     float peak = 0.0f;
 
     for (const auto value : mono)
@@ -489,15 +493,35 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
         for (auto& value : mono)
             value /= peak;
 
-    stopExcitation();
-    eeq::log::write ("excitation: WAV loaded \"" + file.getFullPathName() + "\" ("
-                     + juce::String ((double) length / fileRate, 2) + " s, " + juce::String (juce::roundToInt (fileRate)) + " Hz -> "
-                     + juce::String (juce::roundToInt (deviceRate)) + " Hz"
-                     + (length < reader->lengthInSamples ? ", truncated to 10 min / memory limit" : "") + ")");
+    summaryOut = "\"" + file.getFullPathName() + "\" ("
+                 + juce::String ((double) length / fileRate, 2) + " s, " + juce::String (juce::roundToInt (fileRate)) + " Hz -> "
+                 + juce::String (juce::roundToInt (deviceRate)) + " Hz"
+                 + (length < reader->lengthInSamples ? ", truncated to 10 min / memory limit" : "") + ")";
+    out = std::move (mono);
+    return true;
+}
 
-    publishExcitationBuffer (std::move (mono));
+void AudioEngine::publishWavExcitation (std::vector<float> samples, const juce::String& summary)
+{
+    const auto wasAudible = isExcitationAudible();
+    eeq::log::write ("excitation: WAV loaded " + summary);
+    publishExcitationBuffer (std::move (samples));
     excitationSource.store (ExcitationSource::wavFile, std::memory_order_relaxed);
 
+    // 鳴らしている最中に曲を選び直したら、そのまま新しい曲で鳴らし続ける（構成切替のフェードで切り替わる）
+    if (! wasAudible)
+        stopExcitation();
+}
+
+bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& errorOut)
+{
+    std::vector<float> mono;
+    juce::String summary;
+
+    if (! decodeWavExcitation (file, currentSampleRate.load(), mono, errorOut, summary))
+        return false;
+
+    publishWavExcitation (std::move (mono), summary);
     return true;
 }
 
@@ -862,6 +886,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             {
                 // スイープ: ピーク1.0で生成（実効RMS 0.7071）。WAV: ピーク1.0へ正規化済み。
                 // RMS/ピーク基準の違いは rmsNormaliseFor が吸収する
+                if (activeSweep != nullptr && source == ExcitationSource::wavFile
+                    && playPos >= (int) activeSweep->size() && ! activeSweep->empty())
+                    playPos = 0; // WAV（音楽など）はループ再生する。止めるまで鳴り続ける（スイープだけ1回で止まる）
+
                 if (activeSweep != nullptr && playPos < (int) activeSweep->size())
                 {
                     sourceSample = (*activeSweep)[(size_t) playPos];

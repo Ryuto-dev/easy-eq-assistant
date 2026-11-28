@@ -170,6 +170,7 @@ inline const juce::String splWeightingLabel { u8"重み付け" };
 inline const juce::String splTimeConstantLabel { u8"時定数" };
 inline const juce::String splFast { u8"Fast" };
 inline const juce::String splSlow { u8"Slow" };
+inline const juce::String splMedium { u8"0.5 秒（見やすい）" };
 inline const juce::String splLeqLabel { u8"Leq" };
 inline const juce::String splLeq1min { u8"1分" };
 inline const juce::String splLeq15min { u8"15分" };
@@ -529,8 +530,8 @@ inline const juce::String navSetup { u8"準備" };
 inline const juce::String navSetupSub { u8"機器・レベル・補正" };
 inline const juce::String navMeasure { u8"測定" };
 inline const juce::String navMeasureSub { u8"伝達関数を見る" };
-inline const juce::String navDelay { u8"遅延・位相" };
-inline const juce::String navDelaySub { u8"IR・系統を合わせる" };
+inline const juce::String navDelay { u8"遅延・IR" };
+inline const juce::String navDelaySub { u8"インパルス応答・系統合わせ" };
 inline const juce::String navEq { u8"EQ" };
 inline const juce::String navEqSub { u8"補正案を作る" };
 inline const juce::String navApply { u8"入れる値" };
@@ -654,6 +655,7 @@ inline const juce::String applyRecordedShort { u8"✓ 記録しました" };
 
 inline const juce::String liveRecording { u8"記録中" };
 inline const juce::String liveMinutesSuffix { u8" 分経過" };
+inline const juce::String liveElapsedSuffix { u8" 経過" };
 inline const juce::String liveCurrentLevel { u8"現在の音圧" };
 
 inline const juce::String tracesTitle { u8"トレース" };
@@ -686,5 +688,38 @@ inline const juce::String noticeFewAverages { u8"平均がまだ少ない（数�
 inline const juce::String noticeNoDelay { u8"遅延が未設定です（D で検出）。位相が回り、コヒーレンスも下がります" };
 inline const juce::String noticeNoDelayMtw { u8"遅延が未設定です（D で検出）。合わせると MTW（高域を短い窓で）に切り替わります" };
 inline const juce::String noticeCorrectionStale { u8"ループバック補正を測ったときと FFT サイズ・レートが違うため、補正していません" };
+
+inline const juce::String transportWavLoading { u8"読み込み中…" };
+
+// ---- 残響・スイープ測定（2026-11）----
+inline const juce::String navReverb { u8"残響" };
+inline const juce::String reverbTitle { u8"残響時間（スイープ測定）" };
+inline const juce::String reverbHint { u8"マイクを客席の代表位置に置き、会場を静かにしてから「スイープで測る」。"
+                                        u8"鳴り終わって 2 秒待つと、帯域ごとの残響時間と減衰曲線が出ます。"
+                                        u8"同じ結果が伝達関数とインパルス応答にも表示されます（下のバーで信号をスイープにして発振しても同じ）。" };
+inline const juce::String reverbSweepLength { u8"スイープの長さ" };
+inline const juce::String reverbMeasureButton { u8"スイープで測る" };
+inline const juce::String reverbStopButton { u8"止める" };
+inline const juce::String reverbIdle { u8"まだ測っていません" };
+inline const juce::String reverbPlaying { u8"スイープ再生中… " };
+inline const juce::String reverbTail { u8"残響を待っています…" };
+inline const juce::String reverbAnalysing { u8"計算中…" };
+inline const juce::String reverbFailed { u8"測れませんでした: " };
+inline const juce::String reverbDone { u8"測定済み " };
+inline const juce::String reverbTableTitle { u8"帯域ごとの残響時間（秒）" };
+inline const juce::String reverbNoResult { u8"スイープで測ると、ここに残響時間が出ます" };
+inline const juce::String reverbBand { u8"帯域 Hz" };
+inline const juce::String reverbBroadband { u8"全帯域" };
+inline const juce::String reverbDynamicRange { u8"S/N" };
+inline const juce::String reverbTableNote { u8"棒は T20（−5〜−25 dB の傾きを 60 dB に伸ばした値）。T20 は S/N 35 dB 以上、T30 は 45 dB 以上のときだけ出します。"
+                                             u8"S/N が足りない帯域は、出力を上げるか長いスイープで測り直してください。列をクリックすると右の曲線が切り替わります。" };
+inline const juce::String reverbDecayTitle { u8"減衰曲線" };
+inline const juce::String reverbDecayLegend { u8"太線: 減衰曲線（Schroeder）／ 細線: IR の包絡" };
+inline const juce::String noticeSweepResult { u8"スイープの結果を表示中（鳴らし直すと更新。信号をノイズに戻すと通常の測定に戻ります）" };
+inline const juce::String noticeSweepRunning { u8"スイープ測定中: 鳴り終わってから結果が出ます" };
+
+inline const juce::String irPlaceholder { u8"インパルス応答はここに出ます。\n"
+                                         u8"ピンクノイズを発振して「測定開始」（数秒で出ます）、または信号をスイープにして発振（鳴り終わると出ます）。\n"
+                                         u8"ETC にすると反射と残響の減り方が dB で見えます。クリックした位置を遅延に使えます。" };
 
 } // namespace eeq::strings

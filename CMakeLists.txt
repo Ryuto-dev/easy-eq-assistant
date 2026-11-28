@@ -135,6 +135,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/UtilitiesTab.cpp
     src/UI/UtilitiesTab.h
     src/UI/VenueTab.cpp
+    src/UI/ReverbTab.cpp
     src/UI/VenueTab.h
     src/UI/LiveModeOverlay.cpp
     src/UI/LiveModeOverlay.h
@@ -229,6 +230,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/ClockDriftTests.cpp
     tests/MicCalibrationTests.cpp
     tests/MultiTimeWindowTests.cpp
+    tests/SweepAnalysisTests.cpp
         tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp

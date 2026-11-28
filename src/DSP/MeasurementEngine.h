@@ -44,6 +44,8 @@ public:
                     juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod);
 
     void copyLatestResult (SpectrumFrame& resultOut) const;
+    int getFftSize() const noexcept { return configuredFftSize.load (std::memory_order_relaxed); }
+    double getSampleRate() const noexcept { return analysisSampleRate.load (std::memory_order_relaxed); }
     
     /** 解析スレッドが完了した最新フレームを取得する（非破壊的ピーク）。
         まだフレームがなければ nullptr を返す。複数タブが同時に読める。 */
@@ -52,6 +54,12 @@ public:
     /** MTW（帯域ごとに窓長を変えてつないだ）最新フレーム。MTW が無効ならメインのフレーム（ロードマップ B-2）。
         遅延を合わせてから使うこと（短い窓は時間のずれに弱い） */
     std::shared_ptr<const SpectrumFrame> getLatestMtwFrame() const;
+    /** スイープ測定の結果を「最新の結果」として出す（2026-11）。保持している間は getLatestFrame /
+        getLatestMtwFrame がこれを返す（スイープ中の Welch 平均は意味を持たないので表示に出さない）。
+        nullptr で解除。resetAverages() でも解除される */
+    void setHeldResult (std::shared_ptr<const SpectrumFrame> frame);
+    bool hasHeldResult() const;
+
     void setMtwEnabled (bool enabled) noexcept { mtwEnabled.store (enabled, std::memory_order_relaxed); }
     bool isMtwEnabled() const noexcept { return mtwEnabled.load (std::memory_order_relaxed); }
     
@@ -119,6 +127,7 @@ private:
     std::atomic<bool> driftCompensationEnabled { true };
     std::atomic<float> compensatedDriftPpm { 0.0f }, estimatedDriftPpm { 0.0f };
     std::atomic<double> analysisSampleRate { 48000.0 };
+    std::atomic<int> configuredFftSize { 16384 };
     std::atomic<int> driftRealignments { 0 };
     // 遅延推定（メッセージスレッド）向けに公開する当てはめ結果
     std::atomic<double> driftIntercept { 0.0 }, driftRateAtomic { 0.0 };
@@ -137,7 +146,7 @@ private:
 
     // 完了フレームの公開（解析スレッド→UIスレッド、複数購読可・非破壊的）
     mutable juce::CriticalSection framePublishLock;
-    std::shared_ptr<const SpectrumFrame> publishedFrame, publishedMtwFrame;
+    std::shared_ptr<const SpectrumFrame> publishedFrame, publishedMtwFrame, heldFrame;
 
     // MTW（短い窓の平均）。configure はメッセージスレッド、feed/compose は解析スレッドなのでロックで守る
     juce::SpinLock mtwLock;

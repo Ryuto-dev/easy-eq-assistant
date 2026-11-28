@@ -1,5 +1,7 @@
 #include "BottomBar.h"
 
+#include <thread>
+
 #include <cmath>
 
 #include "../Core/Log.h"
@@ -177,14 +179,38 @@ void BottomBar::applyExcitationSource (int comboId)
                         return;
                     }
 
-                    juce::String error;
+                    // 読み込みは別スレッドで行う（iCloud 上の長い曲だと読み終わるまで数十秒かかり、
+                    // 以前はその間 UI が固まって見えていた）。終わったらメッセージスレッドで公開する
+                    loadingWav = true;
+                    loadingWavName = file.getFileName();
+                    const auto deviceRate = engine.getCurrentSampleRate();
+                    juce::Component::SafePointer<BottomBar> safeThis (this);
 
-                    if (! engine.loadWavExcitation (file, error))
+                    std::thread ([safeThis, file, deviceRate]
                     {
-                        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
-                            strings::wavLoadFailed, error, strings::okButton, nullptr, nullptr);
-                        excitationCombo.setSelectedId (1, juce::sendNotificationSync);
-                    }
+                        auto samples = std::make_shared<std::vector<float>>();
+                        juce::String error, summary;
+                        const auto ok = eeq::audio::AudioEngine::decodeWavExcitation (file, deviceRate, *samples, error, summary);
+
+                        juce::MessageManager::callAsync ([safeThis, ok, samples, error, summary]
+                        {
+                            if (safeThis == nullptr)
+                                return;
+
+                            safeThis->loadingWav = false;
+
+                            if (! ok)
+                            {
+                                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                                    strings::wavLoadFailed, error, strings::okButton, nullptr, nullptr);
+                                safeThis->excitationCombo.setSelectedId (1, juce::sendNotificationSync);
+                                return;
+                            }
+
+                            safeThis->engine.publishWavExcitation (std::move (*samples), summary);
+                            safeThis->loadedWavName = safeThis->loadingWavName;
+                        });
+                    }).detach();
                 });
             break;
         }
@@ -203,7 +229,9 @@ void BottomBar::applyExcitationSource (int comboId)
 void BottomBar::update()
 {
     const auto audible = engine.isNoiseAudible();
-    noiseButton.setButtonText (audible ? strings::transportNoiseOn : strings::transportNoiseOff);
+    noiseButton.setButtonText (loadingWav ? strings::transportWavLoading
+                                          : (audible ? strings::transportNoiseOn : strings::transportNoiseOff));
+    noiseButton.setEnabled (! loadingWav);
     noiseButton.setToggleState (audible, juce::dontSendNotification); // ON の間はアクセント色で塗る
 
     // 発振中インジケータ（issue #141）: レベルとソースも出す
@@ -220,7 +248,7 @@ void BottomBar::update()
     // 各タブがソースを切り替えても表示を追従させる（issue #133）
     const auto sourceId = comboIdForSource (engine.getExcitationSource());
 
-    if (sourceId != excitationCombo.getSelectedId() && ! excitationCombo.isPopupActive())
+    if (sourceId != excitationCombo.getSelectedId() && ! excitationCombo.isPopupActive() && ! loadingWav)
     {
         excitationCombo.setSelectedId (sourceId, juce::dontSendNotification);
         lastExcitationId = sourceId;

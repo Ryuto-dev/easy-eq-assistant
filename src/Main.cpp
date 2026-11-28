@@ -37,7 +37,7 @@ public:
        #endif
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
 
-        // 画面の確認用: --screenshot <png> [--page N] [--size WxH] [--light] [--live]
+        // 画面の確認用: --screenshot <png> [--page N] [--size WxH] [--light] [--live] [--measure] [--sweep]
         // 起動して数秒後に画面を PNG に保存して終了する（UI のゴールデン確認・資料用。ロードマップ A-5）
         const auto args = juce::StringArray::fromTokens (commandLine, true);
         if (const auto index = args.indexOf ("--screenshot"); index >= 0 && index + 1 < args.size())
@@ -55,9 +55,11 @@ public:
         auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent());
         if (content != nullptr)
             content->prepareScreenshot (argAfter ("--page").isNotEmpty() ? argAfter ("--page").getIntValue() : -1,
-                                        args.contains ("--light"), args.contains ("--live"), args.contains ("--measure"));
+                                        args.contains ("--light"), args.contains ("--live"), args.contains ("--measure"),
+                                        args.contains ("--sweep"));
 
-        juce::Timer::callAfterDelay (args.contains ("--measure") ? 10000 : 4000, [this, target]
+        // --sweep: 5 秒スイープを鳴らし、残響待ちと解析が終わってから撮る
+        juce::Timer::callAfterDelay (args.contains ("--sweep") ? 12000 : args.contains ("--measure") ? 10000 : 4000, [this, target]
         {
             if (mainWindow != nullptr)
                 if (auto* c = mainWindow->getContentComponent())

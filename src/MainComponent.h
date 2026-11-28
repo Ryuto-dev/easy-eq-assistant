@@ -21,7 +21,9 @@
 #include "UI/LimitTestTab.h"
 #include "UI/LiveModeOverlay.h"
 #include "UI/MeasurementPanel.h"
+#include "UI/ReverbTab.h"
 #include "UI/RtaSplTab.h"
+#include "UI/SweepSession.h"
 #include "UI/SetupPage.h"
 #include "UI/SideNav.h"
 #include "UI/StatusStrip.h"
@@ -47,7 +49,7 @@ public:
     bool keyPressed (const juce::KeyPress& key) override;
 
     /** 画面の確認用（--screenshot）: ページ・テーマ・本番モードを切り替える */
-    void prepareScreenshot (int page, bool light, bool live, bool measure = false);
+    void prepareScreenshot (int page, bool light, bool live, bool measure = false, bool sweep = false);
     bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
 private:
@@ -61,7 +63,7 @@ private:
     void saveProjectIfPossible();
 
     enum Page { pageSetup = 0, pageMeasure, pageDelay, pageEq, pageApply,
-                pageRta = 10, pageLimit, pageTools, pageVenue };
+                pageRta = 10, pageLimit, pageTools, pageVenue, pageReverb };
     void showPage (int page);
     juce::Component* componentForPage (int page);
     bool pageHasInspector (int page) const noexcept;
@@ -103,6 +105,7 @@ private:
     eeq::core::ProjectStore project;
     eeq::core::SystemCorrection correction;
     eeq::ui::UiState uiState;
+    eeq::ui::SweepSession sweepSession { engine };
     eeq::ui::UiContext context { engine, *appPropertiesStorage.properties.getUserSettings(),
                                  project, correction, uiState };
 
@@ -121,6 +124,7 @@ private:
     eeq::ui::LimitTestTab limitTab;
     eeq::ui::UtilitiesTab utilitiesTab;
     eeq::ui::VenueTab venueTab;
+    eeq::ui::ReverbTab reverbTab;
 
     eeq::ui::LiveModeOverlay liveOverlay;
 

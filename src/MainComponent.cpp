@@ -23,8 +23,10 @@ MainComponent::MainComponent()
       limitTab (context),
       utilitiesTab (context),
       venueTab (context),
+      reverbTab (context, sweepSession),
       liveOverlay (engine)
 {
+    context.sweep = &sweepSession;
     eeq::log::write ("--- Easy EQ assistant started ---");
     setOpaque (true);
 
@@ -60,6 +62,7 @@ MainComponent::MainComponent()
         { pageEq, strings::navEq, strings::navEqSub, 4 },
         { pageApply, strings::navApply, strings::navApplySub, 5 },
         { pageRta, strings::navRta, {}, 0 },
+        { pageReverb, strings::navReverb, {}, 0 },
         { pageLimit, strings::navLimit, {}, 0 },
         { pageTools, strings::navTools, {}, 0 },
         { pageVenue, strings::navVenue, {}, 0 },
@@ -114,7 +117,8 @@ MainComponent::MainComponent()
 
     for (auto* page : { (juce::Component*) &setupPage, (juce::Component*) &transferTab, (juce::Component*) &delayTab,
                         (juce::Component*) &eqTab, (juce::Component*) &applyPage, (juce::Component*) &rtaSplTab,
-                        (juce::Component*) &limitTab, (juce::Component*) &utilitiesTab, (juce::Component*) &venueTab })
+                        (juce::Component*) &limitTab, (juce::Component*) &utilitiesTab, (juce::Component*) &venueTab,
+                        (juce::Component*) &reverbTab })
         addChildComponent (page);
 
     addChildComponent (liveOverlay);
@@ -317,6 +321,7 @@ juce::Component* MainComponent::componentForPage (int page)
         case pageLimit:   return &limitTab;
         case pageTools:   return &utilitiesTab;
         case pageVenue:   return &venueTab;
+        case pageReverb:  return &reverbTab;
         default:          return nullptr;
     }
 }
@@ -335,7 +340,7 @@ void MainComponent::showPage (int page)
     currentPage = page;
 
     for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
-                   (int) pageLimit, (int) pageTools, (int) pageVenue })
+                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb })
         if (auto* component = componentForPage (p))
             component->setVisible (p == page);
 
@@ -349,8 +354,18 @@ void MainComponent::showPage (int page)
     resized();
 }
 
-void MainComponent::prepareScreenshot (int page, bool light, bool live, bool measure)
+void MainComponent::prepareScreenshot (int page, bool light, bool live, bool measure, bool sweep)
 {
+    if (sweep)
+    {
+        juce::Component::SafePointer<MainComponent> safeThis (this);
+        juce::Timer::callAfterDelay (1500, [safeThis]
+        {
+            if (safeThis != nullptr)
+                safeThis->sweepSession.startSweep (5.0);
+        });
+    }
+
     if (measure)
     {
         // 実機で鳴らして測りながら撮る（デバイスが開くのを待ってから）
@@ -397,7 +412,7 @@ void MainComponent::applyThemeToComponents()
 
     // 全ページを再描画する（非表示のページも、次に表示したときに新しい色で描かれるように）
     for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
-                   (int) pageLimit, (int) pageTools, (int) pageVenue })
+                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb })
         if (auto* component = componentForPage (p))
             component->repaint();
 
@@ -527,6 +542,8 @@ void MainComponent::timerCallback()
     if (active (pageApply)) applyPage.timerTick();
     limitTab.timerTick();
     venueTab.timerTick();
+    sweepSession.timerTick(); // スイープ測定の進行（どのページからでも）
+    if (active (pageReverb)) reverbTab.timerTick();
 
     if (active (pageTools))
         utilitiesTab.timerTick();
@@ -589,7 +606,10 @@ void MainComponent::timerCallback()
         eeq::log::write ("excitation: reached idle (fade-out completed on audio thread)");
 
     if (engine.consumeExcitationFinished())
+    {
         eeq::log::write ("excitation: playback reached the end");
+        sweepSession.notifyPlaybackFinished();
+    }
 
     juce::String fallbackNotice;
 

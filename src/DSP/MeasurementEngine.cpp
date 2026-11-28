@@ -46,8 +46,21 @@ void MeasurementEngine::stopMeasurement()
     measuring.store (false, std::memory_order_relaxed);
 }
 
+void MeasurementEngine::setHeldResult (std::shared_ptr<const SpectrumFrame> frame)
+{
+    const juce::ScopedLock sl (framePublishLock);
+    heldFrame = std::move (frame);
+}
+
+bool MeasurementEngine::hasHeldResult() const
+{
+    const juce::ScopedLock sl (framePublishLock);
+    return heldFrame != nullptr;
+}
+
 void MeasurementEngine::resetAverages()
 {
+    setHeldResult (nullptr);
     accumulator.resetAverages();
     const juce::SpinLock::ScopedLockType sl (mtwLock);
     mtw.resetAverages();
@@ -62,6 +75,7 @@ void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const A
                                    juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod)
 {
     accumulator.configure (fftSizePoints, sampleRate, averaging, windowMethod);
+    configuredFftSize.store (fftSizePoints, std::memory_order_relaxed);
     {
         const juce::SpinLock::ScopedLockType sl (mtwLock);
         mtw.configure (fftSizePoints, sampleRate, averaging, windowMethod);
@@ -71,6 +85,15 @@ void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const A
 
 void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
 {
+    {
+        const juce::ScopedLock sl (framePublishLock);
+        if (heldFrame != nullptr)
+        {
+            resultOut = *heldFrame;
+            return;
+        }
+    }
+
     accumulator.copyResult (resultOut);
     resultOut.refDelaySamples = (double) accumulatorRefDelay.load (std::memory_order_acquire);
 }
@@ -78,12 +101,14 @@ void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
 std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestFrame() const
 {
     const juce::ScopedLock sl (framePublishLock);
-    return publishedFrame;
+    return heldFrame != nullptr ? heldFrame : publishedFrame;
 }
 
 std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestMtwFrame() const
 {
     const juce::ScopedLock sl (framePublishLock);
+    if (heldFrame != nullptr)
+        return heldFrame;
     return publishedMtwFrame != nullptr ? publishedMtwFrame : publishedFrame;
 }
 

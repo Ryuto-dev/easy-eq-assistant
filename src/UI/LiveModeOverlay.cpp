@@ -12,6 +12,14 @@ namespace eeq::ui
 
 namespace
 {
+// 経過時間を秒まで出す（本番中に「いま何分何秒」が分かるように）: 1:02:03 / 12:34
+juce::String formatElapsed (double seconds)
+{
+    const auto total = juce::jmax (0, (int) seconds);
+    const auto h = total / 3600, m = (total / 60) % 60, sec = total % 60;
+    return h > 0 ? juce::String::formatted ("%d:%02d:%02d", h, m, sec) : juce::String::formatted ("%d:%02d", m, sec);
+}
+
 // SPL値を緑→黄→赤に色分けする（仕様 5.4）
 juce::Colour splColour (double spl, int greenThreshold, int yellowThreshold)
 {
@@ -241,14 +249,15 @@ void LiveModeOverlay::timerTick()
         const auto unit = juce::String (weighting == eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted ? "dB(A)"
                                         : weighting == eeq::dsp::RtaSplAnalyzer::Weighting::cWeighted ? "dB(C)"
                                                                                                       : "dB(Z)")
-                        + (analyzer.getTimeConstant() == eeq::dsp::RtaSplAnalyzer::TimeConstant::slow ? " Slow" : " Fast");
+                        + (analyzer.getTimeConstant() == eeq::dsp::RtaSplAnalyzer::TimeConstant::slow   ? " Slow"
+                         : analyzer.getTimeConstant() == eeq::dsp::RtaSplAnalyzer::TimeConstant::fast ? " Fast" : " 0.5s");
 
         unitText = unit;
         peakLabel.setText (unit + "    " + strings::splPeakLabel + ": " + juce::String (spl.peakDb, 1) + " dB",
                            juce::dontSendNotification);
     }
 
-    sessionLabel.setText (juce::String ((int) (spl.sessionSeconds / 60.0)) + " min",
+    sessionLabel.setText (formatElapsed (spl.sessionSeconds),
                           juce::dontSendNotification);
 
     // 校正済みなら「未校正」注記を出さない（issue #139）
@@ -411,14 +420,14 @@ void LiveModeOverlay::paint (juce::Graphics& g)
         g.drawText ("LIVE", r.removeFromLeft (64), juce::Justification::centredLeft);
         g.setColour (text);
         g.setFont (juce::Font (juce::FontOptions (22.0f)));
-        g.drawText (juce::Time::getCurrentTime().formatted ("%H:%M"), r.removeFromLeft (90), juce::Justification::centredLeft);
+        g.drawText (juce::Time::getCurrentTime().formatted ("%H:%M:%S"), r.removeFromLeft (120), juce::Justification::centredLeft);
 
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
         g.setColour (loggingActive ? theme::get (theme::ColourId::danger) : dim);
         g.drawText (loggingActive ? juce::String (u8"● ") + strings::liveRecording : juce::String (strings::liveLogInactive),
                     r.removeFromLeft (150), juce::Justification::centredLeft);
         g.setColour (dim);
-        g.drawText (juce::String ((int) (spl.sessionSeconds / 60.0)) + strings::liveMinutesSuffix, r.removeFromLeft (110),
+        g.drawText (formatElapsed (spl.sessionSeconds) + strings::liveElapsedSuffix, r.removeFromLeft (130),
                     juce::Justification::centredLeft);
     }
 

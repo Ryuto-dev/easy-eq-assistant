@@ -12,7 +12,7 @@ namespace eeq::ui
 namespace
 {
 constexpr const char* settingsWeightingKey = "splWeightingId";
-constexpr const char* settingsTimeConstantKey = "splTimeConstantId";
+constexpr const char* settingsTimeConstantKey = "splTimeConstantId2"; // 2026-11: 0.5 s を既定にしたので鍵を変えた
 constexpr const char* settingsBandsKey = "rtaBandsId";
 constexpr const char* settingsAvgTimeKey = "rtaAvgTimeId";
 constexpr const char* settingsOffsetKey = "splCalibrationOffsetDb";
@@ -87,9 +87,10 @@ RtaSplTab::RtaSplTab (UiContext& context)
     styleCombo (weightingCombo);
     addAndMakeVisible (weightingCombo);
 
+    timeConstantCombo.addItem (strings::splMedium, 3);
     timeConstantCombo.addItem (strings::splFast, 1);
     timeConstantCombo.addItem (strings::splSlow, 2);
-    timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
+    timeConstantCombo.setSelectedId (3, juce::dontSendNotification);
     styleCombo (timeConstantCombo);
     addAndMakeVisible (timeConstantCombo);
 
@@ -260,7 +261,8 @@ RtaSplTab::RtaSplTab (UiContext& context)
     {
         ctx.engine.getSplAnalyzer().setTimeConstant (
             timeConstantCombo.getSelectedId() == 2 ? eeq::dsp::RtaSplAnalyzer::TimeConstant::slow
-                                                   : eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+          : timeConstantCombo.getSelectedId() == 1 ? eeq::dsp::RtaSplAnalyzer::TimeConstant::fast
+                                                   : eeq::dsp::RtaSplAnalyzer::TimeConstant::medium);
         ctx.settings.setValue (settingsTimeConstantKey, timeConstantCombo.getSelectedId());
         ctx.settings.saveIfNeeded();
     };
@@ -273,7 +275,7 @@ void RtaSplTab::refreshFromSettings()
 {
     weightingCombo.setSelectedId (juce::jlimit (1, 3, ctx.settings.getIntValue (settingsWeightingKey, 3)),
                                   juce::dontSendNotification);
-    timeConstantCombo.setSelectedId (juce::jlimit (1, 2, ctx.settings.getIntValue (settingsTimeConstantKey, 1)),
+    timeConstantCombo.setSelectedId (juce::jlimit (1, 3, ctx.settings.getIntValue (settingsTimeConstantKey, 3)),
                                      juce::dontSendNotification);
     bandsCombo.setSelectedId (juce::jlimit (1, 3, ctx.settings.getIntValue (settingsBandsKey, 1)),
                               juce::dontSendNotification);
@@ -567,15 +569,15 @@ void RtaSplTab::applyCalibrationOffset()
 
     auto& analyzer = ctx.engine.getSplAnalyzer();
 
-    // 比較校正中はアプリ側の表示も dB(A) Fast に合わせる（仕様 3.4）。設定にも保存する
+    // 比較校正中はアプリ側の表示を dB(A) に合わせる（仕様 3.4）。設定にも保存する
     analyzer.setWeighting (eeq::dsp::RtaSplAnalyzer::Weighting::aWeighted);
-    analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::fast);
+    analyzer.setTimeConstant (eeq::dsp::RtaSplAnalyzer::TimeConstant::medium); // 校正は 3 秒のエネルギー平均なので時定数に依らない
     // 重み付け・時定数変更後は古い平均値をリセットしてから新しいフレームを待つ
     analyzer.resetSpl();
     weightingCombo.setSelectedId (3, juce::dontSendNotification);
-    timeConstantCombo.setSelectedId (1, juce::dontSendNotification);
+    timeConstantCombo.setSelectedId (3, juce::dontSendNotification);
     ctx.settings.setValue (settingsWeightingKey, 3);
-    ctx.settings.setValue (settingsTimeConstantKey, 1);
+    ctx.settings.setValue (settingsTimeConstantKey, 3);
 
     // 少し待ってから新しいフレームで値を取る（タイマーで再取得するためここでは返す）
     // 実際のオフセット計算は次の timerTick で行う

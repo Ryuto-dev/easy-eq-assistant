@@ -149,8 +149,19 @@ public:
     void setSweep (std::vector<float> sweepSamples);
     /** WAVファイルを読み込んで励起信号にする（モノラルにダウンミックス）。失敗時 false */
     bool loadWavExcitation (const juce::File& file, juce::String& errorOut);
+    /** WAV を読んでデバイスのレートのモノラル（ピーク 1.0）にする。どのスレッドから呼んでもよい */
+    static bool decodeWavExcitation (const juce::File& file, double deviceRate, std::vector<float>& out,
+                                     juce::String& errorOut, juce::String& summaryOut);
+    /** decodeWavExcitation の結果を励起信号にする（メッセージスレッド）。鳴っていれば新しい曲で鳴り続ける */
+    void publishWavExcitation (std::vector<float> samples, const juce::String& summary);
     /** スイープ/WAVの再生位置（0..1）。ノイズのときは意味を持たない */
     double getExcitationProgress() const noexcept;
+    /** スイープ/WAV の長さ（サンプル。無ければ 0） */
+    int getExcitationLengthSamples() const noexcept
+    {
+        const auto* buffer = activeBufferPtr.load (std::memory_order_acquire);
+        return buffer != nullptr ? (int) buffer->size() : 0;
+    }
     /** スイープ/WAVが最後まで再生されたら true を1度だけ返す */
     bool consumeExcitationFinished() noexcept
     { return excitationFinished.exchange (false, std::memory_order_relaxed); }

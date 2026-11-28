@@ -23,7 +23,7 @@ class RtaSplAnalyzer
 {
 public:
     enum class Weighting { aWeighted, cWeighted, zWeighted };
-    enum class TimeConstant { fast, slow }; // Fast=125ms / Slow=1s（仕様 3.4）
+    enum class TimeConstant { fast, slow, medium }; // Fast=125ms / Slow=1s（仕様 3.4）/ medium=0.5s（数値が読みやすい表示用。既定）
 
     // ---- 設定（UIスレッドから）----
 
@@ -168,7 +168,7 @@ private:
     int bandsPerOctave = 3;
     double rtaAveragingSeconds = 1.0;
     Weighting weighting = Weighting::aWeighted;
-    TimeConstant timeConstant = TimeConstant::fast;
+    TimeConstant timeConstant = TimeConstant::medium;
     std::atomic<double> calibrationOffsetDb { 0.0 };
 
     std::unique_ptr<juce::dsp::FFT> fft;
@@ -192,9 +192,10 @@ private:
 
     // SPL（時間領域。エネルギーは重み付け後の二乗平均で、フルスケール正弦波 = 0.5）
     WeightingFilter weightingFilter;
-    double fastAlpha = 0.0, slowAlpha = 0.0; // サンプルごとの指数平滑係数
+    double fastAlpha = 0.0, slowAlpha = 0.0, mediumAlpha = 0.0; // サンプルごとの指数平滑係数
     double fastEnergy = 0.0;   // 指数平滑された二乗値
     double slowEnergy = 0.0;
+    double mediumEnergy = 0.0;
     double pendingEnergy = 0.0; // まだスライスにしていない Σ y²
     int pendingSamples = 0;
     double sessionEnergyTime = 0.0; // Σ y²·dt（現在の重み付け。切替時はリセット: #119）

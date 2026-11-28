@@ -50,6 +50,8 @@ private:
     juce::Label shortcutsLabel;              // ショートカットヒント（issue #141）
     juce::Slider levelSlider;
 
+    bool loadingWav = false;
+    juce::String loadingWavName, loadedWavName; // 読み込み中 / 読み込んだ曲の名前（状態表示）
     int lastExcitationId = 1; // 変化検出（デバイス再構築でコンボが再設定されても発火させない）
     bool overLimitConfirmed = false;
     bool dialogOpen = false;

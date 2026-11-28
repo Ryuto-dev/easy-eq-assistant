@@ -778,7 +778,8 @@ void DelayIrTab::paint (juce::Graphics& g)
     if (irToDraw == nullptr)
     {
         g.setColour (theme::get (theme::ColourId::textDim));
-        g.drawText (strings::graphPlaceholder, irArea.toNearestInt(), juce::Justification::centred);
+        g.setFont (juce::Font (juce::FontOptions (14.0f)));
+        g.drawFittedText (strings::irPlaceholder, irArea.toNearestInt().reduced (24), juce::Justification::centred, 4);
         return;
     }
 

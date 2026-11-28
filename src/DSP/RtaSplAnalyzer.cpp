@@ -275,6 +275,7 @@ void RtaSplAnalyzer::configure (double newSampleRate, int newBandsPerOctave, dou
         // SPL の時間重み付け（IEC 61672: Fast 125 ms / Slow 1 s）と重み付けフィルタ
         fastAlpha = 1.0 - std::exp (-1.0 / (0.125 * sampleRate));
         slowAlpha = 1.0 - std::exp (-1.0 / (1.0 * sampleRate));
+        mediumAlpha = 1.0 - std::exp (-1.0 / (0.5 * sampleRate));
         weightingFilter.design (weighting, sampleRate);
 
         assembly.assign ((size_t) fftSize, 0.0f);
@@ -467,6 +468,7 @@ void RtaSplAnalyzer::processSplSample (double sample)
     const auto energy = y * y;
     fastEnergy += (energy - fastEnergy) * fastAlpha;
     slowEnergy += (energy - slowEnergy) * slowAlpha;
+    mediumEnergy += (energy - mediumEnergy) * mediumAlpha;
 
     pendingEnergy += energy;
     hasSignal = true;
@@ -523,7 +525,8 @@ void RtaSplAnalyzer::copySplUnlocked (SplSnapshot& out) const
     if (! hasSignal)
         return;
 
-    const auto& energy = timeConstant == TimeConstant::fast ? fastEnergy : slowEnergy;
+    const auto& energy = timeConstant == TimeConstant::fast ? fastEnergy
+                       : timeConstant == TimeConstant::slow ? slowEnergy : mediumEnergy;
     // dBFS基準（フルスケール正弦波=0 dB）に正規化（RTAと同じ基準。仕様 3.4:
     // 校正しない状態のSPLは相対値で、校正オフセットを足して絶対値にする）
     auto toDb = [this] (double meanSquare)
@@ -615,6 +618,7 @@ void RtaSplAnalyzer::resetSplUnlocked (bool keepPeak)
     weightingFilter.reset();
     fastEnergy = 0.0;
     slowEnergy = 0.0;
+    mediumEnergy = 0.0;
     pendingEnergy = 0.0;
     pendingSamples = 0;
     sessionEnergyTime = 0.0;

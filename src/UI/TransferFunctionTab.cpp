@@ -1,4 +1,5 @@
 #include "TransferFunctionTab.h"
+#include "SweepSession.h"
 
 #include "../Core/Exporters.h"
 #include "Buttons.h"
@@ -781,7 +782,15 @@ void TransferFunctionTab::timerTick()
         juce::StringArray notices;
         auto& measurement = ctx.engine.getMeasurement();
 
-        if (measurement.isMeasuring())
+        const auto sweepPhase = ctx.sweep != nullptr ? ctx.sweep->getPhase() : SweepSession::Phase::idle;
+        const auto sweepRunning = sweepPhase == SweepSession::Phase::playing || sweepPhase == SweepSession::Phase::tail
+                               || sweepPhase == SweepSession::Phase::analysing;
+
+        if (sweepRunning)
+            notices.add (strings::noticeSweepRunning);
+        else if (measurement.hasHeldResult())
+            notices.add (strings::noticeSweepResult);
+        else if (measurement.isMeasuring())
         {
             const auto refPeak = ctx.engine.getRefMeter().peakLinear.load();
 
