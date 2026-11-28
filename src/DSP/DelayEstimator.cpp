@@ -65,8 +65,40 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     if (rmsOf (refBuf) < 1.0e-6 || rmsOf (measBuf) < 1.0e-6)
         return result;
 
+    // 窓の両端を滑らかに絞る（Tukey、両端 1/16 ずつ）。矩形のまま切り出すと、端の段差の漏れが
+    // Ref と Meas で同じ位相（ゼロラグ）になり、狭帯域の信号（スイープ）では PHAT がそれを最大ピークに
+    // してしまっていた（実測: スイープ中は真の遅延 2000 サンプルに対して 0 サンプルと判定）
+    {
+        const auto taper = std::max (1, size / 16);
+        const auto pi = 3.14159265358979323846;
+
+        for (int i = 0; i < taper; ++i)
+        {
+            const auto w = (float) (0.5 - 0.5 * std::cos (pi * (double) i / (double) taper));
+            refBuf[(size_t) i] *= w;
+            measBuf[(size_t) i] *= w;
+            refBuf[(size_t) (size - 1 - i)] *= w;
+            measBuf[(size_t) (size - 1 - i)] *= w;
+        }
+    }
+
     fft.performRealOnlyForwardTransform (refBuf.data(), true);
     fft.performRealOnlyForwardTransform (measBuf.data(), true);
+
+    // PHAT は全 bin の重みを 1 にそろえるので、Ref がほとんど鳴っていない bin（スイープの帯域外など）の
+    // 雑音まで同じ重みで効いてしまう。Ref のパワーが最大から −60 dB 未満の bin は使わない
+    float refPowerGate = 0.0f;
+
+    if (usePhat)
+    {
+        float maxRefPower = 0.0f;
+
+        for (int k = 1; k < size / 2; ++k)
+            maxRefPower = std::max (maxRefPower, refBuf[(size_t) k * 2] * refBuf[(size_t) k * 2]
+                                                     + refBuf[(size_t) k * 2 + 1] * refBuf[(size_t) k * 2 + 1]);
+
+        refPowerGate = maxRefPower * 1.0e-6f;
+    }
 
     // 相互パワー Gxy = M(f)·conj(R(f))。Gxy の逆FFTのピーク位置が Meas の遅れ（サンプル）
     const auto halfBins = size / 2 + 1;
@@ -86,7 +118,7 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
         {
             const auto mag = std::sqrt (gr * gr + gi * gi);
 
-            if (mag > 1.0e-12f)
+            if (mag > 1.0e-12f && rr * rr + ri * ri >= refPowerGate)
             {
                 gr /= mag;
                 gi /= mag;

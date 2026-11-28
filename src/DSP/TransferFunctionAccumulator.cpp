@@ -205,6 +205,8 @@ void TransferFunctionAccumulator::processFrame()
     // 循環バッファから直近 n サンプルを取り出し、窓掛けしてFFT入力へ。
     // performRealOnlyForwardTransform の契約: 生サンプルはバッファの先頭 n に連続で置く
     // （出力はインターリーブの複素ペアで bin 0..n/2 が有効）
+    double refEnergy = 0.0;
+
     for (int i = 0; i < n; ++i)
     {
         auto idx = assemblyPos - n + i;
@@ -214,7 +216,14 @@ void TransferFunctionAccumulator::processFrame()
 
         fftBufRef[(size_t) i] = assemblyRef[(size_t) idx] * windowData[(size_t) i];
         fftBufMeas[(size_t) i] = assemblyMeas[(size_t) idx] * windowData[(size_t) i];
+        refEnergy += (double) fftBufRef[(size_t) i] * (double) fftBufRef[(size_t) i];
     }
+
+    // Ref が鳴っていない（励起を止めた・無音の区間）フレームは平均に入れない。入れると Gxy は増えず
+    // Gyy（部屋の騒音）だけが積もり、止めている間にコヒーレンスが 0 へ落ちて表示が消えていた。
+    // 直前の結果をそのまま残す（−100 dBFS RMS 未満を無音とみなす）
+    if (refEnergy / (double) n < 1.0e-10)
+        return;
 
     fft->performRealOnlyForwardTransform (fftBufRef.data(), true);
     fft->performRealOnlyForwardTransform (fftBufMeas.data(), true);

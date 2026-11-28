@@ -35,6 +35,8 @@ public:
     static constexpr double releasePpm = 1.0;     // これ未満になったら補正をやめる（ヒステリシス）
     static constexpr int historySize = 24;        // 直線当てはめに使う観測数（0.5 秒ごとなら 12 秒分）
     static constexpr int minObservations = 6;
+    static constexpr double outlierSamples = 3.0;  // 直線からこれ以上外れた観測は捨てる
+    static constexpr int maxRejectedInARow = 20;   // 外れ値がこれだけ続いたら測り直す（0.5 秒ごとなら 10 秒）
 
     explicit ClockDriftCompensator (int lineSize)
         : refLine ((size_t) lineSize, 0.0f), measLine ((size_t) lineSize, 0.0f)
@@ -51,6 +53,19 @@ public:
     /** 生の Ref/Meas の遅延の観測（観測窓の中心の時刻 = 処理済みサンプル数で）。 */
     void addObservation (double sampleTime, double delaySamples)
     {
+        // 当てはめた直線から大きく外れた観測は捨てる（鳴らし始め・止めた直後の窓、反射に引っ張られた推定など）。
+        // クロックの差はデバイスの性質で急には変わらないので、直線が決まった後は外れ値で上書きさせない。
+        // 外れ値が続く（約 10 秒）ときは経路そのものが変わった（マイクを動かした等）とみなして測り直す
+        if (haveFit && ! retracking && std::abs (delaySamples - predict (sampleTime)) > outlierSamples)
+        {
+            if (++rejectedInARow < maxRejectedInARow)
+                return;
+
+            history.clear();
+            retracking = true;
+        }
+
+        rejectedInARow = 0;
         history.push_back ({ sampleTime, delaySamples });
 
         while ((int) history.size() > historySize)
@@ -128,6 +143,8 @@ public:
     void resetTracking() noexcept
     {
         history.clear();
+        retracking = false;
+        rejectedInARow = 0;
         haveFit = false;
         rate = 0.0;
 
@@ -288,7 +305,17 @@ private:
         if (std::sqrt (ss / n) > 0.75) // ばらつきが大きい（反射・騒音で推定が安定しない）ときは使わない
             return;
 
-        intercept = aLocal - b * t0;
+        const auto newIntercept = aLocal - b * t0;
+
+        if (retracking && haveFit && active)
+        {
+            // 測り直した直線へ移るとき、今の時間合わせは保つ（経路の遅延が跳んだ分まで追いかけない）
+            const auto now = history.back().time;
+            lockDelay += (newIntercept + b * now) - predict (now);
+        }
+
+        retracking = false;
+        intercept = newIntercept;
         rate = b;
         haveFit = true;
     }
@@ -345,6 +372,8 @@ private:
 
     std::deque<Observation> history;
     bool haveFit = false;
+    bool retracking = false;
+    int rejectedInARow = 0;
     double intercept = 0.0, rate = 0.0; // 生の遅延 ≈ intercept + rate · t（t = 処理済みサンプル数）
 
     bool active = false;

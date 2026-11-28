@@ -478,6 +478,7 @@ inline const juce::String delayTrackWaiting { u8"Track: 測定開始待ち" };
 inline const juce::String delayTrackLost { u8"Track: 検出できません（信号を確認）" };
 inline const juce::String delayTrackFollowed { u8"Track: 追従 " };
 inline const juce::String delayTrackStable { u8"Track: 安定 " };
+inline const juce::String delayAutoApplied { u8"遅延を自動で設定: " };
 
 inline const juce::String meterTooltip { u8"数値はピーク (dBFS)。クリップは保持され、クリック（または R）で解除" };
 

@@ -14,6 +14,7 @@
 
 #include "Audio/AudioEngine.h"
 #include "DSP/DelayEstimator.h"
+#include "DSP/SweepGenerator.h"
 
 // 実機の音響測定（EEQ_HARDWARE_TESTS=1 のときだけ）。スピーカーからピンクノイズを出して
 // マイクで拾い、アプリと同じ経路（AudioEngine → MeasurementEngine）で伝達関数を測る。
@@ -214,4 +215,101 @@ TEST (LoudspeakerMeasurementHardware, SpeakerToMicTransferFunction)
     EXPECT_GE (compensated.averages, 16);
     EXPECT_GE (summarise (compensated, 200.0, 10000.0).coherence, 0.9);
     EXPECT_GE (summarise (compensated, 1000.0, 8000.0).coherence, 0.9);
+}
+
+// 長時間の再現（EEQ_HW_LONG=1）: ユーザー操作と同じ流れ
+// ノイズ 20 秒 → 停止 5 秒 → スイープ 10 秒 → ノイズ 30 秒。遅延補償なし・FFT 32768・指数平均 64。
+TEST (LoudspeakerMeasurementHardware, LongSessionCoherenceStaysUp)
+{
+    if (std::getenv ("EEQ_HARDWARE_TESTS") == nullptr || std::getenv ("EEQ_HW_LONG") == nullptr)
+        GTEST_SKIP() << "set EEQ_HARDWARE_TESTS=1 EEQ_HW_LONG=1";
+
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    juce::PropertiesFile::Options options;
+    options.applicationName = "EasyEQHardwareTest";
+    juce::PropertiesFile settings (juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                       .getChildFile ("eeq-hw-test/settings-long.xml"), options);
+    settings.setValue ("inputDeviceName", envOr ("EEQ_HW_INPUT", "BMG-22M"));
+    settings.setValue ("outputDeviceName", envOr ("EEQ_HW_OUTPUT", juce::String::fromUTF8 (u8"MacBook Proのスピーカー")));
+    settings.setValue ("sampleRate", 48000.0);
+    settings.setValue ("bufferSize", 512);
+    settings.setValue ("refChannel", eeq::audio::AudioEngine::internalRefChannel); // デバイス再起動で Ref が入力chへ戻らないように
+
+    eeq::audio::AudioEngine engine (&settings);
+    engine.openInitialDevice();
+    pump (1500);
+
+    engine.setRefChannel (eeq::audio::AudioEngine::internalRefChannel);
+    engine.setMeasChannel (envOr ("EEQ_HW_MEAS_CH", "0").getIntValue());
+    engine.setOutputRoutingMask (3);
+    engine.setNoiseLevelDb (-20.0f);
+
+    auto& measurement = engine.getMeasurement();
+    eeq::dsp::AveragingConfig averaging;
+    // 既定（アプリの初期値）: 直近 16 フレームの FIFO 平均・FFT 16384。EEQ_HW_LONG=exp なら指数 64・FFT 32768
+    const bool longExp = juce::String (std::getenv ("EEQ_HW_LONG")) == "exp";
+    averaging.mode = longExp ? eeq::dsp::AveragingConfig::Mode::exponential : eeq::dsp::AveragingConfig::Mode::fifo;
+    averaging.maxAverages = longExp ? 64 : 16;
+    measurement.configure (longExp ? 32768 : 16384, engine.getCurrentSampleRate(), averaging, juce::dsp::WindowingFunction<float>::hann);
+    measurement.setReferenceDelaySamples (0);
+
+    auto report = [&] (const char* phase, double t)
+    {
+        eeq::dsp::SpectrumFrame f;
+        measurement.copyLatestResult (f);
+        std::printf ("  [%s t=%5.1f] avg=%3d drift est=%6.1f comp=%6.1f  coh 250-1k=%.2f 1-4k=%.2f 4-16k=%.2f\n", phase, t,
+                     f.averages, measurement.getEstimatedDriftPpm(), measurement.getCompensatedDriftPpm(),
+                     summarise (f, 250, 1000).coherence, summarise (f, 1000, 4000).coherence,
+                     summarise (f, 4000, 16000).coherence);
+    };
+
+    auto runNoise = [&] (const char* phase, int seconds)
+    {
+        engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::pinkNoise);
+        engine.startExcitation();
+        measurement.startMeasurement();
+        for (int i = 1; i <= seconds / 2; ++i)
+        {
+            pump (2000, &engine);
+
+            // アプリと同じく、遅延が未設定なら鳴らし始めて数秒で自動設定する（DelayIrTab::autoDelayStep）
+            if (i == 2 && measurement.getReferenceDelaySamples() == 0)
+                if (const auto d = measurement.estimateCurrentDelay (true); d.valid)
+                {
+                    measurement.setReferenceDelaySamples ((int) std::lround (d.delaySamples));
+                    std::printf ("  auto delay: %.2f samples\n", d.delaySamples);
+                }
+
+            report (phase, 2.0 * i);
+        }
+    };
+
+    runNoise ("noise1", 20);
+    engine.stopExcitation();
+    pump (5000, &engine);
+    report ("stopped", 5);
+
+    engine.setSweep (eeq::dsp::LogSweepGenerator::generate (engine.getCurrentSampleRate(), 10.0, 20.0, 20000.0, 1.0f));
+    engine.setExcitationSource (eeq::audio::AudioEngine::ExcitationSource::sweep);
+    engine.startExcitation();
+    for (int i = 1; i <= 6; ++i)
+    {
+        pump (2000, &engine);
+        report ("sweep", 2.0 * i);
+    }
+    engine.stopExcitation();
+    pump (2000, &engine);
+    report ("after sweep", 2);
+
+    measurement.stopMeasurement();
+    pump (300, &engine);
+    runNoise ("noise2", 30);
+
+    eeq::dsp::SpectrumFrame last;
+    measurement.copyLatestResult (last);
+    engine.stopExcitation();
+    pump (800, &engine);
+    measurement.stopMeasurement();
+
+    EXPECT_GE (summarise (last, 1000, 4000).coherence, 0.8);
 }

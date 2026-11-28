@@ -165,3 +165,27 @@ TEST (ClockDrift, NegativeDriftIsCompensatedToo)
     EXPECT_TRUE (run.compensator.isActive());
     EXPECT_NEAR (residualAt (run, 11.5) - residualAt (run, 7.0), 0.0, 0.2);
 }
+
+TEST (ClockDrift, OutlierObservationsDoNotOverwriteAnEstablishedFit)
+{
+    // 83 ppm を 12 秒観測したあと、スイープ等で遅延 0 の誤観測が 10 秒弱続いても傾きは保たれる
+    ClockDriftCompensator c (1 << 16);
+    c.setMinimumSpan (48000.0 * 3.0);
+    const auto rate = 83.0e-6;
+    double t = 0.0;
+
+    for (int i = 0; i < 24; ++i, t += 24000.0)
+        c.addObservation (t, 2000.0 + rate * t);
+
+    ASSERT_NEAR (c.getDriftPpm(), 83.0, 0.5);
+
+    for (int i = 0; i < 19; ++i, t += 24000.0)
+        c.addObservation (t, 0.0);
+
+    EXPECT_NEAR (c.getDriftPpm(), 83.0, 0.5);
+
+    for (int i = 0; i < 10; ++i, t += 24000.0)
+        c.addObservation (t, 2000.0 + rate * t);
+
+    EXPECT_NEAR (c.getDriftPpm(), 83.0, 0.5);
+}

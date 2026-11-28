@@ -182,6 +182,12 @@ private:
     bool irClipHold = false;         // IR保持
     std::unique_ptr<eeq::dsp::ImpulseResponse> heldIr; // 保持中のIR
     int trackTickCounter = 0;
+    // 測定開始時の遅延の自動設定: 遅延が未設定（0）のまま測定を始めたら、数秒後に一度だけ検出して適用する。
+    // 遅延を合わせないと位相が回り続け（ぐちゃぐちゃに見える）、FFT 窓のずれでコヒーレンスも下がるため
+    bool wasMeasuringForAutoDelay = false;
+    bool autoDelayPending = false;
+    int autoDelayTicks = 0;
+    void autoDelayStep();
     juce::Rectangle<float> lastIrArea;     // IR グラフの描画領域（クリックで遅延を指定）
     double lastIrT0 = 0.0, lastIrT1 = 0.0; // IR グラフの時間範囲（ms）
     juce::Label trackStatusLabel;

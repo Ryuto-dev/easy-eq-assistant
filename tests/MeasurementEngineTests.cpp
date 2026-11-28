@@ -18,6 +18,8 @@ TEST (MeasurementEngine, StartRequestEventuallyAccumulatesFrames)
     EXPECT_TRUE (engine.isMeasuring());
 
     std::array<float, 256> samples {};
+    for (size_t i = 0; i < samples.size(); ++i)
+        samples[i] = 0.1f * (float) ((i * 37u) % 17u) - 0.8f; // 無音のフレームは平均に入らないので何か鳴らす
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (2);
 
     while (engine.getAverages() == 0 && std::chrono::steady_clock::now() < deadline)

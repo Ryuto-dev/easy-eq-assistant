@@ -64,6 +64,37 @@ TEST (TransferFunctionAccumulator, RecoversKnownGainDelayAndPhase)
     EXPECT_LT (frame.refPowerDb[(size_t) bin + 20], frame.refPowerDb[(size_t) bin] - 60.0f);
 }
 
+TEST (TransferFunctionAccumulator, SilentReferenceFramesAreNotAveraged)
+{
+    // 励起を止めた間（Ref が無音）のフレームを平均に入れると、部屋の騒音だけが積もってコヒーレンスが 0 へ落ちる
+    constexpr int fftSize = 2048;
+    eeq::dsp::TransferFunctionAccumulator accumulator;
+    accumulator.configure (fftSize, 48000.0, { eeq::dsp::AveragingConfig::Mode::fifo, 8 },
+                           juce::dsp::WindowingFunction<float>::hann);
+
+    std::mt19937 rng (3);
+    std::normal_distribution<float> noise (0.0f, 0.1f);
+    std::vector<float> ref ((size_t) fftSize * 8), meas ((size_t) fftSize * 8);
+    for (size_t i = 0; i < ref.size(); ++i)
+        meas[i] = ref[i] = noise (rng);
+
+    accumulator.feedSamples (ref.data(), meas.data(), (int) ref.size());
+    const auto averagesWhilePlaying = accumulator.getAverages();
+    ASSERT_GT (averagesWhilePlaying, 2);
+
+    std::vector<float> silentRef (ref.size(), 0.0f), roomNoise (ref.size());
+    for (auto& v : roomNoise)
+        v = noise (rng);
+
+    accumulator.feedSamples (silentRef.data(), roomNoise.data(), (int) silentRef.size());
+    EXPECT_EQ (accumulator.getAverages(), averagesWhilePlaying);
+
+    // 平均に入っていれば FIFO 8 枠がすべて無音フレームになり γ² ≈ 0。入るのは鳴り終わりをまたぐ数フレームだけ
+    eeq::dsp::SpectrumFrame frame;
+    accumulator.copyResult (frame);
+    EXPECT_GT (frame.coherence[(size_t) fftSize / 8], 0.7f);
+}
+
 TEST (TransferFunctionAccumulator, ResetClearsAverages)
 {
     constexpr int fftSize = 2048;
@@ -74,6 +105,8 @@ TEST (TransferFunctionAccumulator, ResetClearsAverages)
 
     std::vector<float> ref ((size_t) fftSize, 0.0f);
     std::vector<float> meas ((size_t) fftSize, 0.0f);
+    for (int i = 0; i < fftSize; ++i)
+        ref[(size_t) i] = meas[(size_t) i] = 0.5f * (float) std::sin (0.1 * i);
 
     accumulator.feedSamples (ref.data(), meas.data(), fftSize);
     EXPECT_GT (accumulator.getAverages(), 0);

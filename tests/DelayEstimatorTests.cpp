@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "DSP/DelayEstimator.h"
+#include "DSP/SweepGenerator.h"
 
 #include <cmath>
 #include <complex>
@@ -290,5 +291,36 @@ TEST (DelayEstimator, SubsamplePeakOffsetHandlesNegativePeak)
             const auto offset = eeq::dsp::subsamplePeakOffset (data.data(), size, 50);
             EXPECT_NEAR (offset, fraction, 0.01) << "fraction=" << fraction << " polarity=" << polarity;
         }
+    }
+}
+
+TEST (DelayEstimator, PhatFindsTheTrueDelayInsideASweep)
+{
+    // 10 秒のログスイープの途中を 32768 サンプルで切り出す（狭帯域）。矩形窓のままだと端の段差の漏れが
+    // ゼロラグで一致し、PHAT が 0 サンプルを返していた（実機: 真の遅延 2000 に対して 0）
+    const auto sweep = eeq::dsp::LogSweepGenerator::generate (48000.0, 10.0, 20.0, 20000.0, 1.0f);
+    constexpr int window = 32768;
+    constexpr int delay = 2000;
+    std::mt19937 rng (11);
+    std::normal_distribution<float> noise (0.0f, 0.002f);
+
+    for (const auto startSecond : { 1.5, 4.0, 6.0, 8.0 })
+    {
+        const auto start = (int) (startSecond * 48000.0);
+        std::vector<float> ref (window), meas (window);
+
+        for (int i = 0; i < window; ++i)
+        {
+            ref[(size_t) i] = 0.1f * sweep[(size_t) (start + i)];
+            meas[(size_t) i] = 0.03f * sweep[(size_t) (start + i - delay)] + 0.01f + noise (rng);
+        }
+
+        const auto e = eeq::dsp::estimateDelay (ref.data(), meas.data(), window, true, 1.0);
+
+        // 1.5 秒（約 60 Hz）は周期が長く相関の山が鈍いので精度は問わない。ゼロラグに張り付かないことだけ見る
+        if (startSecond < 2.0)
+            EXPECT_GT (std::abs (e.delaySamples), 100.0) << "sweep window at " << startSecond << " s";
+        else
+            EXPECT_NEAR (e.delaySamples, (double) delay, 2.0) << "sweep window at " << startSecond << " s";
     }
 }

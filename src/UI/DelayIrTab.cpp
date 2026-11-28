@@ -632,6 +632,7 @@ void DelayIrTab::timerTick()
     // ループバック校正の自動進行（issue #17/#31/#55）
     processLoopbackRanging();
     trackDelayStep();
+    autoDelayStep();
 
     // IR再構築ワーカーの結果をチェック（issue #65: バックグラウンドで重いFFTを実行）
     checkIrRebuildResult();
@@ -1174,6 +1175,56 @@ void DelayIrTab::timerTickBackground()
 
     // Track は伝達関数タブを見ながら使うので、非表示でも動かす（issue #142）
     trackDelayStep();
+    autoDelayStep();
+}
+
+void DelayIrTab::autoDelayStep()
+{
+    const auto measuring = ctx.engine.getMeasurement().isMeasuring();
+
+    if (measuring && ! wasMeasuringForAutoDelay)
+    {
+        // 測定を始めた: 遅延が未設定なら、鳴り始めてから約 3 秒（30Hz × 90）で検出する
+        autoDelayPending = std::abs (ctx.state.appliedDelaySamples.load()) < 0.5 && ! loopbackRanging;
+        autoDelayTicks = 0;
+    }
+
+    wasMeasuringForAutoDelay = measuring;
+
+    if (! autoDelayPending)
+        return;
+
+    // 測定を止めた・手動で遅延を入れた・ループバック校正を始めたときはやめる
+    if (! measuring || loopbackRanging || std::abs (ctx.state.appliedDelaySamples.load()) >= 0.5)
+    {
+        autoDelayPending = false;
+        return;
+    }
+
+    // 内部参照なら励起が鳴っている間だけ数える（外部の Ref 入力なら常に）
+    const auto refPlaying = ctx.engine.isExcitationAudible() || ctx.engine.getRefChannel() != eeq::audio::AudioEngine::internalRefChannel;
+
+    if (! refPlaying || ++autoDelayTicks < 90)
+        return;
+
+    const auto estimate = ctx.engine.getMeasurement().estimateCurrentDelay (true);
+
+    if (! estimate.valid)
+    {
+        if (autoDelayTicks > 30 * 20) // 20 秒たっても検出できなければあきらめる（D キーで手動検出できる）
+            autoDelayPending = false;
+        return;
+    }
+
+    autoDelayPending = false;
+    lastEstimate = estimate;
+    hasEstimate = true;
+    updateDelayReadout();
+    applyDelay();
+
+    const auto ms = eeq::acoustics::delayMsForSamples (estimate.delaySamples, ctx.engine.getCurrentSampleRate());
+    trackStatusLabel.setText (strings::delayAutoApplied + juce::String (ms, 2) + " ms", juce::dontSendNotification);
+    eeq::log::write ("delay: auto-applied at measurement start (" + juce::String (estimate.delaySamples, 2) + " samples)");
 }
 
 void DelayIrTab::rebuildSystemList()
