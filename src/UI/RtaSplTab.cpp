@@ -282,8 +282,10 @@ void RtaSplTab::refreshFromSettings()
     gainTargetEditor.setText (juce::String (juce::roundToInt (ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0))),
                               juce::dontSendNotification);
 
-    // 校正オフセットを解析器へ復元する（仕様 3.4）
-    ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (ctx.settings.getDoubleValue (settingsOffsetKey, 0.0));
+    // SPL 校正は起動するたびにリセットする（2026-11: マイク・ゲイン・会場のシステムが毎回違うため、
+    // 前回の値を黙って使うと誤った絶対値が出る）。校正は「準備」画面から毎回やり直す
+    ctx.engine.getSplAnalyzer().setCalibrationOffsetDb (0.0);
+    ctx.settings.setValue (settingsOffsetKey, 0.0);
 
     // ノイズフロアの復元（仕様 3.5.1: 測って保存する）
     const auto centersVar = ctx.settings.getValue (settingsFloorCentersKey);
@@ -474,11 +476,33 @@ void RtaSplTab::processCalibrationPending()
     if (! analyzer.tryCopySpl (spl))
         return; // calibration待ちもメッセージスレッドをブロックしない
 
-    if (spl.hasSignal)
+    const auto now = juce::Time::getCurrentTime();
+
+    if (now < calibrationSettleUntil)
+        return;
+
+    if (now < calibrationCollectUntil)
     {
+        if (spl.hasSignal && spl.currentDb > -200.0)
+        {
+            calibrationEnergySum += std::pow (10.0, spl.currentDb / 10.0);
+            ++calibrationSamples;
+        }
+
+        const auto remaining = (calibrationCollectUntil - now).inSeconds();
+        calibrationOffsetLabel.setText (strings::calibrationAveraging + juce::String (remaining, 1) + strings::secondsUnit,
+                                        juce::dontSendNotification);
+        return;
+    }
+
+    calibrationOffsetPending = false;
+    calibrationApplyButton.setEnabled (true);
+
+    if (calibrationSamples >= 10)
+    {
+        const auto appDb = 10.0 * std::log10 (calibrationEnergySum / (double) calibrationSamples);
         const auto previousOffset = analyzer.getCalibrationOffsetDb();
-        const auto offset = eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (
-            calibrationMeterValue, spl.currentDb, previousOffset);
+        const auto offset = eeq::dsp::RtaSplAnalyzer::calibrationOffsetFor (calibrationMeterValue, appDb, previousOffset);
         analyzer.setCalibrationOffsetDb (offset);
         uncalibratedLabel.setVisible (std::abs (offset) < 1.0e-9);
         ctx.settings.setValue (settingsOffsetKey, offset);
@@ -487,16 +511,13 @@ void RtaSplTab::processCalibrationPending()
         calibrationOffsetLabel.setText (strings::calibrationOffsetLabel + ": " + juce::String (offset, 1) + " dB",
                                         juce::dontSendNotification);
         eeq::log::write (juce::String ("SPL calibration: meter=") + juce::String (calibrationMeterValue, 1)
-                         + " app=" + juce::String (spl.currentDb, 1) + " (previous offset "
+                         + " app(3 s energy average)=" + juce::String (appDb, 2) + " over "
+                         + juce::String (calibrationSamples) + " readings (previous offset "
                          + juce::String (previousOffset, 2) + ") offset=" + juce::String (offset, 2));
-        calibrationOffsetPending = false;
     }
-    else if (juce::Time::getCurrentTime() > calibrationDeadline)
+    else
     {
-        calibrationOffsetPending = false;
-        calibrationOffsetLabel.setText (
-            strings::calibrationNoSignal,
-            juce::dontSendNotification);
+        calibrationOffsetLabel.setText (strings::calibrationNoSignal, juce::dontSendNotification);
     }
 }
 
@@ -560,7 +581,13 @@ void RtaSplTab::applyCalibrationOffset()
     // 実際のオフセット計算は次の timerTick で行う
     calibrationOffsetPending = true;
     calibrationMeterValue = meterValue;
-    calibrationDeadline = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
+    const auto now = juce::Time::getCurrentTime();
+    calibrationSettleUntil = now + juce::RelativeTime::seconds (1.0);   // Fast（125 ms）が落ち着くまで
+    calibrationCollectUntil = calibrationSettleUntil + juce::RelativeTime::seconds (3.0); // 3 秒のエネルギー平均
+    calibrationDeadline = calibrationCollectUntil + juce::RelativeTime::seconds (1.0);
+    calibrationEnergySum = 0.0;
+    calibrationSamples = 0;
+    calibrationApplyButton.setEnabled (false);
     calibrationOffsetLabel.setText (strings::calibrationAcquiring,
                                     juce::dontSendNotification);
 }

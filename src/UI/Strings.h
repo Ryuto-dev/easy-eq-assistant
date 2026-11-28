@@ -665,4 +665,6 @@ inline const juce::String delaySystemFromLoopback { u8"（ループバック補�
 inline const juce::String delayBreakdownRest { u8"、残り " };
 inline const juce::String delayBreakdownNote { u8"。内部参照の遅延は機器の処理時間を含むため、距離そのものではありません（残りにもスピーカー内部の処理が入ります）" };
 
+inline const juce::String calibrationAveraging { u8"3 秒間の平均を取っています（音を出したまま動かさないでください）… 残り " };
+
 } // namespace eeq::strings

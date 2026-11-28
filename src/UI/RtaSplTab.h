@@ -82,6 +82,11 @@ private:
     bool calibrationOffsetPending = false;
     double calibrationMeterValue = 0.0;
     juce::Time calibrationDeadline;
+    // 比較校正は、切り替え直後の値が落ち着くのを待ってから数秒ぶんをエネルギー平均する
+    // （瞬時値 1 回で決めると、ノイズの揺れ ±2 dB がそのまま校正誤差になっていた）
+    juce::Time calibrationSettleUntil, calibrationCollectUntil;
+    double calibrationEnergySum = 0.0;
+    int calibrationSamples = 0;
 };
 
 } // namespace eeq::ui
