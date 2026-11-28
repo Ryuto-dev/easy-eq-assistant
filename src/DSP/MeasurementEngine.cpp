@@ -3,6 +3,7 @@
 #include "RtaSplAnalyzer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
@@ -16,7 +17,7 @@ MeasurementEngine::MeasurementEngine (SampleRingBuffer& ringToUse)
     readRef.resize (16384);
     readMeas.resize (16384);
     delayedRef.resize (16384);
-    refDelayLine.assign ((size_t) maxReferenceDelaySamples + 1, 0.0f);
+    delayedMeas.resize (16384);
     captureRef.resize (captureCapacity, 0.0f);
     captureMeas.resize (captureCapacity, 0.0f);
     startThread (juce::Thread::Priority::low);
@@ -59,6 +60,7 @@ void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const A
                                    juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod)
 {
     accumulator.configure (fftSizePoints, sampleRate, averaging, windowMethod);
+    analysisSampleRate.store (sampleRate > 0.0 ? sampleRate : 48000.0, std::memory_order_relaxed);
 }
 
 void MeasurementEngine::copyLatestResult (SpectrumFrame& resultOut) const
@@ -137,7 +139,22 @@ DelayEstimate MeasurementEngine::estimateCurrentDelay (bool usePhat, double minC
     if (! copyRecentSamples (32768, ref, meas))
         return {};
 
-    return estimateDelay (ref.data(), meas.data(), (int) ref.size(), usePhat, minConfidence);
+    // メインローブの幅はスピーカーのインパルスの広がりを見込んで 1.5 ms
+    const auto rate = analysisSampleRate.load (std::memory_order_relaxed);
+    const auto guard = (int) std::lround (rate * 0.0015);
+    auto estimate = estimateDelay (ref.data(), meas.data(), (int) ref.size(), usePhat, minConfidence, guard);
+
+    // 入出力のクロックがずれている（補正中）ときは、窓の中で遅延が動いてピークが鈍る。
+    // 観測から当てはめた直線で「今」の遅延を返す（窓の中心ではなく現在の値。数サンプルの差になる）
+    if (driftFitActive.load (std::memory_order_acquire))
+    {
+        const auto now = (double) driftProcessed.load (std::memory_order_relaxed);
+        estimate.delaySamples = driftIntercept.load (std::memory_order_relaxed)
+                              + driftRateAtomic.load (std::memory_order_relaxed) * now;
+        estimate.valid = estimate.confidence >= std::max (minConfidence, 12.0);
+    }
+
+    return estimate;
 }
 
 void MeasurementEngine::appendCapture (const float* ref, const float* meas, int numSamples)
@@ -153,6 +170,49 @@ void MeasurementEngine::appendCapture (const float* ref, const float* meas, int 
     }
 }
 
+void MeasurementEngine::observeDrift()
+{
+    // 約 0.5 秒ごとに、生の Ref/Meas（直近 32768 サンプル）の遅延を観測する
+    const auto now = drift.getSamplesProcessed();
+    const auto rate = analysisSampleRate.load (std::memory_order_relaxed);
+    constexpr int window = 32768;
+
+    if (now < nextDriftObservationAt)
+        return;
+
+    nextDriftObservationAt = now + (std::uint64_t) (rate * 0.5);
+    drift.setMinimumSpan (rate * 3.0);
+
+    if (! driftCompensationEnabled.load (std::memory_order_relaxed))
+    {
+        if (drift.isActive())
+            drift.resetTracking();
+        compensatedDriftPpm.store (0.0f, std::memory_order_relaxed);
+        return;
+    }
+
+    if (copyRecentSamples (window, driftRef, driftMeas) && (int) driftRef.size() == window)
+    {
+        double refEnergy = 0.0;
+        for (auto v : driftRef)
+            refEnergy += (double) v * v;
+
+        if (refEnergy / window > 1.0e-8) // Ref が鳴っているときだけ（無音どうしの相関は無意味）
+        {
+            const auto estimate = estimateDelay (driftRef.data(), driftMeas.data(), window, true, 1.0);
+
+            if (estimate.confidence >= 15.0)
+                drift.addObservation ((double) now - window * 0.5, estimate.delaySamples);
+        }
+    }
+
+    estimatedDriftPpm.store ((float) drift.getDriftPpm(), std::memory_order_relaxed);
+    driftIntercept.store (drift.getIntercept(), std::memory_order_relaxed);
+    driftRateAtomic.store (drift.getRate(), std::memory_order_relaxed);
+    driftFitActive.store (drift.isActive(), std::memory_order_release);
+    compensatedDriftPpm.store (drift.isActive() ? (float) drift.getDriftPpm() : 0.0f, std::memory_order_relaxed);
+}
+
 void MeasurementEngine::run()
 {
     int samplesToSkipForMeasurement = 0;
@@ -163,6 +223,7 @@ void MeasurementEngine::run()
         if (const auto wanted = requestedRefDelay.load (std::memory_order_relaxed); wanted != activeRefDelay)
         {
             activeRefDelay = wanted;
+            drift.rebase();
             accumulator.resetAverages();
             accumulatorRefDelay.store (wanted, std::memory_order_release);
         }
@@ -209,21 +270,16 @@ void MeasurementEngine::run()
             samplesToSkipForMeasurement -= skip;
 
             // Ref を遅延線に通す（測定していなくても常に流し、履歴を保っておく）。
-            // 遅延量を変えた直後でも、過去の Ref が残っているので即座に正しく揃う
+            // 遅延量を変えた直後でも、過去の Ref が残っているので即座に正しく揃う。
+            // 入出力のクロックが違えば、ドリフト分も小数遅延で追従させる（ClockDriftCompensator）
+            drift.process (readRef.data(), readMeas.data(), delayedRef.data(), delayedMeas.data(), got, activeRefDelay);
+            driftProcessed.store (drift.getSamplesProcessed(), std::memory_order_relaxed);
+            observeDrift();
+
+            if (drift.consumeAlignmentChanged())
             {
-                const auto lineSize = (int) refDelayLine.size();
-
-                for (int i = 0; i < got; ++i)
-                {
-                    refDelayLine[(size_t) refDelayWrite] = readRef[(size_t) i];
-                    auto readPos = refDelayWrite - activeRefDelay;
-
-                    if (readPos < 0)
-                        readPos += lineSize;
-
-                    delayedRef[(size_t) i] = refDelayLine[(size_t) readPos];
-                    refDelayWrite = (refDelayWrite + 1) % lineSize;
-                }
+                accumulator.resetAverages(); // 時間合わせが変わった平均は混ぜない
+                driftRealignments.store (drift.getAlignmentChangeCount(), std::memory_order_relaxed);
             }
 
             int framesDone = 0;
@@ -232,7 +288,7 @@ void MeasurementEngine::run()
                 && got > skip)
             {
                 framesDone = accumulator.feedSamples (delayedRef.data() + skip,
-                                                      readMeas.data() + skip,
+                                                      delayedMeas.data() + skip,
                                                       got - skip);
             }
 

@@ -422,11 +422,14 @@ void MainComponent::timerCallback()
 
     measurementPanel.setAverageCountDisplay (engine.getMeasurement().getAverages());
 
+    const auto inputSilent = engine.checkInputHealth (nowMs); // 約2秒ごとに判定（無音なら下部バーで警告）
     const auto status = engine.getStatusText();
     const auto watchdogWarningActive = (std::int32_t) (uiWatchdogWarningUntilMs - nowMs) > 0;
     const auto deviceStopNoticeActive = (std::int32_t) (deviceStopNoticeUntilMs - nowMs) > 0;
     bottomBar.setStatusText (watchdogWarningActive ? strings::uiWatchdogStoppedNotice
                              : deviceStopNoticeActive ? strings::deviceRestartStoppedNotice
+                             : inputSilent ? (engine.inputIsBuiltInMic() ? strings::builtInMicSilenceNotice
+                                                                         : strings::inputDigitalSilenceNotice)
                              : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
 
     // デバイスが開き直されたら測定設定（サンプルレート）を合わせ直す

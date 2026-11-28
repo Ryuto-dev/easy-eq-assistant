@@ -499,6 +499,9 @@ inline const juce::String eqLevelAlignTooltip { u8"測定の絶対レベルは�
 inline const juce::String limitCeilingInvalid { u8"出力上限は −60〜0 dBFS の数値で入力してください" };
 
 inline const juce::String uiWatchdogStoppedNotice { u8"UI停止を検知：励起音を自動停止しました" };
+// 入力が完全な無音（全サンプル 0）のときの警告
+inline const juce::String inputDigitalSilenceNotice { u8"入力が完全に無音です（デバイス選択・マイク許可・ケーブルを確認してください）" };
+inline const juce::String builtInMicSilenceNotice { u8"内蔵マイクが無音です（macOS では内蔵スピーカーの音量が 0／ミュートだと内蔵マイクも無音になります）" };
 inline const juce::String deviceRestartStoppedNotice { u8"オーディオデバイスが停止したため励起音を止めました（自動では再開しません）" };
 
 inline const juce::String loopbackRestoreFailed { u8"保存されていたループバック校正を読み込めませんでした。補正なしで測定しています。IR・遅延タブで測り直してください。" };

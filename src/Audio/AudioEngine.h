@@ -8,6 +8,8 @@
 
 #include "../DSP/MeasurementEngine.h"
 #include "../DSP/RtaSplAnalyzer.h"
+#include "AggregateDevicePair.h"
+#include "BuiltInSpeakerKeepAlive.h"
 #include "PinkNoiseGenerator.h"
 
 namespace eeq::audio
@@ -58,6 +60,11 @@ public:
 
     // デバイスが開いた/開き直されたら増える番号。UIは変化を検出してコンボを更新する
     uint32_t getDeviceGeneration() const noexcept { return deviceGeneration.load (std::memory_order_relaxed); }
+
+    /** 入力の健全性チェック（メッセージスレッドから定期的に呼ぶ）。
+        コールバックが来ているか・入力が完全な無音（デジタル 0）でないかを約2秒ごとに判定し、
+        状態が変わったときだけログに残す。戻り値: 入力がデジタル無音または停止中なら true */
+    bool checkInputHealth (juce::uint32 nowMs);
     double getCurrentSampleRate() const noexcept { return currentSampleRate.load (std::memory_order_relaxed); }
     int getCurrentBufferSize() const noexcept { return currentBufferSize.load (std::memory_order_relaxed); }
     juce::String getStatusText() const;
@@ -319,6 +326,30 @@ private:
     std::atomic<double> currentSampleRate { 48000.0 };
     std::atomic<int> currentBufferSize { 512 };
     std::atomic<uint32_t> deviceGeneration { 0 };
+
+    // 入力の健全性（checkInputHealth 用）。オーディオスレッドが書き、メッセージスレッドが読んで戻す
+    std::atomic<std::uint64_t> diagBlocks { 0 };
+    std::atomic<float> diagInputPeak { 0.0f };   // 全入力chの最大値（前回の読み出し以降）
+    // 以下はメッセージスレッドだけ
+    juce::uint32 diagLastCheckMs = 0;
+    std::uint64_t diagLastBlocks = 0;
+    uint32_t diagLastGeneration = 0xffffffff;
+    int diagLastState = -1; // 0=正常 1=デジタル無音 2=コールバック停止
+    bool diagLastDriftCompensating = false;
+    BuiltInSpeakerKeepAlive builtInSpeakerKeepAlive; // 内蔵マイクの回避策（macOS）
+    // 入力と出力が別デバイスのときの集約デバイス（macOS。クロックのドリフト補正）
+    AggregateDevicePair aggregates;
+    /** ユーザーが選んだ（論理）デバイス名のセットアップ。集約デバイスは元の入力/出力名に戻す */
+    juce::AudioDeviceManager::AudioDeviceSetup logicalSetup() const;
+    /** 論理セットアップを JUCE に渡す形へ（別デバイスなら集約デバイスと有効chに置き換える） */
+    juce::AudioDeviceManager::AudioDeviceSetup toPhysicalSetup (juce::AudioDeviceManager::AudioDeviceSetup setup);
+    void releaseUnusedAggregates();
+
+public:
+    /** 入力が内蔵マイクか（無音警告の文言を変えるため） */
+    bool inputIsBuiltInMic() const noexcept { return builtInSpeakerKeepAlive.inputIsBuiltInMic(); }
+
+private:
 
     juce::CriticalSection errorMutex;
     juce::String pendingErrorMessage;

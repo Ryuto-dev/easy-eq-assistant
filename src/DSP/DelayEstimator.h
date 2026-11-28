@@ -22,9 +22,13 @@ struct DelayEstimate
     - usePhat: 位相変換付き（GCC-PHAT）。反射の多い環境でピークが鋭くなる。
     - minConfidence: 有効とみなす利用側の最小 confidence（既定 5.0）。信号長に応じたノイズ棄却下限と
       6 dB以上のピーク/サイドローブ比も常に適用するため、この値を下げても無相関ノイズは有効にならない。
-    - 純粋関数（スレッドを作らない）のでテストから直接使える。 */
+    - 純粋関数（スレッドを作らない）のでテストから直接使える。
+    - mainLobeGuard: ピークの前後この bin 数はメインローブとしてサイドローブ判定から除く。
+      実際のスピーカーはマルチウェイ・DSP でインパルスが数 ms に広がるため、4 bin では隣の山を
+      「同じ高さのサイドローブ」と数えて実機で常に無効になっていた（MacBook のスピーカーで PSR 0 dB 前後）。
+      MeasurementEngine はサンプルレートから 1.5 ms 相当を渡す。 */
 [[nodiscard]] DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples,
-                                           bool usePhat, double minConfidence = 5.0);
+                                           bool usePhat, double minConfidence = 5.0, int mainLobeGuard = 4);
 
 /** 循環列 data[0..size) の |data| 最大点 peakIndex の周りで、サブサンプルのピーク位置
     （peakIndex からのずれ。−0.5..0.5）を求める（#118）。
