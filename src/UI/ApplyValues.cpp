@@ -1,5 +1,7 @@
 #include "ApplyValues.h"
 
+#include <cmath>
+
 #include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"

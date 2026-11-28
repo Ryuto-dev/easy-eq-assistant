@@ -1,5 +1,7 @@
 #include "StatusStrip.h"
 
+#include <algorithm>
+
 #include "Buttons.h"
 #include "Strings.h"
 #include "Theme.h"
