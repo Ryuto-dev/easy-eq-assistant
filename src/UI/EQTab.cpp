@@ -369,7 +369,8 @@ void EQTab::runProposal()
     buildTargetPoints();
 
     eeq::dsp::SpectrumFrame frame;
-    ctx.engine.getMeasurement().copyLatestResult (frame);
+    if (const auto latest = ctx.latestDisplayFrame()) // 画面と同じ結果（MTW なら MTW）に対して作る
+        frame = *latest;
 
     if (frame.averages < 2)
     {

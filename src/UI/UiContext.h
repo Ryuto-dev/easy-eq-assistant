@@ -57,6 +57,16 @@ struct UiContext
     eeq::core::ProjectStore& project;
     eeq::core::SystemCorrection& correction;
     UiState& state;
+
+    /** 表示・スナップショット・EQ 案に使う最新の結果。MTW が有効で遅延を合わせているときは
+        帯域ごとに窓長を変えたフレーム、そうでなければ単一 FFT のフレーム（ロードマップ B-2）。
+        短い窓は Ref/Meas の時間がずれていると成り立たないので、遅延が未設定なら使わない */
+    std::shared_ptr<const eeq::dsp::SpectrumFrame> latestDisplayFrame() const
+    {
+        auto& measurement = engine.getMeasurement();
+        const bool aligned = std::abs (state.appliedDelaySamples.load()) >= 0.5 && ! state.suspendReferenceDelay.load();
+        return measurement.isMtwEnabled() && aligned ? measurement.getLatestMtwFrame() : measurement.getLatestFrame();
+    }
 };
 
 } // namespace eeq::ui

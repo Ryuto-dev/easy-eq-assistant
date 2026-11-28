@@ -49,6 +49,8 @@ void MeasurementEngine::stopMeasurement()
 void MeasurementEngine::resetAverages()
 {
     accumulator.resetAverages();
+    const juce::SpinLock::ScopedLockType sl (mtwLock);
+    mtw.resetAverages();
 }
 
 void MeasurementEngine::setReferenceDelaySamples (int samples) noexcept
@@ -60,6 +62,10 @@ void MeasurementEngine::configure (int fftSizePoints, double sampleRate, const A
                                    juce::dsp::WindowingFunction<float>::WindowingMethod windowMethod)
 {
     accumulator.configure (fftSizePoints, sampleRate, averaging, windowMethod);
+    {
+        const juce::SpinLock::ScopedLockType sl (mtwLock);
+        mtw.configure (fftSizePoints, sampleRate, averaging, windowMethod);
+    }
     analysisSampleRate.store (sampleRate > 0.0 ? sampleRate : 48000.0, std::memory_order_relaxed);
 }
 
@@ -73,6 +79,12 @@ std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestFrame() const
 {
     const juce::ScopedLock sl (framePublishLock);
     return publishedFrame;
+}
+
+std::shared_ptr<const SpectrumFrame> MeasurementEngine::getLatestMtwFrame() const
+{
+    const juce::ScopedLock sl (framePublishLock);
+    return publishedMtwFrame != nullptr ? publishedMtwFrame : publishedFrame;
 }
 
 // getAverages はヘッダーで inline 定義済み（noexcept 付き）
@@ -213,6 +225,13 @@ void MeasurementEngine::observeDrift()
     compensatedDriftPpm.store (drift.isActive() ? (float) drift.getDriftPpm() : 0.0f, std::memory_order_relaxed);
 }
 
+void MeasurementEngine::resetAllAverages()
+{
+    accumulator.resetAverages();
+    const juce::SpinLock::ScopedLockType sl (mtwLock);
+    mtw.resetAverages();
+}
+
 void MeasurementEngine::run()
 {
     int samplesToSkipForMeasurement = 0;
@@ -224,7 +243,7 @@ void MeasurementEngine::run()
         {
             activeRefDelay = wanted;
             drift.rebase();
-            accumulator.resetAverages();
+            resetAllAverages();
             accumulatorRefDelay.store (wanted, std::memory_order_release);
         }
 
@@ -232,7 +251,7 @@ void MeasurementEngine::run()
         {
             const auto generation = measurementGeneration.load (std::memory_order_acquire);
             const auto queuedBeforeReset = ring.samplesAvailable();
-            accumulator.resetAverages();
+            resetAllAverages();
 
             // stopMeasurement() や後続の startMeasurement() が先に来た場合、
             // 古い要求で測定状態を上書きしない。
@@ -278,7 +297,7 @@ void MeasurementEngine::run()
 
             if (drift.consumeAlignmentChanged())
             {
-                accumulator.resetAverages(); // 時間合わせが変わった平均は混ぜない
+                resetAllAverages(); // 時間合わせが変わった平均は混ぜない
                 driftRealignments.store (drift.getAlignmentChangeCount(), std::memory_order_relaxed);
             }
 
@@ -290,6 +309,12 @@ void MeasurementEngine::run()
                 framesDone = accumulator.feedSamples (delayedRef.data() + skip,
                                                       delayedMeas.data() + skip,
                                                       got - skip);
+
+                if (mtwEnabled.load (std::memory_order_relaxed))
+                {
+                    const juce::SpinLock::ScopedLockType sl (mtwLock);
+                    mtw.feedSamples (delayedRef.data() + skip, delayedMeas.data() + skip, got - skip);
+                }
             }
 
             // フレームが完了したら結果を公開（UIスレッドへ、複数購読可・非破壊的）
@@ -300,9 +325,19 @@ void MeasurementEngine::run()
                 accumulator.copyResult (*frame);
                 frame->refDelaySamples = (double) activeRefDelay;
 
+                // MTW: 短い窓とつないだフレームも作る（表示・スナップショット・EQ 案用）
+                std::shared_ptr<SpectrumFrame> mtwFrame;
+                if (mtwEnabled.load (std::memory_order_relaxed))
+                {
+                    mtwFrame = std::make_shared<SpectrumFrame>();
+                    const juce::SpinLock::ScopedLockType sl (mtwLock);
+                    mtw.compose (*frame, *mtwFrame);
+                }
+
                 {
                     const juce::ScopedLock sl (framePublishLock);
                     publishedFrame = std::move (frame);
+                    publishedMtwFrame = std::move (mtwFrame);
                 }
             }
 

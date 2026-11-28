@@ -14,7 +14,7 @@ MeasurementPanel::MeasurementPanel()
     titleLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::text));
     addAndMakeVisible (titleLabel);
 
-    for (auto* label : { &fftLabel, &windowLabel, &avgModeLabel, &avgCountLabel, &smoothingLabel })
+    for (auto* label : { &fftLabel, &windowLabel, &avgModeLabel, &avgCountLabel, &smoothingLabel, &resolutionLabel })
     {
         styleLabel (*label);
         addAndMakeVisible (label);
@@ -58,7 +58,14 @@ MeasurementPanel::MeasurementPanel()
     averagesDisplay.setFont (juce::Font (juce::FontOptions (11.5f)));
     averagesDisplay.setText (strings::averagesPrefix + "0" + strings::averagesSuffix, juce::dontSendNotification);
 
-    for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo, &avgCountCombo })
+    // 分解能: MTW（既定）/ 単一 FFT（ロードマップ B-2）
+    resolutionLabel.setText (strings::resolutionLabel, juce::dontSendNotification);
+    resolutionCombo.addItem (strings::resolutionMtw, 1);
+    resolutionCombo.addItem (strings::resolutionSingle, 2);
+    resolutionCombo.setSelectedId (1, juce::dontSendNotification);
+    resolutionCombo.setTooltip (strings::resolutionTooltip);
+
+    for (auto* combo : { &fftCombo, &windowCombo, &avgModeCombo, &smoothingCombo, &avgCountCombo, &resolutionCombo })
     {
         styleCombo (*combo);
         combo->addListener (this);
@@ -111,6 +118,9 @@ void MeasurementPanel::setSettings (juce::PropertiesFile* settingsToUse)
                                                 settings->getIntValue ("measurementSmoothingId", Defaults::smoothingId)),
                                   juce::dontSendNotification);
 
+    resolutionCombo.setSelectedId (juce::jlimit (1, 2, settings->getIntValue ("measurementResolutionId", 1)),
+                                   juce::dontSendNotification);
+
     // 平均回数は保存値に最も近いプリセットへ寄せる（旧バージョンの連続値にも対応）
     const auto savedCount = settings->getDoubleValue ("measurementAvgCount", (double) Defaults::avgCount);
     int bestId = 1;
@@ -133,6 +143,7 @@ void MeasurementPanel::saveSettings()
     settings->setValue ("measurementWindowId", windowCombo.getSelectedId());
     settings->setValue ("measurementAvgModeId", avgModeCombo.getSelectedId());
     settings->setValue ("measurementSmoothingId", smoothingCombo.getSelectedId());
+    settings->setValue ("measurementResolutionId", resolutionCombo.getSelectedId());
     settings->setValue ("measurementAvgCount", getAveragingConfig().maxAverages);
     settings->saveIfNeeded();
 }
@@ -230,6 +241,7 @@ void MeasurementPanel::resized()
     row (avgModeLabel, avgModeCombo);
     row (avgCountLabel, avgCountCombo);
     row (smoothingLabel, smoothingCombo);
+    row (resolutionLabel, resolutionCombo);
 
     averagesDisplay.setBounds (bounds.removeFromTop (16));
 }

@@ -101,6 +101,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/DSP/PEQ.h
     src/DSP/SweepGenerator.h
     src/DSP/Waterfall.h
+    src/DSP/MultiTimeWindow.h
     src/UI/LevelMeter.cpp
     src/UI/LevelMeter.h
     src/UI/TopBar.cpp
@@ -227,6 +228,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/DeviceSwitchHardwareTests.cpp
         tests/ClockDriftTests.cpp
     tests/MicCalibrationTests.cpp
+    tests/MultiTimeWindowTests.cpp
         tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp

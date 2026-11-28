@@ -706,7 +706,7 @@ std::shared_ptr<const eeq::dsp::SpectrumFrame> TransferFunctionTab::sharedFrameF
 void TransferFunctionTab::timerTick()
 {
     // ---- ライブ曲線 ----
-    auto framePtr = ctx.engine.getMeasurement().getLatestFrame();
+    auto framePtr = ctx.latestDisplayFrame();
     if (framePtr == nullptr)
         framePtr = lastRequestedFrame;
 
@@ -1228,7 +1228,8 @@ void TransferFunctionTab::showSaveSnapshotDialog()
         return;
 
     eeq::dsp::SpectrumFrame currentFrame;
-    ctx.engine.getMeasurement().copyLatestResult (currentFrame);
+    if (const auto latest = ctx.latestDisplayFrame())
+        currentFrame = *latest;
 
     if (currentFrame.averages == 0)
     {
@@ -1284,7 +1285,8 @@ void TransferFunctionTab::showSaveSnapshotDialog()
             snapshot.colour = theme::get ((theme::ColourId) ((int) theme::ColourId::snapshotPalette1
                                                            + ctx.project.snapshots().size() % paletteCount));
 
-            ctx.engine.getMeasurement().copyLatestResult (snapshot.frame);
+            if (const auto latest = ctx.latestDisplayFrame()) // 画面に出ているのと同じもの（MTW なら MTW）
+                snapshot.frame = *latest;
             snapshot.delaySamples = ctx.state.appliedDelaySamples.load();
 
             if (snapshot.frame.averages == 0)

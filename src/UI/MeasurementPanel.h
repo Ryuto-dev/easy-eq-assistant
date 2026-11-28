@@ -26,6 +26,8 @@ public:
     eeq::dsp::AveragingConfig getAveragingConfig() const noexcept;
     /** 0 = なし、3 = 1/3 oct、48 = 1/48 oct */
     int getSmoothingOctaveDenominator() const noexcept;
+    /** MTW（帯域ごとに窓長を変える）を使うか（ロードマップ B-2） */
+    bool isMtwEnabled() const noexcept { return resolutionCombo.getSelectedId() != 2; }
     void setAverageCountDisplay (int averages);
 
     void paint (juce::Graphics&) override;
@@ -53,8 +55,8 @@ private:
     juce::PropertiesFile* settings = nullptr;
     bool loadingSettings = false;
 
-    juce::Label titleLabel, fftLabel, windowLabel, avgModeLabel, avgCountLabel, smoothingLabel;
-    juce::ComboBox fftCombo, windowCombo, avgModeCombo, smoothingCombo, avgCountCombo;
+    juce::Label titleLabel, fftLabel, windowLabel, avgModeLabel, avgCountLabel, smoothingLabel, resolutionLabel;
+    juce::ComboBox fftCombo, windowCombo, avgModeCombo, smoothingCombo, avgCountCombo, resolutionCombo;
     juce::Label averagesDisplay;
 };
 

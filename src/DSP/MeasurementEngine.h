@@ -4,6 +4,7 @@
 
 #include "ClockDriftCompensator.h"
 #include "DelayEstimator.h"
+#include "MultiTimeWindow.h"
 #include "SampleRingBuffer.h"
 #include "TransferFunctionAccumulator.h"
 
@@ -47,6 +48,12 @@ public:
     /** 解析スレッドが完了した最新フレームを取得する（非破壊的ピーク）。
         まだフレームがなければ nullptr を返す。複数タブが同時に読める。 */
     std::shared_ptr<const SpectrumFrame> getLatestFrame() const;
+
+    /** MTW（帯域ごとに窓長を変えてつないだ）最新フレーム。MTW が無効ならメインのフレーム（ロードマップ B-2）。
+        遅延を合わせてから使うこと（短い窓は時間のずれに弱い） */
+    std::shared_ptr<const SpectrumFrame> getLatestMtwFrame() const;
+    void setMtwEnabled (bool enabled) noexcept { mtwEnabled.store (enabled, std::memory_order_relaxed); }
+    bool isMtwEnabled() const noexcept { return mtwEnabled.load (std::memory_order_relaxed); }
     
     /** 現在の平均回数を取得する（ロックフリー: issue #67）。
         copyLatestResult のように重いコピー・ロックを避け、UIからの進行確認用。 */
@@ -91,6 +98,7 @@ private:
     void run() override;
     void appendCapture (const float* ref, const float* meas, int numSamples);
     void observeDrift();
+    void resetAllAverages();
 
     SampleRingBuffer& ring;
     TransferFunctionAccumulator accumulator;
@@ -129,7 +137,12 @@ private:
 
     // 完了フレームの公開（解析スレッド→UIスレッド、複数購読可・非破壊的）
     mutable juce::CriticalSection framePublishLock;
-    std::shared_ptr<const SpectrumFrame> publishedFrame;
+    std::shared_ptr<const SpectrumFrame> publishedFrame, publishedMtwFrame;
+
+    // MTW（短い窓の平均）。configure はメッセージスレッド、feed/compose は解析スレッドなのでロックで守る
+    juce::SpinLock mtwLock;
+    MultiTimeWindow mtw;
+    std::atomic<bool> mtwEnabled { true };
 };
 
 } // namespace eeq::dsp

@@ -616,6 +616,7 @@ void MainComponent::applyMeasurementSettings()
 {
     engine.getMeasurement().configure (measurementPanel.getFftSize(), engine.getCurrentSampleRate(),
                                        measurementPanel.getAveragingConfig(), measurementPanel.getWindowMethod());
+    engine.getMeasurement().setMtwEnabled (measurementPanel.isMtwEnabled());
 }
 
 bool MainComponent::keyPressed (const juce::KeyPress& key)

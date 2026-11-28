@@ -676,4 +676,9 @@ inline const juce::String checkMicWithPhase { u8"、位相あり" };
 inline const juce::String checkMicLoadFailed { u8"マイク補正ファイルを読めませんでした（周波数 と dB の列が必要です）" };
 inline const juce::String statusMic { u8"マイク補正" };
 
+inline const juce::String resolutionLabel { u8"分解能" };
+inline const juce::String resolutionMtw { u8"MTW（帯域ごとに窓長）" };
+inline const juce::String resolutionSingle { u8"単一 FFT" };
+inline const juce::String resolutionTooltip { u8"MTW: 低域は長い窓で細かく、高域は短い窓で反射に汚されずに見る（遅延を合わせているときに有効）" };
+
 } // namespace eeq::strings
