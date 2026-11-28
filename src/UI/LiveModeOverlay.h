@@ -109,6 +109,13 @@ private:
     juce::File currentLogFile;
     bool loggingActive = false;
 
+    // 周波数ログ（2026-11）: 1 秒間の RTA をエネルギー平均して 1 行にする
+    juce::File spectrumLogFile;
+    bool spectrumLogActive = false;
+    std::vector<double> spectrumCentres;
+    std::vector<double> spectrumEnergySum;
+    int spectrumSamples = 0, spectrumFilePart = 1;
+
     // RTA表示のキャッシュ
     std::vector<double> rtaCenters;
     std::vector<float> rtaLevels;

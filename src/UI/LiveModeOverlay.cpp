@@ -4,6 +4,7 @@
 
 #include "../Core/Exporters.h"
 #include "../Core/Log.h"
+#include "../Core/SpectrumLog.h"
 #include "Buttons.h"
 #include "Strings.h"
 
@@ -205,6 +206,14 @@ void LiveModeOverlay::beginLiveMode()
     eeq::log::write (loggingActive ? "live mode: SPL log started: " + currentLogFile.getFullPathName()
                                    : "live mode: SPL log could not be created");
 
+    // 周波数ログ（あとからログページで見返す）
+    spectrumLogFile = currentLogFile.getSiblingFile (currentLogFile.getFileNameWithoutExtension() + "_spectrum.csv");
+    spectrumLogActive = true;
+    spectrumCentres.clear();
+    spectrumEnergySum.clear();
+    spectrumSamples = 0;
+    spectrumFilePart = 1;
+
     lastLogTime = juce::Time::getCurrentTime();
     lastWaterfallPush = lastLogTime;
     historySpl.clear();
@@ -223,6 +232,8 @@ void LiveModeOverlay::endLiveMode()
         loggingActive = false;
         eeq::log::write ("live mode: SPL log stopped: " + currentLogFile.getFullPathName());
     }
+
+    spectrumLogActive = false;
 }
 
 void LiveModeOverlay::timerTick()
@@ -299,6 +310,23 @@ void LiveModeOverlay::timerTick()
                 historySpl.pop_front();
 
             // 書き込みが続けられない（移動/ディスク満杯など）場合は通知して止める
+            if (spectrumLogActive && spectrumSamples > 0)
+            {
+                std::vector<float> bandDb (spectrumEnergySum.size());
+                for (size_t b = 0; b < bandDb.size(); ++b)
+                    bandDb[b] = (float) (10.0 * std::log10 (std::max (spectrumEnergySum[b] / spectrumSamples, 1.0e-30)));
+
+                if (! eeq::core::SpectrumLog::append (spectrumLogFile, spectrumCentres, now.formatted ("%H:%M:%S"),
+                                                      spl.currentDb, spl.leq1minDb, bandDb))
+                {
+                    spectrumLogActive = false;
+                    eeq::log::write ("live mode: spectrum log write FAILED, logging stopped");
+                }
+
+                std::fill (spectrumEnergySum.begin(), spectrumEnergySum.end(), 0.0);
+                spectrumSamples = 0;
+            }
+
             if (loggingActive
                 && ! eeq::core::exporters::appendSplLogLine (currentLogFile, now.formatted ("%H:%M:%S"),
                                                              spl.currentDb, spl.leq1minDb, spl.leq15minDb,
@@ -314,6 +342,24 @@ void LiveModeOverlay::timerTick()
     engine.getSplAnalyzer().copyRta (frame);
     rtaCenters = frame.centerFreq;
     rtaLevels = frame.levelDb;
+
+    // 周波数ログ用に 1 秒ぶんを貯める（帯域の数が変わったら、別ファイルに分けて続ける）
+    if (spectrumLogActive && ! frame.levelDb.empty() && frame.levelDb.size() == frame.centerFreq.size())
+    {
+        if (spectrumCentres != frame.centerFreq)
+        {
+            if (! spectrumCentres.empty())
+                spectrumLogFile = currentLogFile.getSiblingFile (currentLogFile.getFileNameWithoutExtension()
+                                                                 + "_spectrum_" + juce::String (++spectrumFilePart) + ".csv");
+            spectrumCentres = frame.centerFreq;
+            spectrumEnergySum.assign (spectrumCentres.size(), 0.0);
+            spectrumSamples = 0;
+        }
+
+        for (size_t b = 0; b < frame.levelDb.size(); ++b)
+            spectrumEnergySum[b] += std::pow (10.0, (double) frame.levelDb[b] / 10.0);
+        ++spectrumSamples;
+    }
 
     // ウォーターフォールへ0.5秒間隔で帯域レベルを積む（仕様 5.4.1）。
     // 色の dB レンジは現在のピークに追従させる。

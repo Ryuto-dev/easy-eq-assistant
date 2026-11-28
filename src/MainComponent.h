@@ -21,6 +21,7 @@
 #include "UI/LimitTestTab.h"
 #include "UI/LiveModeOverlay.h"
 #include "UI/MeasurementPanel.h"
+#include "UI/LogViewerTab.h"
 #include "UI/ReverbTab.h"
 #include "UI/RtaSplTab.h"
 #include "UI/SweepSession.h"
@@ -63,7 +64,7 @@ private:
     void saveProjectIfPossible();
 
     enum Page { pageSetup = 0, pageMeasure, pageDelay, pageEq, pageApply,
-                pageRta = 10, pageLimit, pageTools, pageVenue, pageReverb };
+                pageRta = 10, pageLimit, pageTools, pageVenue, pageReverb, pageLog };
     void showPage (int page);
     juce::Component* componentForPage (int page);
     bool pageHasInspector (int page) const noexcept;
@@ -125,6 +126,7 @@ private:
     eeq::ui::UtilitiesTab utilitiesTab;
     eeq::ui::VenueTab venueTab;
     eeq::ui::ReverbTab reverbTab;
+    eeq::ui::LogViewerTab logTab;
 
     eeq::ui::LiveModeOverlay liveOverlay;
 

@@ -24,6 +24,7 @@ MainComponent::MainComponent()
       utilitiesTab (context),
       venueTab (context),
       reverbTab (context, sweepSession),
+      logTab (context),
       liveOverlay (engine)
 {
     context.sweep = &sweepSession;
@@ -63,6 +64,7 @@ MainComponent::MainComponent()
         { pageApply, strings::navApply, strings::navApplySub, 5 },
         { pageRta, strings::navRta, {}, 0 },
         { pageReverb, strings::navReverb, {}, 0 },
+        { pageLog, strings::navLog, {}, 0 },
         { pageLimit, strings::navLimit, {}, 0 },
         { pageTools, strings::navTools, {}, 0 },
         { pageVenue, strings::navVenue, {}, 0 },
@@ -118,7 +120,7 @@ MainComponent::MainComponent()
     for (auto* page : { (juce::Component*) &setupPage, (juce::Component*) &transferTab, (juce::Component*) &delayTab,
                         (juce::Component*) &eqTab, (juce::Component*) &applyPage, (juce::Component*) &rtaSplTab,
                         (juce::Component*) &limitTab, (juce::Component*) &utilitiesTab, (juce::Component*) &venueTab,
-                        (juce::Component*) &reverbTab })
+                        (juce::Component*) &reverbTab, (juce::Component*) &logTab })
         addChildComponent (page);
 
     addChildComponent (liveOverlay);
@@ -322,6 +324,7 @@ juce::Component* MainComponent::componentForPage (int page)
         case pageTools:   return &utilitiesTab;
         case pageVenue:   return &venueTab;
         case pageReverb:  return &reverbTab;
+        case pageLog:     return &logTab;
         default:          return nullptr;
     }
 }
@@ -340,7 +343,7 @@ void MainComponent::showPage (int page)
     currentPage = page;
 
     for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
-                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb })
+                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb, (int) pageLog })
         if (auto* component = componentForPage (p))
             component->setVisible (p == page);
 
@@ -412,7 +415,7 @@ void MainComponent::applyThemeToComponents()
 
     // 全ページを再描画する（非表示のページも、次に表示したときに新しい色で描かれるように）
     for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
-                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb })
+                   (int) pageLimit, (int) pageTools, (int) pageVenue, (int) pageReverb, (int) pageLog })
         if (auto* component = componentForPage (p))
             component->repaint();
 
@@ -544,6 +547,7 @@ void MainComponent::timerCallback()
     venueTab.timerTick();
     sweepSession.timerTick(); // スイープ測定の進行（どのページからでも）
     if (active (pageReverb)) reverbTab.timerTick();
+    if (active (pageLog)) logTab.timerTick();
 
     if (active (pageTools))
         utilitiesTab.timerTick();

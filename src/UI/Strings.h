@@ -722,4 +722,23 @@ inline const juce::String irPlaceholder { u8"インパルス応答はここに�
                                          u8"ピンクノイズを発振して「測定開始」（数秒で出ます）、または信号をスイープにして発振（鳴り終わると出ます）。\n"
                                          u8"ETC にすると反射と残響の減り方が dB で見えます。クリックした位置を遅延に使えます。" };
 
+// ---- 周波数ログ（2026-11）----
+inline const juce::String navLog { u8"本番ログ" };
+inline const juce::String logTitle { u8"本番ログ（周波数の推移）" };
+inline const juce::String logNoFiles { u8"記録がありません" };
+inline const juce::String logReload { u8"読み直す" };
+inline const juce::String logOpenFolder { u8"フォルダを開く" };
+inline const juce::String logOverallLeq { u8"全体の Leq " };
+inline const juce::String logEmptyHint { u8"本番モードの間、1 秒ごとに SPL と周波数（RTA）を自動で記録します。\n"
+                                          u8"本番が終わったらここで開くと、どこで低音が増えたかなどを時間を追って見返せます。" };
+inline const juce::String logSplCaption { u8"SPL（細線: 1 秒ごと　太線: Leq 1 分）" };
+inline const juce::String logSpectrogramCaption { u8"周波数の推移（色: " };
+inline const juce::String logBalanceCaption { u8"帯域バランス（中域に対する低域・高域の量が、この本番の平均より何 dB 多いか。10 秒平滑）" };
+inline const juce::String logBandLow { u8"低域（対 中域）" };
+inline const juce::String logBandMid { u8"中域（対 全体）" };
+inline const juce::String logBandHigh { u8"高域（対 中域）" };
+inline const juce::String logCursorTitle { u8"カーソルの位置" };
+inline const juce::String logBalanceNote { u8"低域 30–160 Hz / 中域 200–2.5k / 高域 3.15k–20k。本番の平均との差で、±3 dB 以上を黄色" };
+inline const juce::String logSpectrumLegend { u8"棒: この時点（5 秒）　線: 本番の平均" };
+
 } // namespace eeq::strings
