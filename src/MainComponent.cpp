@@ -422,6 +422,7 @@ void MainComponent::timerCallback()
 
     measurementPanel.setAverageCountDisplay (engine.getMeasurement().getAverages());
 
+    engine.updateClipHold (nowMs); // CLIP 表示は最後のクリップから 2 秒で消える
     const auto inputSilent = engine.checkInputHealth (nowMs); // 約2秒ごとに判定（無音なら下部バーで警告）
     const auto status = engine.getStatusText();
     const auto watchdogWarningActive = (std::int32_t) (uiWatchdogWarningUntilMs - nowMs) > 0;

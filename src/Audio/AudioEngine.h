@@ -20,7 +20,12 @@ struct MeterState
 {
     std::atomic<float> peakLinear { 0.0f };
     std::atomic<float> rmsLinear { 0.0f };
-    std::atomic<bool> clip { false };
+    std::atomic<bool> clip { false };          // 表示用。最後のクリップから clipHoldMs 経つと UI 側の updateClipHold が消す
+    std::atomic<std::uint32_t> clipEvents { 0 }; // オーディオスレッドがクリップを検出したブロック数（UI が変化を見る）
+
+    // ---- UIスレッド専用（updateClipHold）----
+    std::uint32_t lastSeenClipEvents = 0;
+    std::uint32_t lastClipMs = 0;
 };
 
 // オーディオI/Oの中心。デバイス管理、チャンネル割当（Ref/Meas/出力）、
@@ -100,6 +105,9 @@ public:
     const MeterState& getMeasMeter() const noexcept { return measMeter; }
     const MeterState& getOutMeter() const noexcept { return outMeter; }
     void clearClipLatches() noexcept;
+    /** UI タイマーから呼ぶ。最後のクリップから clipHoldMs 経ったら CLIP 表示を消す */
+    void updateClipHold (std::uint32_t nowMs) noexcept;
+    static constexpr std::uint32_t clipHoldMs = 2000;
 
     // ---- 励起信号（仕様 3.2 / 3.3.4）----
 

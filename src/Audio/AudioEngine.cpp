@@ -35,7 +35,10 @@ void measureChannel (const float* const* data, int numChannels, int numSamples, 
     meter.rmsLinear.store ((float) std::sqrt (sumSquares / (double) numSamples), std::memory_order_relaxed);
 
     if (peak >= clipThreshold)
+    {
+        meter.clipEvents.fetch_add (1, std::memory_order_relaxed);
         meter.clip.store (true, std::memory_order_relaxed);
+    }
 }
 
 juce::String channelDisplayName (int index, const juce::String& name, bool input)
@@ -303,6 +306,26 @@ void AudioEngine::clearClipLatches() noexcept
     refMeter.clip.store (false, std::memory_order_relaxed);
     measMeter.clip.store (false, std::memory_order_relaxed);
     outMeter.clip.store (false, std::memory_order_relaxed);
+}
+
+void AudioEngine::updateClipHold (std::uint32_t nowMs) noexcept
+{
+    for (auto* meter : { &refMeter, &measMeter, &outMeter })
+    {
+        const auto events = meter->clipEvents.load (std::memory_order_relaxed);
+
+        if (events != meter->lastSeenClipEvents)
+        {
+            // 新しいクリップ: ここから保持時間を数え直す（解除ボタン直後に来たクリップも表示し直す）
+            meter->lastSeenClipEvents = events;
+            meter->lastClipMs = nowMs;
+            meter->clip.store (true, std::memory_order_relaxed);
+        }
+        else if (meter->clip.load (std::memory_order_relaxed) && nowMs - meter->lastClipMs >= clipHoldMs)
+        {
+            meter->clip.store (false, std::memory_order_relaxed);
+        }
+    }
 }
 
 //==============================================================================
@@ -931,7 +954,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                                   std::memory_order_relaxed);
 
         if (outPeak >= clipThresholdLinear)
+        {
+            refMeter.clipEvents.fetch_add (1, std::memory_order_relaxed);
             refMeter.clip.store (true, std::memory_order_relaxed);
+        }
     }
 }
 
