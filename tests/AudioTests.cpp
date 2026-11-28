@@ -9,29 +9,7 @@
 #include "Audio/PinkNoiseGenerator.h"
 #include "DSP/SweepGenerator.h"
 
-namespace eeq::audio
-{
-struct AudioEngineCallbackTestAccess
-{
-    static void prepare (AudioEngine& engine, juce::AudioIODevice& device)
-    {
-        engine.audioDeviceAboutToStart (&device);
-    }
-
-    static void render (AudioEngine& engine, float* output, int samples)
-    {
-        engine.audioDeviceIOCallbackWithContext (nullptr, 0, &output, 1, samples, {});
-    }
-
-    static void render2 (AudioEngine& engine, float* out0, float* out1, int samples)
-    {
-        float* outs[] = { out0, out1 };
-        engine.audioDeviceIOCallbackWithContext (nullptr, 0, outs, 2, samples, {});
-    }
-
-    static void stopDevice (AudioEngine& engine) { engine.audioDeviceStopped(); }
-};
-}
+#include "VirtualRig.h" // AudioEngineCallbackTestAccess（コールバックの入口）はハーネスと共通
 
 namespace
 {
