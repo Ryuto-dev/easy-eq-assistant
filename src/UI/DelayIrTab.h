@@ -5,6 +5,7 @@
 #include "../DSP/ImpulseResponseBuilder.h"
 #include "Strings.h"
 #include "UiContext.h"
+#include "../DSP/DelayTracker.h"
 
 #include <memory>
 
@@ -198,6 +199,8 @@ private:
     juce::ToggleButton phatToggle, rawPhaseToggle, peakAlignToggle, etcToggle;
     juce::ToggleButton autoApplyToggle;   // 検出即適用（issue #142）
     juce::ToggleButton trackFollowToggle; // トラック追従（issue #142）
+    juce::ComboBox trackModeCombo;        // 追従の動作: 適用して安定したら停止 / 適用し続ける / 表示のみ（#72）
+    eeq::dsp::DelayTracker tracker;
     juce::ToggleButton irHoldToggle;      // IR保持（issue #142）
 
     // 手動入力（ms と m が連動: 仕様 3.3.2）

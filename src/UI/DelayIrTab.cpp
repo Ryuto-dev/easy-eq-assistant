@@ -184,11 +184,28 @@ DelayIrTab::DelayIrTab (UiContext& context)
     {
         trackFollowEnabled = trackFollowToggle.getToggleState();
         trackTickCounter = 0;
+        tracker.reset();
         trackStatusLabel.setText (trackFollowEnabled ? strings::delayTrackWaiting : juce::String(),
                                   juce::dontSendNotification);
     };
     styleToggle (trackFollowToggle);
     addAndMakeVisible (trackFollowToggle);
+
+    trackModeCombo.addItem (strings::delayTrackModeStop, 1);
+    trackModeCombo.addItem (strings::delayTrackModeContinue, 2);
+    trackModeCombo.addItem (strings::delayTrackModeDisplay, 3);
+    trackModeCombo.setSelectedId (1, juce::dontSendNotification);
+    trackModeCombo.setTooltip (strings::delayTrackModeTooltip);
+    trackModeCombo.onChange = [this]
+    {
+        const auto id = trackModeCombo.getSelectedId();
+        tracker.mode = id == 2 ? eeq::dsp::DelayTracker::Mode::applyContinuously
+                     : id == 3 ? eeq::dsp::DelayTracker::Mode::displayOnly
+                               : eeq::dsp::DelayTracker::Mode::applyAndStopWhenStable;
+        tracker.reset();
+    };
+    styleCombo (trackModeCombo);
+    addAndMakeVisible (trackModeCombo);
 
     irHoldToggle.setButtonText (strings::irClipHoldToggle);
     irHoldToggle.setTooltip (strings::irHoldTooltip);
@@ -948,41 +965,74 @@ void DelayIrTab::trackDelayStep()
     if (! trackFollowEnabled || ! ctx.engine.getMeasurement().isMeasuring())
         return;
 
-    // 約2秒ごと（30Hz × 60）に再推定する。1回あたり 32768 点の相関なので UI への負担は小さい
-    if (++trackTickCounter < 60)
+    // 約 1 秒ごと（30Hz × 30）に再推定する。1 回あたり 32768 点の相関なので UI への負担は小さい
+    if (++trackTickCounter < 30)
         return;
 
     trackTickCounter = 0;
     const auto estimate = ctx.engine.getMeasurement().estimateCurrentDelay (phatToggle.getToggleState());
     const auto sampleRate = ctx.engine.getCurrentSampleRate();
 
-    if (! estimate.valid || sampleRate <= 0.0)
-    {
-        trackStatusLabel.setText (strings::delayTrackLost, juce::dontSendNotification);
-        trackStatusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
+    if (sampleRate <= 0.0)
         return;
-    }
 
     const auto newMs = eeq::acoustics::delayMsForSamples (estimate.delaySamples, sampleRate);
     const auto oldMs = eeq::acoustics::delayMsForSamples (ctx.state.appliedDelaySamples.load(), sampleRate);
-    trackStatusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
+    const auto result = tracker.feed (estimate.valid, newMs, oldMs);
+    const auto confidence = juce::String (u8"（確からしさ ") + juce::String (estimate.confidence, 0)
+                          + juce::String (u8"、") + juce::String (result.stableReadings) + "/" + juce::String (tracker.stableCount)
+                          + juce::String (u8" 回一致）");
 
-    // 0.05 ms（≒ 17 mm）以上動いたら追従する。それ未満は推定の揺れとして無視する
-    if (std::abs (newMs - oldMs) >= 0.05)
+    using A = eeq::dsp::DelayTracker::Action;
+    auto colour = theme::ColourId::textDim;
+    juce::String text;
+
+    auto applyMs = [this, sampleRate, &estimate] (double ms)
     {
         lastEstimate = estimate;
+        lastEstimate.delaySamples = ms * sampleRate / 1000.0;
         hasEstimate = true;
         updateDelayReadout();
         applyDelay();
-        trackStatusLabel.setText (strings::delayTrackFollowed + juce::String (oldMs, 2) + " → "
-                                      + juce::String (newMs, 2) + " ms",
-                                  juce::dontSendNotification);
-    }
-    else
+    };
+
+    switch (result.action)
     {
-        trackStatusLabel.setText (strings::delayTrackStable + juce::String (newMs, 2) + " ms",
-                                  juce::dontSendNotification);
+        case A::lost:
+            text = strings::delayTrackLost;
+            colour = theme::ColourId::warn;
+            break;
+
+        case A::apply:
+            applyMs (result.delayMs);
+            text = strings::delayTrackFollowed + juce::String (oldMs, 2) + " → " + juce::String (result.delayMs, 2) + " ms " + confidence;
+            break;
+
+        case A::candidate:
+            text = strings::delayTrackCandidate + juce::String (result.delayMs, 2) + " ms " + confidence;
+            colour = theme::ColourId::accent;
+            break;
+
+        case A::stopStable:
+            if (std::abs (result.delayMs - oldMs) >= tracker.thresholdMs)
+                applyMs (result.delayMs);
+            text = strings::delayTrackStopped + juce::String (result.delayMs, 2) + " ms";
+            colour = theme::ColourId::ok;
+            trackFollowEnabled = false;
+            trackFollowToggle.setToggleState (false, juce::dontSendNotification);
+            tracker.reset();
+            eeq::log::write ("delay tracker: stable at " + juce::String (result.delayMs, 3) + " ms, stopped");
+            break;
+
+        case A::stable:
+        case A::none:
+        default:
+            text = strings::delayTrackStable + juce::String (result.delayMs, 2) + " ms " + confidence;
+            break;
     }
+
+    trackStatusLabel.setColour (juce::Label::textColourId, theme::get (colour));
+    trackStatusLabel.setText (text, juce::dontSendNotification);
 }
 
 void DelayIrTab::setAppliedDelayMs (double ms, const juce::String& reason)
@@ -1647,8 +1697,13 @@ void DelayIrTab::resized()
     autoApplyToggle.setBounds (extraToggles.removeFromLeft ((int) (150 * toggleScale)));
     trackFollowToggle.setBounds (extraToggles.removeFromLeft ((int) (120 * toggleScale)));
     irHoldToggle.setBounds (extraToggles);
-    trackStatusLabel.setBounds (delayPanel.removeFromTop (20));
-    delayPanel.removeFromTop (8);
+    {
+        auto trackRow = delayPanel.removeFromTop (26);
+        trackModeCombo.setBounds (trackRow.removeFromLeft (juce::jmin (190, trackRow.getWidth() / 2)).reduced (0, 1));
+        trackRow.removeFromLeft (8);
+        trackStatusLabel.setBounds (trackRow);
+    }
+    delayPanel.removeFromTop (6);
 
     // 手動入力（連動欄）
     auto manualRow = delayPanel.removeFromTop (30);

@@ -473,7 +473,7 @@ inline const juce::String snapshotAverageNote { u8"平均したスナップシ�
 // ---- Delay Finder（issue #142）----
 inline const juce::String delayMeasureTooltip { u8"現在の入力から遅延を検出する（D キーで検出→即適用）" };
 inline const juce::String delayAutoApplyTooltip { u8"検出に成功したら、そのまま遅延を適用する" };
-inline const juce::String delayTrackTooltip { u8"測定中、約2秒ごとに遅延を再検出して追従する（伝達関数タブを見ながら使える）" };
+inline const juce::String delayTrackTooltip { u8"測定中、約1秒ごとに遅延を再検出して追従する（動作は右の選択で変えられる。伝達関数タブを見ながら使える）" };
 inline const juce::String irHoldTooltip { u8"測定を止めても最後の IR を表示し続ける。IR グラフをクリックするとその時刻を遅延として適用" };
 inline const juce::String delayTrackWaiting { u8"Track: 測定開始待ち" };
 inline const juce::String delayTrackLost { u8"Track: 検出できません（信号を確認）" };
@@ -747,5 +747,13 @@ inline const juce::String stiGood { u8"（良い）" };
 inline const juce::String stiFair { u8"（普通）" };
 inline const juce::String stiPoor { u8"（悪い）" };
 inline const juce::String stiBad { u8"（非常に悪い）" };
+
+// ---- Delay Tracker（#72）----
+inline const juce::String delayTrackModeStop { u8"Track: 安定したら停止" };
+inline const juce::String delayTrackModeContinue { u8"Track: 追従し続ける" };
+inline const juce::String delayTrackModeDisplay { u8"Track: 表示のみ" };
+inline const juce::String delayTrackModeTooltip { u8"Track の動作。安定 = 1 秒ごとの検出が 4 回続けて 0.05 ms 以内にそろったとき" };
+inline const juce::String delayTrackCandidate { u8"Track: 候補 " };
+inline const juce::String delayTrackStopped { u8"Track: 安定したので止めました " };
 
 } // namespace eeq::strings

@@ -232,6 +232,7 @@ if(EASYEQ_BUILD_TESTS)
     tests/MicCalibrationTests.cpp
     tests/MultiTimeWindowTests.cpp
     tests/SweepAnalysisTests.cpp
+    tests/DelayTrackerTests.cpp
     tests/SpectrumLogTests.cpp
         tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp
