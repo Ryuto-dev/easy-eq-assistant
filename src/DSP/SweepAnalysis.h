@@ -278,10 +278,20 @@ struct ReverbBand
     double dynamicRangeDb = 0.0;            // ピークと雑音床の差（T20 は 35 dB、T30 は 45 dB 以上ほしい）
     std::vector<float> edcDb;               // 減衰曲線（1 ms ごと、0 dB 始まり）
     std::vector<float> envelopeDb;          // IR の包絡（1 ms ごとのエネルギー、ピーク 0 dB）
+
+    // 明瞭度（ISO 3382-1。直接音から数えたエネルギーの比。雑音を差し引き、雑音床に落ちたところまで積分）
+    bool hasClarity = false;                // S/N 30 dB 未満では出さない（雑音で値が偏る）
+    double c50 = 0.0, c80 = 0.0;            // dB: 50 / 80 ms までと、それ以降の比
+    double d50 = 0.0;                       // 0..1: 50 ms までが全体に占める割合
+    double centreTimeMs = 0.0;              // Ts: エネルギーの重心時刻
+    double mti = -1.0;                      // STI 用の変調伝達指数（帯域ごと。-1 は未計算）
 };
 
 struct ReverbResult
 {
+    // STI（IEC 60268-16 rev.4 の男性話者の重み。IR から求める簡易法: 背景雑音・マスキング・聴覚閾値の補正なし。
+    // 実際の会場では客の雑音で下がる）。125 Hz〜8 kHz の全帯域が測れたときだけ（-1 は未計算）
+    double sti = -1.0;
     std::vector<ReverbBand> bands; // 63 Hz〜8 kHz のオクターブ＋最後に広帯域
     double stepSeconds = 0.001;
 };
@@ -404,12 +414,83 @@ namespace sweepdetail
             band.envelopeDb.push_back ((float) (10.0 * std::log10 (std::max (v / blockPeak, 1.0e-12))));
 
         const auto stepSeconds = (double) step / sampleRate;
+
+        // 明瞭度と STI 用の変調伝達（雑音を差し引いたエネルギーで、雑音床に落ちたところまで）
+        if (band.dynamicRangeDb >= 30.0)
+        {
+            const auto at50 = (int) std::lround (0.050 / stepSeconds), at80 = (int) std::lround (0.080 / stepSeconds);
+            double early50 = 0.0, early80 = 0.0, total = 0.0, moment = 0.0;
+            for (int i = 0; i < cross; ++i)
+            {
+                const auto e = std::max (0.0, blocks[(size_t) i] - noise);
+                const auto t = ((double) i + 0.5) * stepSeconds;
+                total += e;
+                moment += e * t;
+                if (i < at50) early50 += e;
+                if (i < at80) early80 += e;
+            }
+
+            if (total > 0.0)
+            {
+                // 後部が雑音より小さい（近いマイクで全部 50 ms 以内に収まる）ときは 60 dB で頭打ちにする
+                const auto floorEnergy = total * 1.0e-6;
+                band.hasClarity = true;
+                band.c50 = 10.0 * std::log10 (early50 / std::max (total - early50, floorEnergy));
+                band.c80 = 10.0 * std::log10 (early80 / std::max (total - early80, floorEnergy));
+                band.d50 = early50 / total;
+                band.centreTimeMs = moment / total * 1000.0;
+
+                // 変調伝達関数 m(F) = |Σ e(t)·exp(−j2πFt)| / Σ e(t)（Schroeder）。14 の変調周波数で TI を平均する
+                const double modulation[] = { 0.63, 0.8, 1.0, 1.25, 1.6, 2.0, 2.5, 3.15, 4.0, 5.0, 6.3, 8.0, 10.0, 12.5 };
+                double tiSum = 0.0;
+                for (const auto F : modulation)
+                {
+                    std::complex<double> sum = 0.0;
+                    for (int i = 0; i < cross; ++i)
+                    {
+                        const auto e = std::max (0.0, blocks[(size_t) i] - noise);
+                        sum += e * std::polar (1.0, -2.0 * juce::MathConstants<double>::pi * F * ((double) i + 0.5) * stepSeconds);
+                    }
+                    const auto m = juce::jlimit (1.0e-6, 1.0 - 1.0e-6, std::abs (sum) / total);
+                    const auto snr = juce::jlimit (-15.0, 15.0, 10.0 * std::log10 (m / (1.0 - m)));
+                    tiSum += (snr + 15.0) / 30.0;
+                }
+                band.mti = tiSum / 14.0;
+            }
+        }
+
         double value = 0.0;
         if (fitDecay (edcDb, stepSeconds, -0.01, -10.0, value)) band.edt = value;
         if (band.dynamicRangeDb >= 35.0 && fitDecay (edcDb, stepSeconds, -5.0, -25.0, value)) band.t20 = value;
         if (band.dynamicRangeDb >= 45.0 && fitDecay (edcDb, stepSeconds, -5.0, -35.0, value)) band.t30 = value;
         return band;
     }
+}
+
+/** 帯域ごとの MTI から STI（IEC 60268-16 rev.4、男性話者の α/β。125 Hz〜8 kHz の 7 帯域）。足りなければ -1 */
+inline double speechTransmissionIndex (const ReverbResult& result)
+{
+    const double centres[] = { 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0 };
+    const double alpha[] = { 0.085, 0.127, 0.230, 0.233, 0.309, 0.224, 0.173 };
+    const double beta[] = { 0.085, 0.078, 0.065, 0.011, 0.047, 0.095 };
+    double mti[7];
+
+    for (int k = 0; k < 7; ++k)
+    {
+        mti[k] = -1.0;
+        for (const auto& band : result.bands)
+            if (std::abs (band.centreHz - centres[k]) < 1.0)
+                mti[k] = band.mti;
+        if (mti[k] < 0.0)
+            return -1.0;
+    }
+
+    double sti = 0.0;
+    for (int k = 0; k < 7; ++k)
+        sti += alpha[k] * mti[k];
+    for (int k = 0; k < 6; ++k)
+        sti -= beta[k] * std::sqrt (mti[k] * mti[k + 1]);
+    return juce::jlimit (0.0, 1.0, sti);
 }
 
 inline ReverbResult analyseReverb (const SweepImpulse& impulse)
@@ -458,6 +539,7 @@ inline ReverbResult analyseReverb (const SweepImpulse& impulse)
 
     // 広帯域
     result.bands.push_back (analyseBand (impulse.ir, juce::jmax (1, peakSearchEnd), broadbandNoise.getStart(), broadbandNoise.getEnd(), fs, 0.0));
+    result.sti = speechTransmissionIndex (result);
     return result;
 }
 

@@ -711,8 +711,8 @@ inline const juce::String reverbNoResult { u8"スイープで測ると、ここ�
 inline const juce::String reverbBand { u8"帯域 Hz" };
 inline const juce::String reverbBroadband { u8"全帯域" };
 inline const juce::String reverbDynamicRange { u8"S/N" };
-inline const juce::String reverbTableNote { u8"棒は T20（−5〜−25 dB の傾きを 60 dB に伸ばした値）。T20 は S/N 35 dB 以上、T30 は 45 dB 以上のときだけ出します。"
-                                             u8"S/N が足りない帯域は、出力を上げるか長いスイープで測り直してください。列をクリックすると右の曲線が切り替わります。" };
+inline const juce::String reverbTableNote { u8"棒は T20（−5〜−25 dB の傾きを 60 dB に伸ばした値）。T20 は S/N 35 dB、T30 は 45 dB、C50/C80/D50 と STI は 30 dB 以上のときだけ出します。"
+                                             u8"C50 は声、C80 は音楽の明瞭さ（大きいほど明瞭）。STI は IR からの簡易値で、客席の雑音は含みません。列をクリックすると右の曲線が切り替わります。" };
 inline const juce::String reverbDecayTitle { u8"減衰曲線" };
 inline const juce::String reverbDecayLegend { u8"太線: 減衰曲線（Schroeder）／ 細線: IR の包絡" };
 inline const juce::String noticeSweepResult { u8"スイープの結果を表示中（鳴らし直すと更新。信号をノイズに戻すと通常の測定に戻ります）" };
@@ -740,5 +740,12 @@ inline const juce::String logBandHigh { u8"高域（対 中域）" };
 inline const juce::String logCursorTitle { u8"カーソルの位置" };
 inline const juce::String logBalanceNote { u8"低域 30–160 Hz / 中域 200–2.5k / 高域 3.15k–20k。本番の平均との差で、±3 dB 以上を黄色" };
 inline const juce::String logSpectrumLegend { u8"棒: この時点（5 秒）　線: 本番の平均" };
+
+// ---- STI の評価（IEC 60268-16 の目安）----
+inline const juce::String stiExcellent { u8"（非常に良い）" };
+inline const juce::String stiGood { u8"（良い）" };
+inline const juce::String stiFair { u8"（普通）" };
+inline const juce::String stiPoor { u8"（悪い）" };
+inline const juce::String stiBad { u8"（非常に悪い）" };
 
 } // namespace eeq::strings

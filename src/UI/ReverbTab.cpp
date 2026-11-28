@@ -151,8 +151,21 @@ void ReverbTab::drawTable (juce::Graphics& g, juce::Rectangle<int> area)
     const auto columns = (int) bands.size();
     const auto cellWidth = (area.getWidth() - rowLabelWidth) / juce::jmax (1, columns);
 
-    // 棒グラフ（T20、無ければ EDT）。上半分
-    auto chart = area.removeFromTop (area.getHeight() * 55 / 100);
+    // STI（表の見出しの右）
+    if (reverb->sti >= 0.0)
+    {
+        const auto sti = reverb->sti;
+        const auto rating = sti >= 0.75 ? strings::stiExcellent : sti >= 0.60 ? strings::stiGood : sti >= 0.45 ? strings::stiFair
+                          : sti >= 0.30 ? strings::stiPoor : strings::stiBad;
+        g.setColour (sti >= 0.60 ? theme::get (theme::ColourId::ok) : sti >= 0.45 ? theme::get (theme::ColourId::warn)
+                                                                     : theme::get (theme::ColourId::danger));
+        g.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+        g.drawText ("STI " + juce::String (sti, 2) + "  " + rating, area.withY (area.getY() - 26).withHeight (26),
+                    juce::Justification::centredRight);
+    }
+
+    // 棒グラフ（T20、無ければ EDT）。上 4 割
+    auto chart = area.removeFromTop (area.getHeight() * 38 / 100);
     double maxRt = 0.2;
     for (const auto& b : bands)
         maxRt = std::max ({ maxRt, b.t20, b.t30, b.edt });
@@ -189,12 +202,21 @@ void ReverbTab::drawTable (juce::Graphics& g, juce::Rectangle<int> area)
         }
     }
 
-    // 表（帯域 / EDT / T20 / T30 / S/N）
+    // 表（帯域 / EDT / T20 / T30 / C50 / C80 / D50 / S/N）
     area.removeFromTop (6);
-    const auto rowHeight = juce::jmin (26, area.getHeight() / 5);
-    const juce::String rowNames[] = { strings::reverbBand, "EDT", "T20", "T30", strings::reverbDynamicRange };
+    constexpr int rowCount = 8;
+    const auto rowHeight = juce::jmin (24, (area.getHeight() - 30) / rowCount);
+    const juce::String rowNames[] = { strings::reverbBand, "EDT", "T20", "T30", "C50", "C80", "D50", strings::reverbDynamicRange };
+    auto clarity = [] (const eeq::dsp::ReverbBand& b, double value, bool percent)
+    {
+        if (! b.hasClarity)
+            return juce::String (u8"—");
+        if (percent)
+            return juce::String (juce::roundToInt (value * 100.0)) + "%";
+        return value > 30.0 ? juce::String ("> 30 dB") : juce::String (value, 1) + " dB"; // 30 dB を超える差は実用上どれも「直接音だけ」
+    };
 
-    for (int row = 0; row < 5; ++row)
+    for (int row = 0; row < rowCount; ++row)
     {
         auto line = area.removeFromTop (rowHeight);
         g.setColour (dim);
@@ -215,7 +237,10 @@ void ReverbTab::drawTable (juce::Graphics& g, juce::Rectangle<int> area)
                 case 1: value = seconds (b.edt); break;
                 case 2: value = seconds (b.t20); break;
                 case 3: value = seconds (b.t30); break;
-                case 4:
+                case 4: value = clarity (b, b.c50, false); break;
+                case 5: value = clarity (b, b.c80, false); break;
+                case 6: value = clarity (b, b.d50, true); break;
+                case 7:
                     value = juce::String (juce::roundToInt (b.dynamicRangeDb)) + " dB";
                     colour = b.dynamicRangeDb >= 45.0 ? dim : (b.dynamicRangeDb >= 35.0 ? theme::get (theme::ColourId::warn)
                                                                                      : theme::get (theme::ColourId::danger));
@@ -227,7 +252,7 @@ void ReverbTab::drawTable (juce::Graphics& g, juce::Rectangle<int> area)
             g.drawText (value, cell, juce::Justification::centred);
 
             if (row == 0)
-                bandCells.push_back (juce::Rectangle<int> (cell.getX(), chart.getY(), cell.getWidth(), line.getBottom() + rowHeight * 4 - chart.getY()));
+                bandCells.push_back (juce::Rectangle<int> (cell.getX(), chart.getY(), cell.getWidth(), line.getBottom() + rowHeight * (rowCount - 1) - chart.getY()));
         }
     }
 

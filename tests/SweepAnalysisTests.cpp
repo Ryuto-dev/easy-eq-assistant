@@ -17,6 +17,7 @@ namespace
 struct Room
 {
     std::vector<float> ref, meas;
+    std::vector<float> ir; // 部屋の IR（直接音は 480 サンプル目）
 };
 
 // 直接音（遅延 480 サンプル、ゲイン 0.5）＋ RT 0.8 s の拡散残響（指数減衰する白色雑音）＋ 背景雑音
@@ -40,6 +41,8 @@ Room makeRoom (double fs, double sweepSeconds, double rt, double noiseLevel, flo
     const auto decay = std::log (1000.0) / rt; // 振幅で 60 dB / rt
     for (int i = 480 + (int) (fs * 0.005); i < irLength; ++i)
         ir[(size_t) i] += reverbAmplitude * gauss (rng) * (float) std::exp (-decay * (double) (i - 480) / fs);
+
+    room.ir = ir;
 
     // 畳み込み（FFT で）
     const auto n = eeq::dsp::sweepdetail::nextPow2 (length + irLength);
@@ -151,4 +154,61 @@ TEST (SweepAnalysis, TenSecondSweepAnalysesQuickly)
     const auto ms = [] (auto a, auto b) { return std::chrono::duration<double, std::milli> (b - a).count(); };
     std::printf ("sweep analysis: n=%zu deconvolve %.0f ms, frame+reverb %.0f ms\n", impulse.ir.size(), ms (t0, t1), ms (t1, t2));
     EXPECT_LT (ms (t0, t2), 3000.0);
+}
+
+// 明瞭度（C50 / C80 / D50）と STI を、合成した部屋の IR から直接計算した値と比べる
+TEST (SweepAnalysis, ClarityAndStiMatchTheRoomImpulse)
+{
+    const double fs = 48000.0;
+    const auto room = makeRoom (fs, 5.0, 0.8, 1.0e-5f, 0.01f);
+
+    eeq::dsp::SweepImpulse impulse;
+    ASSERT_TRUE (eeq::dsp::deconvolveSweep (room.ref, room.meas, fs, impulse));
+    const auto reverb = eeq::dsp::analyseReverb (impulse);
+    const auto& broadband = reverb.bands.back();
+    ASSERT_TRUE (broadband.hasClarity);
+
+    // 期待値: IR のエネルギーを直接音から 50 / 80 ms で分ける
+    double e50 = 0.0, e80 = 0.0, total = 0.0;
+    std::complex<double> m[14];
+    const double modulation[] = { 0.63, 0.8, 1.0, 1.25, 1.6, 2.0, 2.5, 3.15, 4.0, 5.0, 6.3, 8.0, 10.0, 12.5 };
+    for (size_t i = 480; i < room.ir.size(); ++i)
+    {
+        const auto e = (double) room.ir[i] * room.ir[i];
+        const auto t = (double) (i - 480) / fs;
+        total += e;
+        if (t < 0.050) e50 += e;
+        if (t < 0.080) e80 += e;
+        for (int k = 0; k < 14; ++k)
+            m[k] += e * std::polar (1.0, -2.0 * juce::MathConstants<double>::pi * modulation[k] * t);
+    }
+    EXPECT_NEAR (broadband.c50, 10.0 * std::log10 (e50 / (total - e50)), 0.5);
+    EXPECT_NEAR (broadband.c80, 10.0 * std::log10 (e80 / (total - e80)), 0.5);
+    EXPECT_NEAR (broadband.d50, e50 / total, 0.03);
+
+    // 直接音と残響の比はどの帯域でも同じ（どちらも白色）なので、STI は広帯域の MTI と一致するはず
+    double ti = 0.0;
+    for (int k = 0; k < 14; ++k)
+    {
+        const auto mk = std::abs (m[k]) / total;
+        ti += (juce::jlimit (-15.0, 15.0, 10.0 * std::log10 (mk / (1.0 - mk))) + 15.0) / 30.0;
+    }
+    const auto expectedSti = ti / 14.0;
+    ASSERT_GE (reverb.sti, 0.0);
+    EXPECT_NEAR (reverb.sti, expectedSti, 0.03);
+    std::printf ("C50 %.2f dB, C80 %.2f dB, D50 %.2f, STI %.3f (expected %.3f)\n",
+                 broadband.c50, broadband.c80, broadband.d50, reverb.sti, expectedSti);
+}
+
+TEST (SweepAnalysis, NoClarityWhenTooNoisy)
+{
+    const double fs = 48000.0;
+    const auto room = makeRoom (fs, 2.0, 0.6, 1.5f); // S/N が 30 dB に届かない
+    eeq::dsp::SweepImpulse impulse;
+    ASSERT_TRUE (eeq::dsp::deconvolveSweep (room.ref, room.meas, fs, impulse));
+    const auto reverb = eeq::dsp::analyseReverb (impulse);
+    const auto& broadband = reverb.bands.back();
+    EXPECT_LT (broadband.dynamicRangeDb, 30.0);
+    EXPECT_FALSE (broadband.hasClarity);
+    EXPECT_LT (reverb.sti, 0.0);
 }
