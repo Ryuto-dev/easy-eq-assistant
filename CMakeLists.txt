@@ -234,6 +234,7 @@ if(EASYEQ_BUILD_TESTS)
     tests/SweepAnalysisTests.cpp
     tests/DelayTrackerTests.cpp
     tests/VirtualRigTests.cpp
+    tests/ProjectFormatTests.cpp
     tests/SpectrumLogTests.cpp
         tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp

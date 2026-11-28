@@ -324,6 +324,10 @@ juce::var ProjectStore::venueToVar (const Venue& venue)
     juce::DynamicObject* o = new juce::DynamicObject();
     juce::var object (o);
 
+    // この版が知らない項目を先に書く（知っている項目は下で上書きされる。A-7）
+    for (const auto& property : venue.unknownProperties)
+        o->setProperty (property.name, property.value);
+
     o->setProperty ("name", venue.name);
     o->setProperty ("date", timeToVar (venue.date));
     o->setProperty ("temperatureC", venue.temperatureC);
@@ -485,6 +489,16 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
             }
     }
 
+    // 知らない項目を覚えておく: 読み込んだ値を今の版で書き出したときに出てこない名前（A-7）
+    if (auto* o = v.getDynamicObject())
+    {
+        const auto known = venueToVar (venue);
+        if (auto* k = known.getDynamicObject())
+            for (const auto& property : o->getProperties())
+                if (! k->hasProperty (property.name))
+                    venue.unknownProperties.set (property.name, property.value);
+    }
+
     return venue;
 }
 
@@ -495,7 +509,32 @@ juce::String ProjectStore::writeProjectJson (const juce::var& object, const juce
 
     // 直前の版を1世代だけ残す（壊れた保存・誤操作からの復旧用）
     if (file.existsAsFile())
+    {
         file.copyFileTo (file.withFileExtension (file.getFileExtension().trimCharactersAtStart (".") + ".bak"));
+
+        // 世代バックアップ（A-7）: 10 分に 1 個、日時つきで backups/ に残し、古いものから消して最大 maxBackups 個
+        const auto dir = backupDirectoryFor (file);
+        auto backups = dir.findChildFiles (juce::File::findFiles, false, file.getFileNameWithoutExtension() + "_*" + file.getFileExtension());
+        std::sort (backups.begin(), backups.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileName() < b.getFileName(); });
+        const auto newest = backups.isEmpty() ? juce::Time() : backups.getLast().getLastModificationTime();
+
+        if (backups.isEmpty() || (juce::Time::getCurrentTime() - newest).inMinutes() >= backupIntervalMinutes)
+        {
+            dir.createDirectory();
+            const auto name = file.getFileNameWithoutExtension() + "_" + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S")
+                            + file.getFileExtension();
+            const auto target = dir.getChildFile (name);
+            const auto existed = target.existsAsFile(); // 同じ秒に 2 回（時計の巻き戻しなど）なら上書きするだけ
+            if (file.copyFileTo (target) && ! existed)
+                backups.add (target);
+
+            while (backups.size() > maxBackups)
+            {
+                backups.getFirst().deleteFile();
+                backups.remove (0);
+            }
+        }
+    }
 
     // アトミック書き込み（issue #38 / #122）: replaceWithText は呼び出しごとに一意な一時ファイルへ書き、
     // rename（POSIX）/ ReplaceFile（Windows）で置き換える。以前は固定名 .tmp を自動保存と終了時保存で
@@ -512,8 +551,14 @@ juce::String ProjectStore::saveToFile (const juce::File& file) const
     juce::DynamicObject* root = new juce::DynamicObject();
     juce::var object (root);
 
+    for (const auto& property : unknownRoot) // 新しい版の項目は消さずに書き戻す（A-7）
+        root->setProperty (property.name, property.value);
+
     root->setProperty ("format", "eea-project");
-    root->setProperty ("version", 1);
+    // 新しい版で作られたファイルを古い版で保存し直すときは、版を下げない（新しい版が自分の項目を読めるように）
+    root->removeProperty ("_loadedVersion");
+    root->setProperty ("version", juce::jmax (formatVersion, loadedVersion));
+    root->setProperty ("writtenByVersion", formatVersion);
 
     juce::Array<juce::var> venueArray;
 
@@ -528,7 +573,7 @@ juce::String ProjectStore::saveToFile (const juce::File& file) const
 }
 
 juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
-                                             const juce::File& file)
+                                             const juce::File& file, const juce::NamedValueSet& unknownRootProperties)
 {
     // 静的版（issue #58）: 会場データのコピーを受け取り、JSON化と書き込みを行う。
     // 呼び出し側（自動保存のワーカースレッド）はメッセージスレッドで取ったコピーを渡すので、
@@ -537,8 +582,13 @@ juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, i
     juce::DynamicObject* root = new juce::DynamicObject();
     juce::var object (root);
 
+    for (const auto& property : unknownRootProperties)
+        root->setProperty (property.name, property.value);
+
     root->setProperty ("format", "eea-project");
-    root->setProperty ("version", 1);
+    root->setProperty ("version", juce::jmax (formatVersion, (int) unknownRootProperties.getWithDefault ("_loadedVersion", formatVersion)));
+    root->removeProperty ("_loadedVersion");
+    root->setProperty ("writtenByVersion", formatVersion);
 
     juce::Array<juce::var> venueArray;
 
@@ -549,6 +599,14 @@ juce::String ProjectStore::saveVenuesToFile (const std::vector<Venue>& venues, i
     root->setProperty ("currentVenueIndex", currentIndex);
 
     return writeProjectJson (object, file);
+}
+
+void ProjectStore::migrate (juce::DynamicObject& root, int fromVersion)
+{
+    // v1 → v2: 構造の変更はない（版の管理を始めた版）。今後の変更はここに 1 段ずつ足す:
+    //   if (fromVersion < 3) { ... v2 → v3 ... }
+    if (fromVersion < 2)
+        root.setProperty ("version", 2);
 }
 
 juce::String ProjectStore::loadFromFile (const juce::File& file)
@@ -564,6 +622,11 @@ juce::String ProjectStore::loadFromFile (const juce::File& file)
     {
         if (root->getProperty ("format").toString() != "eea-project")
             return juce::String (u8"Easy EQ assistant のプロジェクトファイルではありません");
+
+        // 版の移行（A-7）。新しい版のファイルはそのまま読み、知らない項目は保存時に書き戻す
+        const auto version = juce::jmax (1, (int) getPropertyWithDefault (root, "version", 1));
+        if (version < formatVersion)
+            migrate (*root, version);
 
         std::vector<Venue> loaded;
 
@@ -583,6 +646,15 @@ juce::String ProjectStore::loadFromFile (const juce::File& file)
         // システム補正を復元
         correctionFromVar (root->getProperty ("systemCorrection"),
                            correctionFrame_, correctionDelaySamples_, correctionMeasuredAt_, correctionActive_);
+
+        loadedVersion = version;
+        unknownRoot.clear();
+        for (const auto& property : root->getProperties())
+            if (! juce::StringArray { "format", "version", "writtenByVersion", "venues", "currentVenueIndex", "systemCorrection" }
+                      .contains (property.name.toString()))
+                unknownRoot.set (property.name, property.value);
+        if (version > formatVersion)
+            unknownRoot.set ("_loadedVersion", version); // 自動保存（静的版）でも版を下げないための印
 
         return {};
     }

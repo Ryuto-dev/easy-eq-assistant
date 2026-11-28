@@ -287,11 +287,12 @@ void MainComponent::saveProjectIfPossible()
     auto venues = project.venues(); // 深いコピー（メッセージスレッドで安全に取る）
     const auto currentIndex = project.getCurrentVenueIndex();
     const auto file = eeq::core::ProjectStore::defaultProjectFile();
+    auto unknownRoot = project.getUnknownRootProperties(); // 新しい版の項目も消さない（A-7）
     auto inFlight = saveInFlight;
 
-    juce::Thread::launch ([inFlight, venues = std::move (venues), currentIndex, file]
+    juce::Thread::launch ([inFlight, venues = std::move (venues), currentIndex, file, unknownRoot = std::move (unknownRoot)]
     {
-        const auto error = eeq::core::ProjectStore::saveVenuesToFile (venues, currentIndex, file);
+        const auto error = eeq::core::ProjectStore::saveVenuesToFile (venues, currentIndex, file, unknownRoot);
 
         if (error.isNotEmpty())
             eeq::log::write ("project auto-save FAILED: " + error);

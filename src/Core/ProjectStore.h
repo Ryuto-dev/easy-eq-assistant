@@ -100,6 +100,9 @@ struct Venue
     std::vector<SpeakerSystemInfo> systems;
     std::vector<MicPoint> micPoints;
     std::vector<Session> sessions;
+
+    // この版が知らない項目（新しい版で保存したファイルを開いたとき）。保存時にそのまま書き戻して消さない（A-7）
+    juce::NamedValueSet unknownProperties;
 };
 
 // プロジェクト（.eea）の入出力。複数会場を保持でき、会場名・日付で一覧・検索する
@@ -131,7 +134,22 @@ public:
         自動保存をワーカースレッドで行うため、メッセージスレッドが取った
         コピーを渡して UI スレッドをブロックしない */
     [[nodiscard]] static juce::String saveVenuesToFile (const std::vector<Venue>& venues, int currentIndex,
-                                                        const juce::File& file);
+                                                        const juce::File& file,
+                                                        const juce::NamedValueSet& unknownRootProperties = {});
+
+    // ---- ファイル形式のバージョン管理（ロードマップ A-7）----
+    /** このアプリが書く形式の版。読み込みは古い版から migrate() で上げる */
+    static constexpr int formatVersion = 2;
+    /** 読み込んだファイルの版（新しい版なら formatVersion より大きい） */
+    int getLoadedVersion() const noexcept { return loadedVersion; }
+    /** 最上位でこの版が知らない項目（自動保存にも渡して消さない） */
+    const juce::NamedValueSet& getUnknownRootProperties() const noexcept { return unknownRoot; }
+    /** 古い版の JSON を今の版へ上げる（純粋関数。テスト用に公開） */
+    static void migrate (juce::DynamicObject& root, int fromVersion);
+    /** 世代バックアップの置き場所（<保存先>/backups）。10 分に 1 個、最大 maxBackups 個 */
+    static juce::File backupDirectoryFor (const juce::File& file) { return file.getParentDirectory().getChildFile ("backups"); }
+    static constexpr int maxBackups = 30;
+    static constexpr int backupIntervalMinutes = 10;
 
     /** 起動時の復元先（前回保存したプロジェクトの自動復元用） */
     static juce::File defaultProjectFile();
@@ -158,6 +176,8 @@ private:
     static void correctionFromVar (const juce::var& v, eeq::dsp::SpectrumFrame& outFrame, double& outDelaySamples, juce::Time& outMeasuredAt, bool& outActive);
 
     std::vector<Venue> venues_;
+    int loadedVersion = formatVersion;
+    juce::NamedValueSet unknownRoot;
     int currentVenueIndex = 0;
 
     // システム補正データを個別に保存（SystemCorrection は CriticalSection を持つためコピー不可）
