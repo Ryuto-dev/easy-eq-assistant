@@ -4,6 +4,8 @@
 #include "Strings.h"
 #include "Theme.h"
 
+#include "../Core/Log.h"
+
 #include <cmath>
 
 namespace eeq::ui
@@ -133,7 +135,26 @@ void SetupPage::evaluate()
         next.push_back (c);
     }
 
-    // 6. SPL 校正（任意）
+    // 6. マイク補正（任意。ロードマップ B-5）
+    {
+        Check c { strings::checkMicTitle, {}, State::optional, false, Destination::micCalibration, strings::checkMicLoad };
+        if (const auto& cal = ctx.state.micCalibration; cal != nullptr)
+        {
+            c.state = State::ok;
+            c.detail = cal->name + "  (" + juce::String ((int) cal->freqHz.size()) + strings::checkMicPoints
+                     + juce::String (juce::roundToInt (cal->freqHz.front())) + " Hz - "
+                     + juce::String (cal->freqHz.back() / 1000.0, 1) + " kHz"
+                     + (cal->phaseDeg.empty() ? juce::String() : juce::String (strings::checkMicWithPhase)) + ")";
+            c.actionText = strings::checkMicRemove;
+        }
+        else
+        {
+            c.detail = strings::checkMicNone;
+        }
+        next.push_back (c);
+    }
+
+    // 7. SPL 校正（任意）
     {
         Check c { strings::checkSplTitle, {}, State::optional, false, Destination::splCalibration, strings::checkOpenSpl };
         const auto offset = ctx.settings.getDoubleValue ("splCalibrationOffsetDb", 0.0);
@@ -184,7 +205,13 @@ void SetupPage::evaluate()
                 auto* button = actionButtons.add (new juce::TextButton());
                 styleButton (*button);
                 const auto destination = checks[i].destination;
-                button->onClick = [this, destination] { if (onNavigate) onNavigate (destination); };
+                button->onClick = [this, destination]
+                {
+                    if (destination == Destination::micCalibration)
+                        chooseMicCalibration();
+                    else if (onNavigate)
+                        onNavigate (destination);
+                };
                 addAndMakeVisible (button);
             }
         }
@@ -198,6 +225,65 @@ void SetupPage::evaluate()
         resized();
         repaint();
     }
+}
+
+void SetupPage::restoreMicCalibration (UiContext& context)
+{
+    const auto text = context.settings.getValue ("micCalibrationText");
+    if (text.isEmpty())
+        return;
+
+    juce::String error;
+    context.state.micCalibration = eeq::core::MicCalibration::parse (text, context.settings.getValue ("micCalibrationName"), error);
+    eeq::log::write (context.state.micCalibration != nullptr ? "mic calibration restored: " + context.settings.getValue ("micCalibrationName")
+                                                             : "mic calibration restore FAILED: " + error);
+}
+
+void SetupPage::chooseMicCalibration()
+{
+    // 読み込み済みなら外す
+    if (ctx.state.micCalibration != nullptr)
+    {
+        ctx.state.micCalibration = nullptr;
+        ctx.settings.removeValue ("micCalibrationText");
+        ctx.settings.removeValue ("micCalibrationName");
+        eeq::log::write ("mic calibration: removed");
+        evaluate();
+        return;
+    }
+
+    auto chooser = std::make_shared<juce::FileChooser> (strings::checkMicLoad,
+                                                        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                        "*.txt;*.frd;*.cal;*.csv");
+    juce::Component::SafePointer<SetupPage> safeThis (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safeThis, chooser] (const juce::FileChooser& fc)
+                          {
+                              const auto file = fc.getResult();
+                              if (safeThis == nullptr || file == juce::File())
+                                  return;
+
+                              juce::String error;
+                              const auto text = file.loadFileAsString();
+                              auto cal = eeq::core::MicCalibration::parse (text, file.getFileName(), error);
+
+                              if (cal == nullptr)
+                              {
+                                  juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, strings::checkMicTitle,
+                                                                          strings::checkMicLoadFailed + "\n" + error, strings::okButton,
+                                                                          safeThis.getComponent(), nullptr);
+                                  return;
+                              }
+
+                              auto& c = safeThis->ctx;
+                              c.state.micCalibration = std::move (cal);
+                              c.settings.setValue ("micCalibrationText", text);
+                              c.settings.setValue ("micCalibrationName", file.getFileName());
+                              c.settings.saveIfNeeded();
+                              eeq::log::write ("mic calibration: loaded " + file.getFullPathName() + " ("
+                                               + juce::String ((int) c.state.micCalibration->freqHz.size()) + " points)");
+                              safeThis->evaluate();
+                          });
 }
 
 void SetupPage::timerTick()

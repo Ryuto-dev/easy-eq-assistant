@@ -130,6 +130,7 @@ private:
     std::map<std::uint64_t, std::shared_ptr<const eeq::dsp::SpectrumFrame>> frameCache;
     std::vector<juce::Rectangle<int>> cardRects; // 2026-11 リデザイン: グラフとトレースのカード
     juce::Rectangle<int> tracesHeaderArea;
+    const void* requestedMicCalibration = nullptr; // マイク補正を変えたら表示を作り直す
 };
 
 } // namespace eeq::ui

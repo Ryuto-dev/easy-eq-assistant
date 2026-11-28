@@ -116,6 +116,7 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/ApplyValues.cpp
     src/UI/ApplyValues.h
     src/UI/EeqLookAndFeel.h
+    src/Core/MicCalibration.h
     src/UI/FrequencyGraphView.cpp
     src/UI/FrequencyGraphView.h
     src/UI/MeasurementPanel.cpp
@@ -225,6 +226,7 @@ if(EASYEQ_BUILD_TESTS)
         tests/AudioTests.cpp
         tests/DeviceSwitchHardwareTests.cpp
         tests/ClockDriftTests.cpp
+    tests/MicCalibrationTests.cpp
         tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp

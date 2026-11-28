@@ -167,6 +167,24 @@ void StatusStrip::update()
         next.push_back (p);
     }
 
+    // マイク補正（読み込んでいるファイルを常に見せる: ロードマップ B-5）
+    {
+        Pill p { strings::statusMic, {}, Tone::neutral, Target::setup };
+        if (ctx.state.micCalibration != nullptr)
+        {
+            p.value = ctx.state.micCalibration->name.upToLastOccurrenceOf (".", false, false);
+            if (p.value.length() > 14)
+                p.value = p.value.substring (0, 13) + juce::String (u8"…");
+            p.tone = Tone::ok;
+        }
+        else
+        {
+            p.value = strings::statusNone;
+        }
+        p.priority = 8;
+        next.push_back (p);
+    }
+
     // SPL 校正
     {
         Pill p { strings::statusCalibration, {}, Tone::neutral, Target::setup };

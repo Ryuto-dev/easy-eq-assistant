@@ -388,6 +388,9 @@ void EQTab::runProposal()
         frame = corrected;
     }
 
+    // マイク補正（表示と同じ）
+    ctx.state.applyMicCalibration (frame);
+
     const auto fMin = std::max (20.0, minFreqEditor.getText().getDoubleValue());
     const auto fMax = std::min (frame.sampleRate * 0.45, maxFreqEditor.getText().getDoubleValue());
 

@@ -25,6 +25,7 @@ public:
         bool applyCorrection = false;
         std::uint64_t correctionGeneration = 0;
         eeq::core::SystemCorrection* correction = nullptr;
+        std::shared_ptr<const eeq::core::MicCalibration> micCalibration;
     };
 
     struct Result
@@ -102,6 +103,13 @@ private:
                 // 補正変更と処理が競合した結果は、次の要求が来るまで表示しない。
                 if (request.correction->getGeneration() == request.correctionGeneration)
                     displayFrame = std::move (corrected);
+            }
+
+            if (request.micCalibration != nullptr)
+            {
+                auto withMic = std::make_shared<eeq::dsp::SpectrumFrame> (*displayFrame);
+                request.micCalibration->applyTo (*withMic);
+                displayFrame = std::move (withMic);
             }
 
             auto calculated = std::make_shared<std::vector<eeq::dsp::GridPoint>> (
@@ -718,7 +726,8 @@ void TransferFunctionTab::timerTick()
                                    || plotWidth != livePlotWidth
                                    || applyCorrection != requestedCorrectionEnabled
                                    || correctionGeneration != requestedCorrectionGeneration
-                                   || std::abs (delaySamples - requestedDelaySamples) > 1.0e-9;
+                                   || std::abs (delaySamples - requestedDelaySamples) > 1.0e-9
+                                   || ctx.state.micCalibration.get() != requestedMicCalibration;
 
         if (settingsChanged)
             ++liveGeneration;
@@ -736,6 +745,7 @@ void TransferFunctionTab::timerTick()
             request.applyCorrection = applyCorrection;
             request.correctionGeneration = correctionGeneration;
             request.correction = &ctx.correction;
+            request.micCalibration = ctx.state.micCalibration;
             liveSmoothingWorker->submit (std::move (request));
 
             lastRequestedFrame = std::move (framePtr);
@@ -743,6 +753,7 @@ void TransferFunctionTab::timerTick()
             requestedCorrectionEnabled = applyCorrection;
             requestedCorrectionGeneration = correctionGeneration;
             requestedDelaySamples = delaySamples;
+            requestedMicCalibration = ctx.state.micCalibration.get();
             liveViewMin = viewMin;
             liveViewMax = viewMax;
             livePlotWidth = plotWidth;
@@ -1296,6 +1307,9 @@ void TransferFunctionTab::showSaveSnapshotDialog()
                 snapshot.frame = corrected;
                 snapshot.correctionApplied = true;
             }
+
+            // マイク補正も表示と同じようにかけて保存する
+            ctx.state.applyMicCalibration (snapshot.frame);
 
             auto& snapshots = ctx.project.snapshots();
             snapshots.push_back (std::move (snapshot));

@@ -667,4 +667,13 @@ inline const juce::String delayBreakdownNote { u8"。内部参照の遅延は機
 
 inline const juce::String calibrationAveraging { u8"3 秒間の平均を取っています（音を出したまま動かさないでください）… 残り " };
 
+inline const juce::String checkMicTitle { u8"マイク補正" };
+inline const juce::String checkMicNone { u8"なし（マイクの特性を補正しません）。校正ファイル（.txt / .frd）があれば読み込みます" };
+inline const juce::String checkMicLoad { u8"ファイルを読み込む" };
+inline const juce::String checkMicRemove { u8"補正を外す" };
+inline const juce::String checkMicPoints { u8" 点、" };
+inline const juce::String checkMicWithPhase { u8"、位相あり" };
+inline const juce::String checkMicLoadFailed { u8"マイク補正ファイルを読めませんでした（周波数 と dB の列が必要です）" };
+inline const juce::String statusMic { u8"マイク補正" };
+
 } // namespace eeq::strings

@@ -176,6 +176,9 @@ MainComponent::MainComponent()
         }
     }
 
+    // マイク補正ファイル（ロードマップ B-5）。マイク固有の値なので SPL 校正と違って起動後も保つ
+    eeq::ui::SetupPage::restoreMicCalibration (context);
+
     // マイク許可（TCC）。**デバイスを開く前に**許可を確定させる:
     // CoreAudioの入力オープンと許可要求が重なると、この環境ではTCCが
     // ダイアログを出さずに自動拒否する（probe.app では正常にダイアログが出ることを確認済み）

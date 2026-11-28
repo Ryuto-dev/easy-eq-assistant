@@ -18,7 +18,7 @@ namespace eeq::ui
 class SetupPage : public juce::Component
 {
 public:
-    enum class Destination { loopback, gainAssist, splCalibration, measure };
+    enum class Destination { loopback, gainAssist, splCalibration, measure, micCalibration };
 
     explicit SetupPage (UiContext& context);
 
@@ -49,7 +49,13 @@ private:
     };
 
     void evaluate();
+    void chooseMicCalibration();
 
+public:
+    /** 起動時: 設定に保存したマイク補正を読み戻す */
+    static void restoreMicCalibration (UiContext& context);
+
+private:
     UiContext& ctx;
     TopBar devicePanel;
     std::vector<Check> checks;

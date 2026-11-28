@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Audio/AudioEngine.h"
+#include "../Core/MicCalibration.h"
 #include "../Core/ProjectStore.h"
 #include "../Core/SystemCorrection.h"
 #include "../DSP/OctaveSmoother.h"
@@ -34,7 +35,18 @@ struct UiState
     std::vector<eeq::dsp::GridPoint> targetPoints;    // ターゲット曲線（EQ案タブが更新）
     std::vector<eeq::dsp::GridPoint> predictionPoints; // EQ予測（補正後）カーブ
     std::vector<eeq::dsp::peq::Band> proposedBands;   // 補正EQ案（EQ案タブが更新）
-    double targetLevelOffsetDb = 0.0;                 // ターゲットを測定の全体レベルへ合わせた量（issue #109）
+    double targetLevelOffsetDb = 0.0;
+
+    // 測定マイクの補正（ロードマップ B-5）。読み込んだら Meas 側から差し引く（表示・スナップショット・EQ 案）。
+    // 不変オブジェクトなので、解析ワーカーへは shared_ptr のコピーで渡す
+    std::shared_ptr<const eeq::core::MicCalibration> micCalibration;
+
+    /** 測定結果に、表示と同じ補正（ループバック補正 → マイク補正）をかける */
+    void applyMicCalibration (eeq::dsp::SpectrumFrame& frame) const
+    {
+        if (micCalibration != nullptr)
+            micCalibration->applyTo (frame);
+    }                 // ターゲットを測定の全体レベルへ合わせた量（issue #109）
 };
 
 // タブに渡す共有コンテキスト
