@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 
+
 #include "../Core/Log.h"
 
 #include <algorithm>
@@ -61,6 +62,7 @@ AudioEngine::AudioEngine (juce::PropertiesFile* settingsToUse)
 
 AudioEngine::~AudioEngine()
 {
+    builtInSpeakerKeepAlive.stop();
     deviceManager.removeAudioCallback (this);
     deviceManager.closeAudioDevice();
 }
@@ -71,30 +73,91 @@ AudioEngine::~AudioEngine()
 juce::StringArray AudioEngine::getAvailableDeviceNames (bool wantInputNames) const
 {
     if (auto* type = deviceManager.getCurrentDeviceTypeObject())
-        return type->getDeviceNames (wantInputNames);
+    {
+        juce::StringArray names;
+
+        for (const auto& n : type->getDeviceNames (wantInputNames))
+            if (! AggregateDevicePair::isAggregateName (n)) // 内部で作る集約デバイスは見せない
+                names.add (n);
+
+        return names;
+    }
 
     return {};
 }
 
 juce::String AudioEngine::getSelectedInputDeviceName() const
 {
-    return deviceManager.getAudioDeviceSetup().inputDeviceName;
+    return logicalSetup().inputDeviceName;
 }
 
 juce::String AudioEngine::getSelectedOutputDeviceName() const
 {
-    return deviceManager.getAudioDeviceSetup().outputDeviceName;
+    return logicalSetup().outputDeviceName;
+}
+
+juce::AudioDeviceManager::AudioDeviceSetup AudioEngine::logicalSetup() const
+{
+    auto setup = deviceManager.getAudioDeviceSetup();
+
+    if (const auto* pair = aggregates.find (setup.inputDeviceName))
+    {
+        setup.inputDeviceName = pair->inputName;
+        setup.outputDeviceName = pair->outputName;
+    }
+
+    return setup;
+}
+
+juce::AudioDeviceManager::AudioDeviceSetup AudioEngine::toPhysicalSetup (juce::AudioDeviceManager::AudioDeviceSetup setup)
+{
+    setup.useDefaultInputChannels = false;
+    setup.useDefaultOutputChannels = false;
+    setup.inputChannels.clear();
+    setup.outputChannels.clear();
+
+    const bool separateDevices = setup.inputDeviceName.isNotEmpty() && setup.outputDeviceName.isNotEmpty()
+                              && setup.inputDeviceName != setup.outputDeviceName;
+
+    if (AggregateDevicePair::isSupported() && separateDevices)
+    {
+        juce::String error;
+
+        if (const auto* pair = aggregates.prepare (setup.inputDeviceName, setup.outputDeviceName, error))
+        {
+            if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+                type->scanForDevices(); // 作った集約デバイスを JUCE の一覧に載せる
+
+            setup.inputDeviceName = pair->aggregateName;
+            setup.outputDeviceName = pair->aggregateName;
+            setup.inputChannels.setRange (0, juce::jmin (64, pair->inputChannels), true);
+            setup.outputChannels.setRange (pair->outputOffset, juce::jmin (64, pair->outputChannels), true);
+            return setup;
+        }
+
+        eeq::log::write ("aggregate device unavailable (" + error + "); opening the devices separately");
+    }
+
+    setup.inputChannels.setRange (0, 64, true);
+    setup.outputChannels.setRange (0, 64, true);
+    return setup;
+}
+
+void AudioEngine::releaseUnusedAggregates()
+{
+    const auto current = deviceManager.getCurrentAudioDevice() != nullptr
+                           ? deviceManager.getAudioDeviceSetup().inputDeviceName
+                           : juce::String();
+    aggregates.destroyAllExcept (AggregateDevicePair::isAggregateName (current) ? current : juce::String());
 }
 
 juce::String AudioEngine::selectInputDevice (const juce::String& deviceName)
 {
-    auto setup = deviceManager.getAudioDeviceSetup();
+    auto setup = logicalSetup();
     setup.inputDeviceName = deviceName;
-    setup.useDefaultInputChannels = false;
-    setup.inputChannels.clear();
-    setup.inputChannels.setRange (0, 64, true);
 
-    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+    auto error = deviceManager.setAudioDeviceSetup (toPhysicalSetup (setup), true);
+    releaseUnusedAggregates();
     eeq::log::write (error.isEmpty() ? "input device changed to \"" + deviceName + "\""
                                      : "input device change to \"" + deviceName + "\" FAILED: " + error);
 
@@ -106,13 +169,11 @@ juce::String AudioEngine::selectInputDevice (const juce::String& deviceName)
 
 juce::String AudioEngine::selectOutputDevice (const juce::String& deviceName)
 {
-    auto setup = deviceManager.getAudioDeviceSetup();
+    auto setup = logicalSetup();
     setup.outputDeviceName = deviceName;
-    setup.useDefaultOutputChannels = false;
-    setup.outputChannels.clear();
-    setup.outputChannels.setRange (0, 64, true);
 
-    auto error = deviceManager.setAudioDeviceSetup (setup, true);
+    auto error = deviceManager.setAudioDeviceSetup (toPhysicalSetup (setup), true);
+    releaseUnusedAggregates();
     eeq::log::write (error.isEmpty() ? "output device changed to \"" + deviceName + "\""
                                      : "output device change to \"" + deviceName + "\" FAILED: " + error);
 
@@ -171,12 +232,15 @@ void AudioEngine::getOpenedInputChannels (juce::Array<int>& indicesOut, juce::St
         const auto active = device->getActiveInputChannels();
         const auto names = device->getInputChannelNames();
 
-        for (int i = 0; i < names.size(); ++i)
+        // コールバックには有効chだけが詰めて渡されるので、インデックスはその詰めた番号
+        //（集約デバイスでは出力が途中のchから有効になり、生の番号とずれる）
+        for (int i = 0, compact = 0; i < names.size(); ++i)
         {
             if (! active[i])
                 continue;
-            indicesOut.add (i);
-            namesOut.add (channelDisplayName (i, names[i], true));
+            indicesOut.add (compact);
+            namesOut.add (channelDisplayName (compact, names[i], true));
+            ++compact;
         }
     }
 }
@@ -191,12 +255,15 @@ void AudioEngine::getOpenedOutputChannels (juce::Array<int>& indicesOut, juce::S
         const auto active = device->getActiveOutputChannels();
         const auto names = device->getOutputChannelNames();
 
-        for (int i = 0; i < names.size(); ++i)
+        // コールバックには有効chだけが詰めて渡されるので、インデックスはその詰めた番号
+        //（集約デバイスでは出力が途中のchから有効になり、生の番号とずれる）
+        for (int i = 0, compact = 0; i < names.size(); ++i)
         {
             if (! active[i])
                 continue;
-            indicesOut.add (i);
-            namesOut.add (channelDisplayName (i, names[i], false));
+            indicesOut.add (compact);
+            namesOut.add (channelDisplayName (compact, names[i], false));
+            ++compact;
         }
     }
 }
@@ -205,7 +272,7 @@ juce::String AudioEngine::getStatusText() const
 {
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
-        const auto setup = deviceManager.getAudioDeviceSetup();
+        const auto setup = logicalSetup();
         const auto inputName = setup.inputDeviceName.isNotEmpty()
                                  ? setup.inputDeviceName
                                  : juce::String (u8"(既定)");
@@ -213,9 +280,16 @@ juce::String AudioEngine::getStatusText() const
                                   ? setup.outputDeviceName
                                   : juce::String (u8"(既定)");
 
-        return juce::String (u8"入力: ") + inputName + "   /   " + juce::String (u8"出力: ") + outputName
-             + "   /   " + juce::String (device->getCurrentSampleRate(), 0) + " Hz   /   "
-             + juce::String (device->getCurrentBufferSizeSamples()) + " samples";
+        auto text = juce::String (u8"入力: ") + inputName + "   /   " + juce::String (u8"出力: ") + outputName
+                  + "   /   " + juce::String (device->getCurrentSampleRate(), 0) + " Hz   /   "
+                  + juce::String (device->getCurrentBufferSizeSamples()) + " samples";
+
+        // 入出力のクロック差を補正しているときは表示する（別デバイスの入出力: ClockDriftCompensator）
+        if (const auto ppm = measurement.getCompensatedDriftPpm(); ppm != 0.0f)
+            text << juce::String (u8"   /   クロック差 ") << (ppm > 0.0f ? "+" : "") << juce::String (ppm, 0)
+                 << juce::String (u8" ppm 補正中");
+
+        return text;
     }
 
     return {};
@@ -475,7 +549,7 @@ void AudioEngine::saveSettings()
 
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
-        const auto setup = deviceManager.getAudioDeviceSetup();
+        const auto setup = logicalSetup();
         settings->setValue ("inputDeviceName", setup.inputDeviceName);
         settings->setValue ("outputDeviceName", setup.outputDeviceName);
         settings->setValue ("sampleRate", device->getCurrentSampleRate());
@@ -529,6 +603,21 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const auto refIndex = refChannel.load (std::memory_order_relaxed);
     const auto measIndex = measChannel.load (std::memory_order_relaxed);
     const auto refIsInternal = refIndex == internalRefChannel;
+
+    {
+        // 入力の健全性チェック用（全入力chの最大値とブロック数）
+        float blockPeak = 0.0f;
+
+        for (int ch = 0; ch < numInputChannels; ++ch)
+            if (const auto* data = inputChannelData[ch])
+                for (int i = 0; i < numSamples; ++i)
+                    blockPeak = juce::jmax (blockPeak, std::abs (data[i]));
+
+        if (blockPeak > diagInputPeak.load (std::memory_order_relaxed))
+            diagInputPeak.store (blockPeak, std::memory_order_relaxed);
+
+        diagBlocks.fetch_add (1, std::memory_order_relaxed);
+    }
 
     measureChannel (inputChannelData, numInputChannels, numSamples, refIndex, refMeter, clipThresholdLinear);
     measureChannel (inputChannelData, numInputChannels, numSamples, measIndex, measMeter, clipThresholdLinear);
@@ -1102,7 +1191,8 @@ void AudioEngine::openInitialDevice()
             setup.bufferSize = savedBuffer;
     }
 
-    auto error = deviceManager.initialise (0, 0, nullptr, true, {}, &setup);
+    const auto physicalSetup = toPhysicalSetup (setup);
+    auto error = deviceManager.initialise (0, 0, nullptr, true, {}, &physicalSetup);
 
     eeq::log::write ("initialise result: \"" + error + "\" setup: input=\"" + setup.inputDeviceName
                      + "\" output=\"" + setup.outputDeviceName + "\"");
@@ -1126,14 +1216,11 @@ void AudioEngine::openInitialDevice()
         if (! outputs.isEmpty())
             fallback.outputDeviceName = outputs[juce::jmax (0, typeForEnumeration->getDefaultDeviceIndex (false))];
 
-        fallback.useDefaultInputChannels = false;
-        fallback.useDefaultOutputChannels = false;
-        fallback.inputChannels.setRange (0, 64, true);
-        fallback.outputChannels.setRange (0, 64, true);
         fallback.sampleRate = 0.0;
         fallback.bufferSize = 0;
 
-        const auto fallbackError = deviceManager.initialise (0, 0, nullptr, true, {}, &fallback);
+        const auto physicalFallback = toPhysicalSetup (fallback);
+        const auto fallbackError = deviceManager.initialise (0, 0, nullptr, true, {}, &physicalFallback);
 
         if (deviceManager.getCurrentAudioDevice() != nullptr)
         {
@@ -1161,8 +1248,10 @@ void AudioEngine::openInitialDevice()
         numInputs = device->getActiveInputChannels().countNumberOfSetBits();
         numOutputs = device->getActiveOutputChannels().countNumberOfSetBits();
 
-        const auto setupNow = deviceManager.getAudioDeviceSetup();
-        eeq::log::write ("audio opened: input=\"" + (setupNow.inputDeviceName.isNotEmpty() ? setupNow.inputDeviceName : juce::String (u8"(既定)"))
+        releaseUnusedAggregates();
+        const auto setupNow = logicalSetup();
+        const auto viaAggregate = AggregateDevicePair::isAggregateName (deviceManager.getAudioDeviceSetup().inputDeviceName);
+        eeq::log::write (juce::String (viaAggregate ? "(via aggregate device) " : "") + "audio opened: input=\"" + (setupNow.inputDeviceName.isNotEmpty() ? setupNow.inputDeviceName : juce::String (u8"(既定)"))
                          + "\" output=\"" + (setupNow.outputDeviceName.isNotEmpty() ? setupNow.outputDeviceName : juce::String (u8"(既定)"))
                          + "\" rate=" + juce::String (device->getCurrentSampleRate(), 0)
                          + " buffer=" + juce::String (device->getCurrentBufferSizeSamples())
@@ -1237,6 +1326,78 @@ void AudioEngine::restoreSavedAssignment (int numInputs, int numOutputs)
         noiseLevelDb.store (juce::jlimit (-60.0f, outputLevelLimitDb, std::isfinite (savedLevel) ? savedLevel : defaultNoiseLevelDb),
                             std::memory_order_relaxed);
     }
+}
+
+bool AudioEngine::checkInputHealth (juce::uint32 nowMs)
+{
+    const auto generation = deviceGeneration.load (std::memory_order_relaxed);
+
+    if (generation != diagLastGeneration)
+    {
+        // デバイスが開き直された: 立ち上がりを待ってから判定し直す
+        diagLastGeneration = generation;
+        {
+            const auto setupNow = logicalSetup();
+            builtInSpeakerKeepAlive.update (setupNow.inputDeviceName, setupNow.outputDeviceName);
+        }
+        diagLastCheckMs = nowMs;
+        diagLastBlocks = diagBlocks.load (std::memory_order_relaxed);
+        diagInputPeak.store (0.0f, std::memory_order_relaxed);
+        diagLastState = -1;
+        return false;
+    }
+
+    if (nowMs - diagLastCheckMs < 2000u)
+        return diagLastState > 0;
+
+    // クロック差の補正の開始・停止をログに残す（約 2 秒ごとに確認）
+    {
+        const auto ppm = measurement.getCompensatedDriftPpm();
+        const bool compensating = ppm != 0.0f;
+
+        if (compensating != diagLastDriftCompensating)
+        {
+            eeq::log::write (compensating ? "clock drift: compensating " + juce::String (ppm, 1)
+                                                + " ppm between the output and input clocks"
+                                          : juce::String ("clock drift: compensation stopped"));
+            diagLastDriftCompensating = compensating;
+        }
+    }
+
+    const auto elapsedMs = nowMs - diagLastCheckMs;
+    const auto blocks = diagBlocks.load (std::memory_order_relaxed);
+    const auto newBlocks = blocks - diagLastBlocks;
+    const auto peak = diagInputPeak.exchange (0.0f, std::memory_order_relaxed);
+    diagLastCheckMs = nowMs;
+    diagLastBlocks = blocks;
+
+    auto* device = deviceManager.getCurrentAudioDevice();
+    // コールバックが一度も来ていないと diagNumInputs は 0 のままなので、デバイスの有効chで判定する
+    const auto numInputs = device != nullptr ? device->getActiveInputChannels().countNumberOfSetBits() : 0;
+
+    if (device == nullptr || numInputs <= 0)
+        return false; // 入力が無い構成は判定しない
+
+    const int state = newBlocks == 0 ? 2 : (peak <= 0.0f ? 1 : 0);
+
+    if (state != diagLastState)
+    {
+        const auto setup = logicalSetup();
+        const auto bufferSize = juce::jmax (1, device->getCurrentBufferSizeSamples());
+        const auto expectedBlocks = currentSampleRate.load() * (double) elapsedMs / 1000.0 / (double) bufferSize;
+
+        juce::String text = state == 0 ? "input check: OK" : state == 1 ? juce::String ("input check: DIGITAL SILENCE (all input samples are exactly 0)") + (builtInSpeakerKeepAlive.inputIsBuiltInMic() ? " [built-in mic: is the built-in speaker volume 0 or muted?]" : "")
+                                                                        : "input check: NO CALLBACKS (audio thread is not running)";
+        text << " | input=\"" << setup.inputDeviceName << "\" output=\"" << setup.outputDeviceName << "\""
+             << " channels=" << numInputs
+             << " peak=" << (peak > 0.0f ? juce::String (juce::Decibels::gainToDecibels (peak), 1) + " dBFS" : juce::String ("0"))
+             << " blocks=" << juce::String ((juce::int64) newBlocks) << "/" << juce::String (expectedBlocks, 0) << " expected"
+             << " xruns=" << device->getXRunCount();
+        eeq::log::write (text);
+        diagLastState = state;
+    }
+
+    return state > 0;
 }
 
 } // namespace eeq::audio

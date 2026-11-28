@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include "ClockDriftCompensator.h"
 #include "DelayEstimator.h"
 #include "SampleRingBuffer.h"
 #include "TransferFunctionAccumulator.h"
@@ -77,9 +78,19 @@ public:
     // 96 kHz でも取れる長さ（issue #114。2^20 だと 96 kHz で常に録音長不足になっていた）。両chで 16 MB
     static constexpr int captureCapacity = 1 << 21;
 
+    /** 入出力のクロック差の補正（ClockDriftCompensator）。既定で有効 */
+    void setClockDriftCompensation (bool enabled) noexcept { driftCompensationEnabled.store (enabled, std::memory_order_relaxed); }
+    /** 補正中のクロック差（ppm）。補正していなければ 0 */
+    float getCompensatedDriftPpm() const noexcept { return compensatedDriftPpm.load (std::memory_order_relaxed); }
+    /** 推定したクロック差（ppm。補正の有無にかかわらず。未推定なら 0） */
+    float getEstimatedDriftPpm() const noexcept { return estimatedDriftPpm.load (std::memory_order_relaxed); }
+    /** 補正による時間合わせの取り直し回数（開始・停止・ゼロ点の取り直し。診断用） */
+    int getDriftRealignments() const noexcept { return driftRealignments.load (std::memory_order_relaxed); }
+
 private:
     void run() override;
     void appendCapture (const float* ref, const float* meas, int numSamples);
+    void observeDrift();
 
     SampleRingBuffer& ring;
     TransferFunctionAccumulator accumulator;
@@ -94,8 +105,19 @@ private:
     std::atomic<int> requestedRefDelay { 0 };
     int activeRefDelay = 0;
     std::atomic<int> accumulatorRefDelay { 0 }; // 今の平均がどの遅延補償量で溜めたものか
-    std::vector<float> refDelayLine;
-    int refDelayWrite = 0;
+    // Ref の遅延線＋クロックドリフト補正（解析スレッドだけが触る）
+    ClockDriftCompensator drift { maxReferenceDelaySamples + 1 };
+    std::vector<float> delayedMeas;
+    std::atomic<bool> driftCompensationEnabled { true };
+    std::atomic<float> compensatedDriftPpm { 0.0f }, estimatedDriftPpm { 0.0f };
+    std::atomic<double> analysisSampleRate { 48000.0 };
+    std::atomic<int> driftRealignments { 0 };
+    // 遅延推定（メッセージスレッド）向けに公開する当てはめ結果
+    std::atomic<double> driftIntercept { 0.0 }, driftRateAtomic { 0.0 };
+    std::atomic<bool> driftFitActive { false };
+    std::atomic<std::uint64_t> driftProcessed { 0 };
+    std::uint64_t nextDriftObservationAt = 0;
+    std::vector<float> driftRef, driftMeas;
 
     std::atomic<RtaSplAnalyzer*> splAnalyzer { nullptr }; // 解析スレッドから読む（構築後に一度だけ書く）
 

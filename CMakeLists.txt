@@ -29,6 +29,29 @@ if(MSVC)
     add_compile_options(/utf-8)
 endif()
 
+# JUCE へのローカルパッチ（上流の修正が入るまでの暫定対応）。サブモジュールの作業ツリーに
+# 未適用なら configure 時に当てる。適用済みなら何もしない
+#  - juce-coreaudio-listener-race: デバイス切替中の CoreAudio 通知が解放済みの結合デバイスを
+#    呼んでクラッシュする問題（2026-11-28 のクラッシュレポート）
+find_package(Git REQUIRED)
+foreach(eeq_patch IN ITEMS juce-coreaudio-listener-race)
+    set(eeq_patch_file "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/${eeq_patch}.patch")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${eeq_patch_file}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/libs/JUCE"
+        RESULT_VARIABLE eeq_patch_applied OUTPUT_QUIET ERROR_QUIET)
+    if(NOT eeq_patch_applied EQUAL 0)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" apply "${eeq_patch_file}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/libs/JUCE"
+            RESULT_VARIABLE eeq_patch_result)
+        if(NOT eeq_patch_result EQUAL 0)
+            message(FATAL_ERROR "JUCE patch ${eeq_patch} could not be applied")
+        endif()
+        message(STATUS "Applied JUCE patch: ${eeq_patch}")
+    endif()
+endforeach()
+
 add_subdirectory(libs/JUCE)
 
 juce_add_gui_app(EasyEQAssistant
@@ -55,6 +78,10 @@ target_sources(EasyEQAssistant PRIVATE
     src/MainComponent.h
     src/Audio/AudioEngine.cpp
     src/Audio/AudioEngine.h
+    src/Audio/AggregateDevicePair.cpp
+    src/Audio/AggregateDevicePair.h
+    src/Audio/BuiltInSpeakerKeepAlive.cpp
+    src/Audio/BuiltInSpeakerKeepAlive.h
     src/Audio/PinkNoiseGenerator.h
     src/DSP/SampleRingBuffer.h
     src/DSP/TransferFunctionAccumulator.cpp
@@ -187,11 +214,16 @@ if(EASYEQ_BUILD_TESTS)
         tests/RtaSplTests.cpp
         tests/UtilitiesTests.cpp
         tests/AudioTests.cpp
+        tests/DeviceSwitchHardwareTests.cpp
+        tests/ClockDriftTests.cpp
+        tests/LoudspeakerMeasurementHardwareTests.cpp
         tests/ThdTests.cpp
         tests/EndToEndTests.cpp
         tests/TransferFunctionRegressionTests.cpp
         tests/MeasurementRegressionTests.cpp
         src/Audio/AudioEngine.cpp
+        src/Audio/AggregateDevicePair.cpp
+        src/Audio/BuiltInSpeakerKeepAlive.cpp
         src/Core/Log.cpp
         src/Core/ProjectStore.cpp
         src/Core/Exporters.cpp

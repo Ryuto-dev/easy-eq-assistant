@@ -9,7 +9,7 @@ namespace eeq::dsp
 {
 
 DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples, bool usePhat,
-                             double minConfidence)
+                             double minConfidence, int mainLobeGuard)
 {
     DelayEstimate result;
 
@@ -136,7 +136,7 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     // 最大サイドローブを探す。ピーク bin だけでなくメインローブ全体（前後数bin）を
     // ガード区間として除外しないと、隣接 bin が常に最大サイドローブになり
     // 判別指標として機能しない
-    constexpr int guardBins = 4;
+    const int guardBins = std::max (4, std::min (mainLobeGuard, numSamples / 8));
 
     for (int i = 0; i < size; ++i)
     {
@@ -174,8 +174,13 @@ DelayEstimate estimateDelay (const float* ref, const float* meas, int numSamples
     result.delaySamples = delaySamples;
     result.confidence = confidenceRatio;
     result.peakToSidelobe = sidelobeRatioDb;
-    result.valid = result.confidence >= std::max (minConfidence, noiseConfidenceFloor)
-                && result.peakToSidelobe >= 6.0;
+    // ピーク/サイドローブ比が低い（同じくらいの高さの山が別にある）推定は曖昧なので捨てる。
+    // ただし相関がノイズ下限の 3 倍以上と非常に強ければ、最大の山は実在の到達音なので採る。
+    // 実機では 2 つのスピーカー・ドライバ間の時間差や机の反射で PSR が 2 dB 前後でも、
+    // 遅延は 0.1 サンプル以内で安定していた（MacBook の内蔵マイク＋スピーカー: confidence 79）
+    const auto floor = std::max (minConfidence, noiseConfidenceFloor);
+    result.valid = result.confidence >= floor
+                && (result.peakToSidelobe >= 6.0 || result.confidence >= 3.0 * floor);
 
     return result;
 }

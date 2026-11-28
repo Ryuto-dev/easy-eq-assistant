@@ -1,0 +1,87 @@
+diff --git a/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp b/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp
+index 7210e15c9d..98dbdf9350 100644
+--- a/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp
++++ b/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp
+@@ -1478,10 +1478,17 @@ public:
+     // called by callbacks (possibly off the main thread)
+     void restart()
+     {
+-        if (restarter != nullptr)
+         {
+-            restarter->restartAsync();
+-            return;
++            // EasyEQ patch: restarter is detached by ~AudioIODeviceCombiner under this lock, so a
++            // CoreAudio property notification can never call restartAsync() on a combiner that is
++            // being destroyed (crash 2026-11-28: deviceListenerProc -> restartAsync on freed memory)
++            const std::lock_guard<std::recursive_mutex> lock (restarterMutex);
++
++            if (restarter != nullptr)
++            {
++                restarter->restartAsync();
++                return;
++            }
+         }
+ 
+         stopWithPendingCallback();
+@@ -1495,6 +1502,7 @@ public:
+ 
+     void setAsyncRestarter (AsyncRestarter* restarterIn)
+     {
++        const std::lock_guard<std::recursive_mutex> lock (restarterMutex);
+         restarter = restarterIn;
+     }
+ 
+@@ -1508,6 +1516,7 @@ private:
+     //  When non-null, this indicates that the device has been stopped with the intent to restart
+     //  using the same callback. That is, this should only be non-null when the device is stopped.
+     AudioIODeviceCallback* pendingCallback = nullptr;
++    std::recursive_mutex restarterMutex; // EasyEQ patch: guards restarter
+     AsyncRestarter* restarter = nullptr;
+     BigInteger inputChannelsRequested, outputChannelsRequested;
+     CriticalSection startStopLock;
+@@ -1581,6 +1590,12 @@ public:
+ 
+     ~AudioIODeviceCombiner() override
+     {
++        // EasyEQ patch: stop the wrapped devices from calling back into this object first
++        // (waits for a restartAsync() that a notification thread may be running right now)
++        inputWrapper.detachRestarter();
++        outputWrapper.detachRestarter();
++        stopTimer();
++
+         close();
+     }
+ 
+@@ -1743,16 +1758,15 @@ public:
+ 
+     void restartAsync() override
+     {
++        // EasyEQ patch: this is called from a CoreAudio notification thread. Closing the devices
++        // here raced with the message thread opening/closing/destroying the same combiner
++        // (crash 2026-11-28 in shutdown()/close()). Only remember the callback here and let the
++        // timer (message thread) do the close + reopen inside restart(), which holds closeLock.
+         {
+-            const ScopedLock sl (closeLock);
+-
+-            if (active)
+-            {
+-                if (callback != nullptr)
+-                    previousCallback = callback;
++            const ScopedLock sl (callbackLock);
+ 
+-                close();
+-            }
++            if (callback != nullptr)
++                previousCallback = callback;
+         }
+ 
+         startTimer (100);
+@@ -2076,6 +2090,8 @@ private:
+             device->close();
+         }
+ 
++        void detachRestarter()                                          { device->setAsyncRestarter (nullptr); } // EasyEQ patch
++
+         void reset()
+         {
+             sampleTime.store (invalidSampleTime);
