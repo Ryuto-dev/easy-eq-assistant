@@ -279,7 +279,7 @@ void RtaSplTab::refreshFromSettings()
                               juce::dontSendNotification);
     avgTimeCombo.setSelectedId (juce::jlimit (1, 7, ctx.settings.getIntValue (settingsAvgTimeKey, 3)),
                                 juce::dontSendNotification);
-    gainTargetEditor.setText (juce::String (ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0), 0),
+    gainTargetEditor.setText (juce::String (juce::roundToInt (ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0))),
                               juce::dontSendNotification);
 
     // 校正オフセットを解析器へ復元する（仕様 3.4）
@@ -569,7 +569,7 @@ void RtaSplTab::updateGainAssist()
 {
     // 目標SPLを大きく表示（仕様 3.6 (1)）
     const auto target = ctx.settings.getDoubleValue (settingsTargetSplKey, 85.0);
-    gainTargetLabel.setText (juce::String (target, 0) + " dB(A) " + strings::splFast,
+    gainTargetLabel.setText (juce::String (juce::roundToInt (target)) + " dB(A) " + strings::splFast,
                              juce::dontSendNotification);
 
     const auto& meter = ctx.engine.getMeasMeter();
@@ -600,7 +600,7 @@ void RtaSplTab::updateGainAssist()
     else if (rmsDb < -24.0f)
     {
         const auto delta = -21.0 - rmsDb;
-        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (delta, 0) + juce::String (u8" dB）"),
+        gainMessageLabel.setText (strings::gainAssistRaise + juce::String (juce::roundToInt (delta)) + juce::String (u8" dB）"),
                                   juce::dontSendNotification);
         gainMessageLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::warn));
     }
@@ -675,13 +675,16 @@ void RtaSplTab::paint (juce::Graphics& g)
 {
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 
-    // ---- RTAバー ----
-    // 描画領域は resized() の左カラム（設定行の下）と一致させる。全幅・最上段で
-    // 描くと右カラムのパネルや S/N ラベルの背面にバーが重なる
-    auto paintBounds = getLocalBounds().reduced (8);
-    auto leftColumn = paintBounds.removeFromLeft (paintBounds.getWidth() * 3 / 5);
-    leftColumn.removeFromTop (26 + 4); // 設定行 + 間隔
-    const auto rtaArea = leftColumn.removeFromTop (rtaGraphHeight).toFloat();
+    for (const auto& card : cardRects)
+    {
+        g.setColour (theme::get (theme::ColourId::raised));
+        g.fillRoundedRectangle (card.toFloat(), 10.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline));
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    }
+
+    // ---- RTAバー（領域は resized() が決めた rtaGraphArea）----
+    const auto rtaArea = rtaGraphArea.toFloat();
 
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (rtaArea, 6.0f);
@@ -694,7 +697,7 @@ void RtaSplTab::paint (juce::Graphics& g)
     }
 
     const auto count = (int) rtaCenters.size();
-    const auto plotArea = rtaArea.withTrimmedBottom (16.0f);
+    const auto plotArea = rtaArea.withTrimmedBottom (16.0f).withTrimmedLeft (40.0f); // 左は dB 目盛りの数字
     const auto barWidth = plotArea.getWidth() / (float) count;
     const auto rangeDb = 90.0f; // 90 dB幅で表示
 
@@ -792,7 +795,7 @@ void RtaSplTab::paint (juce::Graphics& g)
         g.drawLine (plotArea.getX (), y, plotArea.getRight (), y, isTop ? 1.2f : 1.0f);
 
         g.setColour (theme::get (theme::ColourId::gridText));
-        g.drawText (juce::String (db, 0), (int) plotArea.getX () - 34, (int) y - 6, 30, 12,
+        g.drawText (juce::String (juce::roundToInt (db)), (int) plotArea.getX () - 34, (int) y - 6, 30, 12,
                     juce::Justification::centredRight);
     }
 
@@ -806,80 +809,99 @@ void RtaSplTab::paint (juce::Graphics& g)
 
 void RtaSplTab::resized()
 {
-    auto bounds = getLocalBounds().reduced (8);
+    // 2026-11 リデザイン: 左 [RTA（設定・グラフ・S/N）]  右 [SPL] / [SPL 校正] / [ゲイン設定アシスト]
+    auto bounds = getLocalBounds().reduced (16);
+    cardRects.clear();
 
-    rtaGraphHeight = juce::jlimit (160, 320, bounds.getHeight() * 3 / 5);
-    auto graphColumn = bounds.removeFromLeft (bounds.getWidth() * 3 / 5);
-    auto rightColumn = bounds;
+    auto leftCard = bounds.removeFromLeft ((bounds.getWidth() - 16) * 3 / 5);
+    bounds.removeFromLeft (16);
+    cardRects.push_back (leftCard);
+    auto graphColumn = leftCard.reduced (14, 12);
 
-    // 左: RTA設定行 + グラフ + S/N
-    // リセット系ボタンは右端から固定幅で確保し、最小幅でも潰れないようにする（issue #28）
-    auto configRow = graphColumn.removeFromTop (26);
+    auto configRow = graphColumn.removeFromTop (30);
     splResetButton.setBounds (configRow.removeFromRight (110));
     configRow.removeFromRight (8);
     peakHoldResetButton.setBounds (configRow.removeFromRight (150));
-    configRow.removeFromRight (8);
-    avgTimeCombo.setBounds (configRow.removeFromRight (70));
+    configRow.removeFromRight (12);
+    avgTimeCombo.setBounds (configRow.removeFromRight (80));
     avgTimeTitle.setBounds (configRow.removeFromRight (70));
-    configRow.removeFromRight (8);
-    bandsCombo.setBounds (configRow.removeFromRight (90));
+    configRow.removeFromRight (12);
+    bandsCombo.setBounds (configRow.removeFromRight (100));
     bandsTitle.setBounds (configRow);
+    graphColumn.removeFromTop (8);
 
-    graphColumn.removeFromTop (4);
-    graphColumn.removeFromTop (rtaGraphHeight); // グラフ描画領域（paint がここに描く）
+    auto snArea = graphColumn.removeFromBottom (104);
+    graphColumn.removeFromBottom (8);
+    rtaGraphArea = graphColumn;
+    rtaGraphHeight = graphColumn.getHeight();
 
-    // S/Nはグラフの下に置く
-    auto snArea = graphColumn;
-    snTitle.setBounds (snArea.removeFromTop (18));
-    snOverallLabel.setBounds (snArea.removeFromTop (20));
-    snHintLabel.setBounds (snArea.removeFromTop (18));
-    noiseFloorButton.setBounds (snArea.removeFromTop (26).removeFromLeft (150));
+    snTitle.setBounds (snArea.removeFromTop (22));
+    snOverallLabel.setBounds (snArea.removeFromTop (22));
+    snHintLabel.setBounds (snArea.removeFromTop (20));
+    snArea.removeFromTop (4);
+    noiseFloorButton.setBounds (snArea.removeFromTop (30).removeFromLeft (170));
 
-    // 右: SPL / 校正 / ゲインアシスト
-    auto splPanel = rightColumn.removeFromTop (140);
-    splTitle.setBounds (splPanel.removeFromTop (18));
-    splValueLabel.setBounds (splPanel.removeFromTop (40));
-    splValueLabel.setFont (juce::Font (juce::FontOptions (30.0f, juce::Font::bold)));
-
-    auto splControls = splPanel.removeFromTop (26);
-    weightingCombo.setBounds (splControls.removeFromLeft (64));
-    timeConstantCombo.setBounds (splControls.removeFromLeft (76));
-    uncalibratedLabel.setBounds (splPanel.removeFromTop (16));
-    leqLabel.setBounds (splPanel.removeFromTop (18));
+    // 右: SPL
+    auto rightColumn = bounds;
+    auto splCard = rightColumn.removeFromTop (176);
+    rightColumn.removeFromTop (14);
+    cardRects.push_back (splCard);
+    auto splPanel = splCard.reduced (14, 10);
+    auto splHeader = splPanel.removeFromTop (22);
+    splTitle.setBounds (splHeader);
+    auto splTop = splPanel.removeFromTop (50);
+    auto splControls = splTop.removeFromRight (160).withSizeKeepingCentre (160, 30);
+    weightingCombo.setBounds (splControls.removeFromLeft (70));
+    splControls.removeFromLeft (8);
+    timeConstantCombo.setBounds (splControls);
+    splValueLabel.setBounds (splTop);
+    splValueLabel.setFont (juce::Font (juce::FontOptions (40.0f)));
+    uncalibratedLabel.setBounds (splPanel.removeFromTop (18));
+    leqLabel.setBounds (splPanel.removeFromTop (22));
     peakLabel.setBounds (splPanel);
 
-    auto calibrationPanel = rightColumn.removeFromTop (150);
-    calibrationTitle.setBounds (calibrationPanel.removeFromTop (18));
-    auto calRow1 = calibrationPanel.removeFromTop (26);
-    calibrationSignalCombo.setBounds (calRow1.removeFromLeft (170));
-    calRow1.removeFromLeft (6);
-    calibrationStartButton.setBounds (calRow1.removeFromLeft (100));
-    auto calRow2 = calibrationPanel.removeFromTop (26);
+    // 右: SPL 校正
+    auto calibrationCard = rightColumn.removeFromTop (juce::jmax (210, rightColumn.getHeight() / 2));
+    rightColumn.removeFromTop (14);
+    cardRects.push_back (calibrationCard);
+    auto calibrationPanel = calibrationCard.reduced (14, 10);
+    calibrationTitle.setBounds (calibrationPanel.removeFromTop (22));
+    calibrationPanel.removeFromTop (4);
+    auto calRow1 = calibrationPanel.removeFromTop (30);
+    calibrationSignalCombo.setBounds (calRow1.removeFromLeft (190));
+    calRow1.removeFromLeft (8);
+    calibrationStartButton.setBounds (calRow1.removeFromLeft (juce::jmin (150, calRow1.getWidth())));
+    calibrationPanel.removeFromTop (8);
+    auto calRow2 = calibrationPanel.removeFromTop (30);
     calibrationMeterLabel.setBounds (calRow2.removeFromLeft (140));
-    calibrationMeterEditor.setBounds (calRow2.removeFromLeft (70));
-    calRow2.removeFromLeft (6);
-    calibrationApplyButton.setBounds (calRow2.removeFromLeft (120));
-    // 校正結果・エラーは専用の行に置き、2行まで折り返して全文を読めるようにする（issue #137:
-    // 1100 px 幅では残り幅が約 8 px しかなく、エラー文が読めなかった）
+    calibrationMeterEditor.setBounds (calRow2.removeFromLeft (76));
+    calRow2.removeFromLeft (8);
+    calibrationApplyButton.setBounds (calRow2.removeFromLeft (juce::jmin (130, calRow2.getWidth())));
+    calibrationPanel.removeFromTop (8);
     auto calRow3 = calibrationPanel.removeFromTop (34);
-    calibrationResetButton.setBounds (calRow3.removeFromLeft (120).withHeight (26));
-    calRow3.removeFromLeft (6);
+    calibrationResetButton.setBounds (calRow3.removeFromLeft (130).withHeight (30));
+    calRow3.removeFromLeft (10);
     calibrationOffsetLabel.setBounds (calRow3);
     calibrationOffsetLabel.setMinimumHorizontalScale (1.0f);
-    calibrationPanel.removeFromTop (2);
+    calibrationPanel.removeFromTop (4);
     calibrationGuideLabel.setBounds (calibrationPanel);
 
-    auto gainPanel = rightColumn;
-    gainTitle.setBounds (gainPanel.removeFromTop (18));
-    auto gainRow1 = gainPanel.removeFromTop (30);
-    gainTargetLabel.setBounds (gainRow1.removeFromLeft (170));
-    gainRow1.removeFromLeft (6);
-    gainTargetEditor.setBounds (gainRow1.removeFromLeft (60));
-    gainRow1.removeFromLeft (6);
-    gainStartButton.setBounds (gainRow1.removeFromLeft (110));
-    gainMessageLabel.setBounds (gainPanel.removeFromTop (22));
-    gainMetersLabel.setBounds (gainPanel.removeFromTop (18));
+    // 右: ゲイン設定アシスト
+    auto gainCard = rightColumn;
+    cardRects.push_back (gainCard);
+    auto gainPanel = gainCard.reduced (14, 10);
+    gainTitle.setBounds (gainPanel.removeFromTop (22));
+    gainPanel.removeFromTop (4);
+    auto gainRow1 = gainPanel.removeFromTop (34);
+    gainStartButton.setBounds (gainRow1.removeFromRight (150).withSizeKeepingCentre (150, 30));
+    gainRow1.removeFromRight (8);
+    gainTargetEditor.setBounds (gainRow1.removeFromRight (64).withSizeKeepingCentre (64, 30));
+    gainRow1.removeFromRight (8);
+    gainTargetLabel.setBounds (gainRow1);
+    gainPanel.removeFromTop (4);
+    gainMessageLabel.setBounds (gainPanel.removeFromTop (24));
+    gainMetersLabel.setBounds (gainPanel.removeFromTop (20));
     gainProceedLabel.setBounds (gainPanel);
-
 }
+
 } // namespace eeq::ui

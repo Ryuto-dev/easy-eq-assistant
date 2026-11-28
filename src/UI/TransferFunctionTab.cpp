@@ -1472,33 +1472,52 @@ void TransferFunctionTab::moveSnapshot (int fromIndex, int toIndex)
 
 void TransferFunctionTab::resized()
 {
-    auto bounds = getLocalBounds().reduced (6);
+    // 2026-11 リデザイン: [グラフ（上にツールバー）] / [トレース: 一覧 | 選んだトレースの調整 | 操作]
+    auto bounds = getLocalBounds().reduced (16);
+    cardRects.clear();
 
-    auto snapshotPanel = bounds.removeFromBottom (190);
-    snapshotPanel.reduce (4, 4);
+    auto tracesCard = bounds.removeFromBottom (juce::jlimit (190, 240, bounds.getHeight() / 4 + 20));
+    bounds.removeFromBottom (14);
+    auto graphCard = bounds;
+    cardRects.push_back (graphCard);
+    cardRects.push_back (tracesCard);
 
-    // 左列: 保存・削除・書き出し
-    auto buttonColumn = snapshotPanel.removeFromLeft (110);
-    snapshotPanel.removeFromLeft (6);
+    // ---- グラフ ----
+    auto graphArea = graphCard.reduced (12, 10);
+    auto toolbar = graphArea.removeFromTop (30);
+    viewModeCombo.setBounds (toolbar.removeFromLeft (170)); toolbar.removeFromLeft (8);
+    scaleCombo.setBounds (toolbar.removeFromLeft (110)); toolbar.removeFromLeft (14);
+    blankingToggle.setBounds (toolbar.removeFromLeft (150)); toolbar.removeFromLeft (4);
+    coherenceThresholdCombo.setBounds (toolbar.removeFromLeft (90)); toolbar.removeFromLeft (10);
+    clearMarkersButton.setBounds (toolbar.removeFromRight (120)); toolbar.removeFromRight (8);
+    peakMarkerButton.setBounds (toolbar.removeFromRight (juce::jmin (140, juce::jmax (0, toolbar.getWidth()))));
+    graphArea.removeFromTop (8);
+    graph.setBounds (graphArea);
 
+    // ---- トレース ----
+    auto traces = tracesCard.reduced (14, 10);
+    tracesHeaderArea = traces.removeFromTop (22);
+    traces.removeFromTop (6);
+
+    // 右: 操作（保存・書き出し）
+    auto buttonColumn = traces.removeFromRight (150);
+    traces.removeFromRight (12);
     auto stack = [&buttonColumn] (juce::Component& c)
     {
-        c.setBounds (buttonColumn.removeFromTop (24));
-        buttonColumn.removeFromTop (4);
+        c.setBounds (buttonColumn.removeFromTop (26));
+        buttonColumn.removeFromTop (5);
     };
-
     stack (saveButton);
-    stack (deleteButton);
     stack (exportCsvButton);
     stack (exportRewButton);
     stack (exportPngButton);
-    undoButton.setBounds (buttonColumn.removeFromTop (24));
+    stack (deleteButton);
+    undoButton.setBounds (buttonColumn.removeFromTop (26));
 
-    // 右列: 選択中スナップショットの編集
-    auto editColumn = snapshotPanel.removeFromRight (juce::jmin (330, snapshotPanel.getWidth() / 2));
-    snapshotPanel.removeFromRight (6);
-
-    auto editRow = [&editColumn] () { auto r = editColumn.removeFromTop (24); editColumn.removeFromTop (4); return r; };
+    // 中: 選んだトレースの調整
+    auto editColumn = traces.removeFromRight (juce::jmin (380, traces.getWidth() / 2));
+    traces.removeFromRight (12);
+    auto editRow = [&editColumn] () { auto r = editColumn.removeFromTop (26); editColumn.removeFromTop (5); return r; };
 
     {
         auto r = editRow();
@@ -1517,41 +1536,49 @@ void TransferFunctionTab::resized()
     }
     {
         auto r = editRow();
-        dbOffsetLabel.setBounds (r.removeFromLeft (72));
+        dbOffsetLabel.setBounds (r.removeFromLeft (80));
         dbOffsetEditor.setBounds (r.removeFromLeft (64));
-        r.removeFromLeft (8);
-        delayOffsetLabel.setBounds (r.removeFromLeft (100));
+        r.removeFromLeft (10);
+        delayOffsetLabel.setBounds (r.removeFromLeft (110));
         delayOffsetEditor.setBounds (r.removeFromLeft (juce::jmin (64, r.getWidth())));
     }
     {
         auto r = editRow();
-        smoothingOverrideLabel.setBounds (r.removeFromLeft (72));
-        smoothingOverrideCombo.setBounds (r.removeFromLeft (juce::jmin (160, r.getWidth())));
+        smoothingOverrideLabel.setBounds (r.removeFromLeft (80));
+        smoothingOverrideCombo.setBounds (r.removeFromLeft (juce::jmin (180, r.getWidth())));
     }
     {
         auto r = editRow();
-        diffLabel.setBounds (r.removeFromLeft (72));
+        diffLabel.setBounds (r.removeFromLeft (80));
         const auto w = (r.getWidth() - 4) / 2;
         diffComboA.setBounds (r.removeFromLeft (w));
         r.removeFromLeft (4);
         diffComboB.setBounds (r);
     }
 
-    snapshotList.setBounds (snapshotPanel);
-    hintLabel.setBounds (snapshotPanel);
+    // 左: 一覧
+    snapshotList.setBounds (traces);
+    hintLabel.setBounds (traces);
+}
 
-    // グラフ上のツールバー
-    bounds.removeFromBottom (4);
-    auto toolbar = bounds.removeFromTop (26);
-    viewModeCombo.setBounds (toolbar.removeFromLeft (150)); toolbar.removeFromLeft (6);
-    scaleCombo.setBounds (toolbar.removeFromLeft (100)); toolbar.removeFromLeft (10);
-    blankingToggle.setBounds (toolbar.removeFromLeft (150)); toolbar.removeFromLeft (4);
-    coherenceThresholdCombo.setBounds (toolbar.removeFromLeft (80)); toolbar.removeFromLeft (10);
-    clearMarkersButton.setBounds (toolbar.removeFromRight (110)); toolbar.removeFromRight (6);
-    peakMarkerButton.setBounds (toolbar.removeFromRight (juce::jmin (130, juce::jmax (0, toolbar.getWidth()))));
-    bounds.removeFromTop (4);
+void TransferFunctionTab::paint (juce::Graphics& g)
+{
+    g.fillAll (theme::get (theme::ColourId::windowBackground));
 
-    graph.setBounds (bounds);
+    for (const auto& card : cardRects)
+    {
+        g.setColour (theme::get (theme::ColourId::raised));
+        g.fillRoundedRectangle (card.toFloat(), 10.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline));
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    }
+
+    g.setColour (theme::get (theme::ColourId::text));
+    g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    g.drawText (strings::tracesTitle, tracesHeaderArea, juce::Justification::centredLeft);
+    g.setColour (theme::get (theme::ColourId::textDim));
+    g.setFont (juce::Font (juce::FontOptions (12.0f)));
+    g.drawText (strings::tracesHint, tracesHeaderArea.withTrimmedLeft (110), juce::Justification::centredLeft, true);
 }
 
 } // namespace eeq::ui

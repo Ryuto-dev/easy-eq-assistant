@@ -11,8 +11,11 @@ namespace strings = eeq::strings;
 
 MainComponent::MainComponent()
     : engine (appPropertiesStorage.properties.getUserSettings()),
-      topBar (engine),
+      statusStrip (context),
       bottomBar (engine),
+      applySummary (context),
+      setupPage (context),
+      applyPage (context),
       transferTab (context),
       delayTab (context),
       rtaSplTab (context),
@@ -29,14 +32,14 @@ MainComponent::MainComponent()
     applyLookAndFeelColours();
     juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-    topBar.onError = [this] (const juce::String& message) { showError (message); };
-    topBar.onLiveModeRequested = [this]
+    setupPage.onError = [this] (const juce::String& message) { showError (message); };
+    statusStrip.onLiveModeRequested = [this]
     {
         liveOverlay.beginLiveMode();
         liveOverlay.toFront (true);
         liveOverlay.setBounds (getLocalBounds());
     };
-    topBar.onThemeToggleRequested = [this]
+    sideNav.onThemeToggle = [this]
     {
         theme::toggle();
         applyThemeToComponents();
@@ -46,6 +49,51 @@ MainComponent::MainComponent()
         settings->setValue ("themeMode", (int) theme::mode());
         settings->saveIfNeeded();
     };
+    sideNav.onShortcutHelp = [this] { showShortcutHelp(); };
+    sideNav.onPageSelected = [this] (int page) { showPage (page); };
+
+    // 作業の流れ（番号付き）と道具
+    sideNav.setItems ({
+        { pageSetup, strings::navSetup, strings::navSetupSub, 1 },
+        { pageMeasure, strings::navMeasure, strings::navMeasureSub, 2 },
+        { pageDelay, strings::navDelay, strings::navDelaySub, 3 },
+        { pageEq, strings::navEq, strings::navEqSub, 4 },
+        { pageApply, strings::navApply, strings::navApplySub, 5 },
+        { pageRta, strings::navRta, {}, 0 },
+        { pageLimit, strings::navLimit, {}, 0 },
+        { pageTools, strings::navTools, {}, 0 },
+        { pageVenue, strings::navVenue, {}, 0 },
+    });
+
+    statusStrip.onNavigate = [this] (eeq::ui::StatusStrip::Target target)
+    {
+        using T = eeq::ui::StatusStrip::Target;
+        switch (target)
+        {
+            case T::setup:   showPage (pageSetup); break;
+            case T::measure: showPage (pageMeasure); break;
+            case T::delay:   showPage (pageDelay); break;
+            case T::apply:   showPage (pageApply); break;
+            case T::venue:   showPage (pageVenue); break;
+            case T::none:
+            default:         break;
+        }
+    };
+
+    setupPage.onNavigate = [this] (eeq::ui::SetupPage::Destination destination)
+    {
+        using D = eeq::ui::SetupPage::Destination;
+        switch (destination)
+        {
+            case D::loopback:       showPage (pageDelay); break;
+            case D::gainAssist:     showPage (pageRta); break;
+            case D::splCalibration: showPage (pageRta); break;
+            case D::measure:
+            default:                showPage (pageMeasure); break;
+        }
+    };
+
+    applySummary.onOpenSheet = [this] { showPage (pageApply); };
 
     measurementPanel.setSettings (appPropertiesStorage.properties.getUserSettings());
     transferTab.setSettings (appPropertiesStorage.properties.getUserSettings());
@@ -53,32 +101,26 @@ MainComponent::MainComponent()
     measurementPanel.onSettingsChanged = [this] { applyMeasurementSettings(); };
 
     bottomBar.onSnapshotRequested = [this] { transferTab.showSaveSnapshotDialog(); };
-    bottomBar.onDelayMeasureRequested = [this]
-    {
-        tabs.setCurrentTabIndex (1);
-        delayTab.runDelayMeasurement (false);
-    };
-    bottomBar.onCalibrationRequested = [this] { tabs.setCurrentTabIndex (2); };
+    bottomBar.onDelayMeasureRequested = [this] { delayTab.runDelayMeasurement (true); };
+    bottomBar.onCalibrationRequested = [this] { showPage (pageSetup); };
 
     liveOverlay.onHideRequested = [this] { liveOverlay.endLiveMode(); };
 
-    addAndMakeVisible (topBar);
+    addAndMakeVisible (statusStrip);
+    addAndMakeVisible (sideNav);
     addAndMakeVisible (bottomBar);
     addAndMakeVisible (measurementPanel);
-    addAndMakeVisible (tabs);
+    addAndMakeVisible (applySummary);
+
+    for (auto* page : { (juce::Component*) &setupPage, (juce::Component*) &transferTab, (juce::Component*) &delayTab,
+                        (juce::Component*) &eqTab, (juce::Component*) &applyPage, (juce::Component*) &rtaSplTab,
+                        (juce::Component*) &limitTab, (juce::Component*) &utilitiesTab, (juce::Component*) &venueTab })
+        addChildComponent (page);
+
     addChildComponent (liveOverlay);
 
-    // タブ（仕様 5.1 切替タブ）
-    tabs.addTab (strings::tabTransferFunction, theme::get (theme::ColourId::windowBackground), &transferTab, false);
-    tabs.addTab (strings::tabDelayIr, theme::get (theme::ColourId::windowBackground), &delayTab, false);
-    tabs.addTab (strings::tabRtaSpl, theme::get (theme::ColourId::windowBackground), &rtaSplTab, false);
-    tabs.addTab (strings::tabEQ, theme::get (theme::ColourId::windowBackground), &eqTab, false);
-    tabs.addTab (strings::tabLimitTest, theme::get (theme::ColourId::windowBackground), &limitTab, false);
-    tabs.addTab (strings::tabUtilities, theme::get (theme::ColourId::windowBackground), &utilitiesTab, false);
-    tabs.addTab (strings::tabVenue, theme::get (theme::ColourId::windowBackground), &venueTab, false);
-    tabs.setCurrentTabIndex (0);
-    tabs.setTabBarDepth (30);
-    tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
+    // 前回開いていた画面から始める（初回は「準備」）
+    showPage (appPropertiesStorage.properties.getUserSettings()->getIntValue ("currentPage", pageSetup));
 
     // キーボードショートカット（仕様 5.2 / 6.3）:
     // Space=測定、N=発振器、D=遅延検出、S=スナップ、R=リセット、Esc=緊急停止
@@ -256,32 +298,79 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 }
 
+//==============================================================================
+// ページ切替（2026-11 リデザイン）
+
+juce::Component* MainComponent::componentForPage (int page)
+{
+    switch (page)
+    {
+        case pageSetup:   return &setupPage;
+        case pageMeasure: return &transferTab;
+        case pageDelay:   return &delayTab;
+        case pageEq:      return &eqTab;
+        case pageApply:   return &applyPage;
+        case pageRta:     return &rtaSplTab;
+        case pageLimit:   return &limitTab;
+        case pageTools:   return &utilitiesTab;
+        case pageVenue:   return &venueTab;
+        default:          return nullptr;
+    }
+}
+
+bool MainComponent::pageHasInspector (int page) const noexcept
+{
+    // 測定設定（FFT・平均・スムージング）と入れる値の要約は、測って計算する画面でだけ出す
+    return page == pageMeasure || page == pageDelay || page == pageEq;
+}
+
+void MainComponent::showPage (int page)
+{
+    if (componentForPage (page) == nullptr)
+        page = pageMeasure;
+
+    currentPage = page;
+
+    for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
+                   (int) pageLimit, (int) pageTools, (int) pageVenue })
+        if (auto* component = componentForPage (p))
+            component->setVisible (p == page);
+
+    measurementPanel.setVisible (pageHasInspector (page));
+    applySummary.setVisible (pageHasInspector (page));
+    sideNav.setSelectedPage (page);
+
+    if (auto* settings = appPropertiesStorage.properties.getUserSettings())
+        settings->setValue ("currentPage", page);
+
+    resized();
+}
+
+void MainComponent::prepareScreenshot (int page, bool light, bool live)
+{
+    if (light != (theme::mode() == theme::Mode::light))
+    {
+        theme::setMode (light ? theme::Mode::light : theme::Mode::dark);
+        applyThemeToComponents();
+    }
+
+    if (page >= 0)
+        showPage (page);
+
+    if (live)
+        statusStrip.onLiveModeRequested();
+}
+
+void MainComponent::showShortcutHelp()
+{
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, strings::shortcutHelpTitle,
+                                            strings::shortcutHelpBody, strings::okButton, this, nullptr);
+}
+
 void MainComponent::applyLookAndFeelColours()
 {
-    // PopupMenu・AlertWindow・CallOutBox などは LookAndFeel の配色で描かれる（issue #132:
-    // 既定の V4 のままだとライトテーマでもダイアログやメニューが暗い配色のままだった）
-    using CS = juce::LookAndFeel_V4::ColourScheme;
-    lookAndFeel.setColourScheme (CS (theme::get (theme::ColourId::windowBackground),    // windowBackground
-                                     theme::get (theme::ColourId::panelBackground),     // widgetBackground
-                                     theme::get (theme::ColourId::panelBackground),     // menuBackground
-                                     theme::get (theme::ColourId::controlOutline),      // outline
-                                     theme::get (theme::ColourId::text),                // defaultText
-                                     theme::get (theme::ColourId::control),             // defaultFill
-                                     theme::get (theme::ColourId::text),                // highlightedText
-                                     theme::get (theme::ColourId::accent).withAlpha (0.35f), // highlightedFill
-                                     theme::get (theme::ColourId::text)));              // menuText
-    lookAndFeel.setColour (juce::TabbedButtonBar::tabTextColourId, theme::get (theme::ColourId::textDim));
-    lookAndFeel.setColour (juce::TabbedButtonBar::frontTextColourId, theme::get (theme::ColourId::text));
-    lookAndFeel.setColour (juce::TooltipWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
-    lookAndFeel.setColour (juce::TooltipWindow::textColourId, theme::get (theme::ColourId::text));
-    lookAndFeel.setColour (juce::TooltipWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    lookAndFeel.setColour (juce::AlertWindow::backgroundColourId, theme::get (theme::ColourId::panelBackground));
-    lookAndFeel.setColour (juce::AlertWindow::textColourId, theme::get (theme::ColourId::text));
-    lookAndFeel.setColour (juce::AlertWindow::outlineColourId, theme::get (theme::ColourId::controlOutline));
-    lookAndFeel.setColour (juce::PopupMenu::backgroundColourId, theme::get (theme::ColourId::panelBackground));
-    lookAndFeel.setColour (juce::PopupMenu::textColourId, theme::get (theme::ColourId::text));
-    lookAndFeel.setColour (juce::PopupMenu::highlightedBackgroundColourId, theme::get (theme::ColourId::accent).withAlpha (0.35f));
-    lookAndFeel.setColour (juce::PopupMenu::highlightedTextColourId, theme::get (theme::ColourId::text));
+    // PopupMenu・AlertWindow などは LookAndFeel の配色で描かれる（issue #132）
+    lookAndFeel.refreshColours();
 }
 
 void MainComponent::applyThemeToComponents()
@@ -290,18 +379,15 @@ void MainComponent::applyThemeToComponents()
     // 生成時に各ウィジェットへ焼き込まれた色を、現在のテーマで塗り直す（issue #9/#50）
     eeq::ui::restyleTree (this);
 
-    tabs.setColour (juce::TabbedComponent::outlineColourId, theme::get (theme::ColourId::controlOutline));
-
-    // addTab 時に焼き込んだタブ背景色も張り直す
-    for (int i = 0; i < tabs.getNumTabs(); ++i)
-        tabs.setTabBackgroundColour (i, theme::get (theme::ColourId::windowBackground));
-
-    // 全タブを再描画する
-    for (int i = 0; i < tabs.getNumTabs(); ++i)
-        if (auto* component = tabs.getTabContentComponent (i))
+    // 全ページを再描画する（非表示のページも、次に表示したときに新しい色で描かれるように）
+    for (int p : { (int) pageSetup, (int) pageMeasure, (int) pageDelay, (int) pageEq, (int) pageApply, (int) pageRta,
+                   (int) pageLimit, (int) pageTools, (int) pageVenue })
+        if (auto* component = componentForPage (p))
             component->repaint();
 
-    topBar.repaint();
+    statusStrip.repaint();
+    sideNav.repaint();
+    applySummary.repaint();
     bottomBar.repaint();
     measurementPanel.repaint();
     repaint();
@@ -311,11 +397,21 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
 
-    topBar.setBounds (area.removeFromTop (topBarHeight));
+    statusStrip.setBounds (area.removeFromTop (eeq::ui::StatusStrip::preferredHeight));
     bottomBar.setBounds (area.removeFromBottom (bottomBarHeight));
+    // 狭いウィンドウではナビと右パネルを少し細くして、中央のページに幅を回す
+    const auto narrow = getWidth() < 1300;
+    sideNav.setBounds (area.removeFromLeft (narrow ? 156 : eeq::ui::SideNav::preferredWidth));
 
-    measurementPanel.setBounds (area.removeFromRight (measurementPanelWidth));
-    tabs.setBounds (area);
+    if (pageHasInspector (currentPage))
+    {
+        auto inspector = area.removeFromRight (narrow ? 214 : inspectorWidth);
+        applySummary.setBounds (inspector.removeFromBottom (applySummaryHeight).reduced (10, 10));
+        measurementPanel.setBounds (inspector);
+    }
+
+    if (auto* page = componentForPage (currentPage))
+        page->setBounds (area);
 
     liveOverlay.setBounds (getLocalBounds());
 }
@@ -391,7 +487,7 @@ void MainComponent::timerCallback()
         }
     }
 
-    topBar.timerTick();
+    statusStrip.update();
     bottomBar.update();
 
     // 測定設定のスムージングをタブへ橋渡しする（仕様 3.1: 計算値は保持、表示のみ適用）
@@ -403,19 +499,41 @@ void MainComponent::timerCallback()
     // 進行・自動停止を保つため常時回す。venueTab は軽いので常時
     const auto uiShowing = isShowing();
     const auto liveMode = liveOverlay.isVisible();
-    const auto currentTab = tabs.getCurrentTabIndex();
+    const auto active = [&] (int page) { return uiShowing && ! liveMode && currentPage == page; };
 
-    if (uiShowing && ! liveMode && currentTab == 0) transferTab.timerTick();
-    if (uiShowing && ! liveMode && currentTab == 1) delayTab.timerTick();
+    if (active (pageSetup)) setupPage.timerTick();
+    if (active (pageMeasure)) transferTab.timerTick();
+    if (active (pageDelay)) delayTab.timerTick();
     else delayTab.timerTickBackground(); // ループバック測定の進行は非表示でも止めない（issue #55）
-    if (uiShowing && ! liveMode && currentTab == 2) rtaSplTab.timerTick();
+    if (active (pageRta)) rtaSplTab.timerTick();
     else rtaSplTab.timerTickBackground(); // SPL校正待ちの進行も同様（issue #55）
-    if (uiShowing && ! liveMode && currentTab == 3) eqTab.timerTick();
+    if (active (pageEq)) eqTab.timerTick();
+    if (active (pageApply)) applyPage.timerTick();
     limitTab.timerTick();
     venueTab.timerTick();
 
-    if (uiShowing && ! liveMode && currentTab == 5)
+    if (active (pageTools))
         utilitiesTab.timerTick();
+
+    if (pageHasInspector (currentPage))
+        applySummary.update();
+
+    // 作業ナビの完了マーク: 準備 = 確認リストが OK / 測定 = 遅延が決まって平均が溜まった /
+    // EQ = 補正案がある / 入れる値 = 全系統が卓に入力済み
+    if (! active (pageSetup))
+        setupPage.timerTick(); // 判定だけは常に回す（軽い）
+    {
+        const auto& systems = project.currentVenue().systems;
+        bool allEntered = ! systems.empty();
+        for (const auto& system : systems)
+            allEntered = allEntered && system.entered;
+
+        sideNav.setStepState (pageSetup, setupPage.isReady(), setupPage.needsAttention());
+        sideNav.setStepState (pageMeasure, std::abs (uiState.appliedDelaySamples.load()) >= 0.5
+                                               && engine.getMeasurement().getAverages() >= 8, false);
+        sideNav.setStepState (pageEq, ! uiState.proposedBands.empty(), false);
+        sideNav.setStepState (pageApply, allEntered, false);
+    }
 
     if (liveMode)
         liveOverlay.timerTick();
@@ -431,7 +549,8 @@ void MainComponent::timerCallback()
                              : deviceStopNoticeActive ? strings::deviceRestartStoppedNotice
                              : inputSilent ? (engine.inputIsBuiltInMic() ? strings::builtInMicSilenceNotice
                                                                          : strings::inputDigitalSilenceNotice)
-                             : status.isNotEmpty() ? status : eeq::strings::noDeviceInfo);
+                             : status.isNotEmpty() ? juce::String() // 機器・クロックは上のステータス帯に出ている
+                                                   : eeq::strings::noDeviceInfo);
 
     // デバイスが開き直されたら測定設定（サンプルレート）を合わせ直す
     if (engine.getDeviceGeneration() != lastSeenGeneration)
@@ -522,11 +641,24 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
         return true;
     }
 
-    // D = 遅延を検出して適用（Delay Finder: issue #142）
+    // D = 遅延を検出して適用（Delay Finder: issue #142）。画面は移動しない（結果は上のステータス帯に出る）
     if (key == 'd' || key == 'D')
     {
-        tabs.setCurrentTabIndex (1);
         delayTab.runDelayMeasurement (true);
+        return true;
+    }
+
+    // 1〜5 = 作業の流れの画面へ
+    for (int step = 1; step <= 5; ++step)
+        if (key.getKeyCode() == '0' + step && ! key.getModifiers().isAnyModifierKeyDown())
+        {
+            showPage (step - 1);
+            return true;
+        }
+
+    if (key.getTextCharacter() == '?')
+    {
+        showShortcutHelp();
         return true;
     }
 

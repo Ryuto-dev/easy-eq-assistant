@@ -1,5 +1,7 @@
 #include "BottomBar.h"
 
+#include <cmath>
+
 #include "../Core/Log.h"
 #include "../DSP/SweepGenerator.h"
 #include "Buttons.h"
@@ -26,7 +28,7 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     addAndMakeVisible (measurementButton);
 
     styleButton (resetButton);
-    resetButton.setButtonText (strings::resetAveragesButton);
+    resetButton.setButtonText (strings::transportReset);
     resetButton.onClick = [this]
     {
         engine.getMeasurement().resetAverages();
@@ -35,7 +37,7 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     addAndMakeVisible (resetButton);
 
     styleButton (snapshotButton);
-    snapshotButton.setButtonText (strings::snapshotButton);
+    snapshotButton.setButtonText (strings::transportSave);
     snapshotButton.onClick = [this]
     {
         if (onSnapshotRequested != nullptr)
@@ -44,7 +46,8 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     addAndMakeVisible (snapshotButton);
 
     styleButton (delayButton);
-    delayButton.setButtonText (strings::delayMeasureButton);
+    delayButton.setButtonText (strings::transportDelay);
+    delayButton.setTooltip (strings::delayMeasureTooltip);
     delayButton.onClick = [this]
     {
         if (onDelayMeasureRequested != nullptr)
@@ -59,7 +62,13 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
         if (onCalibrationRequested != nullptr)
             onCalibrationRequested();
     };
-    addAndMakeVisible (calibrationButton);
+    addChildComponent (calibrationButton); // 校正は「準備」画面の確認リストから開く（2026-11 リデザイン）
+
+    // 全停止（Esc と同じ。どの画面でも右下の同じ位置にある）
+    styleDangerButton (stopAllButton);
+    stopAllButton.setButtonText (strings::stopAllButton);
+    stopAllButton.onClick = [this] { engine.emergencyStop(); };
+    addAndMakeVisible (stopAllButton);
 
     // 励起信号（仕様 3.2）: ピンクノイズ（既定）/ スイープ / WAV / 外部入力のみ
     styleCombo (excitationCombo);
@@ -104,7 +113,7 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     // 測定そのものが歪むため、スライダーで入れられないようにする
     levelSlider.setRange (-60.0, (double) -eeq::audio::AudioEngine::excitationCrestDb, 0.5);
     levelSlider.setValue (engine.getNoiseLevelDb(), juce::dontSendNotification);
-    levelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 90, 24);
+    levelSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 84, 28);
     levelSlider.setTextValueSuffix (" dBFS");
     levelSlider.addListener (this);
     addAndMakeVisible (levelSlider);
@@ -127,7 +136,8 @@ BottomBar::BottomBar (eeq::audio::AudioEngine& engineIn)
     addAndMakeVisible (shortcutsLabel);
 
     statusLabel.setColour (juce::Label::textColourId, theme::get (theme::ColourId::textDim));
-    statusLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
+    statusLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    statusLabel.setMinimumHorizontalScale (0.8f);
     statusLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (statusLabel);
 }
@@ -193,13 +203,11 @@ void BottomBar::applyExcitationSource (int comboId)
 void BottomBar::update()
 {
     const auto audible = engine.isNoiseAudible();
-    noiseButton.setButtonText (audible ? strings::stopNoiseButton : strings::startNoiseButton);
-    noiseButton.setColour (juce::TextButton::buttonColourId,
-                           audible ? theme::get (theme::ColourId::danger)
-                                   : theme::get (theme::ColourId::buttonOn));
+    noiseButton.setButtonText (audible ? strings::transportNoiseOn : strings::transportNoiseOff);
+    noiseButton.setToggleState (audible, juce::dontSendNotification); // ON の間はアクセント色で塗る
 
     // 発振中インジケータ（issue #141）: レベルとソースも出す
-    oscillatorActiveLabel.setVisible (audible);
+    oscillatorActiveLabel.setVisible (false); // 出力中の表示は上のステータス帯と発振ボタンの色で示す
 
     if (audible)
     {
@@ -219,10 +227,8 @@ void BottomBar::update()
     }
 
     const auto measuring = engine.getMeasurement().isMeasuring();
-    measurementButton.setButtonText (measuring ? strings::measurementStopButton : strings::measurementStartButton);
-    measurementButton.setColour (juce::TextButton::buttonColourId,
-                                 measuring ? theme::get (theme::ColourId::danger)
-                                           : theme::get (theme::ColourId::buttonOn));
+    measurementButton.setButtonText (measuring ? strings::transportMeasureOn : strings::transportMeasureOff);
+    measurementButton.setToggleState (measuring, juce::dontSendNotification);
 
     // 出力レベルは他タブ（リミットテスト等）からも変更されるため、ドラッグ中に
     // なければエンジンの現在値へ同期する
@@ -239,8 +245,13 @@ void BottomBar::setStatusText (const juce::String& text)
 
 void BottomBar::paint (juce::Graphics& g)
 {
-    g.setColour (theme::get (theme::ColourId::panelBackground));
+    g.setColour (theme::get (theme::ColourId::sidebarBackground));
     g.fillRect (getLocalBounds());
+
+    // 区切り線（測定 | 信号 | 記録）
+    g.setColour (theme::get (theme::ColourId::controlOutline));
+    for (auto* c : { (juce::Component*) &excitationCombo, (juce::Component*) &delayButton })
+        g.fillRect (c->getX() - 11, getHeight() / 2 - 12, 1, 24);
     g.setColour (theme::get (theme::ColourId::controlOutline));
     g.fillRect (getLocalBounds().removeFromTop (1));
 }
@@ -283,38 +294,40 @@ juce::String BottomBar::outputStatusText (const eeq::audio::AudioEngine& engine)
 
 void BottomBar::resized()
 {
-    auto bounds = getLocalBounds().reduced (8, 4);
+    // 1 段の操作バー（2026-11 リデザイン）:
+    // [測定 Space][リセット R] | [信号][発振 N][レベル────] | [遅延 D][保存 S]   状態表示   [全停止 Esc]
+    auto row = getLocalBounds().reduced (14, 0);
+    const auto h = 36;
 
-    // 2段組（issue #137）: 上段=操作、下段=出力中バッジ・状態表示・ショートカット。
-    // 1段に詰めると最小幅で状態表示（UI停止→自動停止などの安全通知）が数十 px に潰れていた
-    auto row2 = bounds.removeFromBottom (18);
-    bounds.removeFromBottom (2);
-    auto row1 = bounds;
-
-    auto place = [&row1] (juce::Component& c, int width, int height, int gapAfter)
+    auto place = [&row, h] (juce::Component& c, int width, int gapAfter)
     {
-        c.setBounds (row1.removeFromLeft (width).withSizeKeepingCentre (width, height));
-        row1.removeFromLeft (gapAfter);
+        c.setBounds (row.removeFromLeft (width).withSizeKeepingCentre (width, h));
+        row.removeFromLeft (gapAfter);
     };
 
-    place (measurementButton, 86, 30, 6);
-    place (resetButton, 96, 30, 10);
-    place (snapshotButton, 104, 30, 6);
-    place (delayButton, 72, 30, 6);
-    place (calibrationButton, 56, 30, 12);
-    place (excitationCombo, 128, 26, 6);
-    place (noiseButton, 104, 30, 12);
+    // 最小幅（1100px）でも重ならないよう、幅に合わせて縮める
+    const auto scale = juce::jlimit (0.72f, 1.0f, (float) getWidth() / 1500.0f);
+    auto w = [scale] (int width) { return (int) std::round ((float) width * scale); };
 
-    levelTitle.setBounds (row1.removeFromLeft (70));
-    row1.removeFromLeft (6);
-    const auto sliderWidth = juce::jlimit (0, 260, row1.getWidth());
-    levelSlider.setBounds (row1.removeFromLeft (sliderWidth).withSizeKeepingCentre (sliderWidth, 30));
+    stopAllButton.setBounds (row.removeFromRight (w (124)).withSizeKeepingCentre (w (124), h));
+    row.removeFromRight (16);
 
-    oscillatorActiveLabel.setBounds (row2.removeFromLeft (juce::jmin (300, row2.getWidth() / 3)));
-    row2.removeFromLeft (10);
-    shortcutsLabel.setBounds (row2.removeFromRight (juce::jmin (430, row2.getWidth() / 2)));
-    row2.removeFromRight (10);
-    statusLabel.setBounds (row2);
+    place (measurementButton, w (136), 8);
+    place (resetButton, w (108), w (22));
+    place (excitationCombo, w (132), 8);
+    place (noiseButton, w (132), 12);
+
+    const auto sliderWidth = getWidth() >= 1400 ? 250 : w (190);
+    levelSlider.setBounds (row.removeFromLeft (sliderWidth).withSizeKeepingCentre (sliderWidth, h));
+    row.removeFromLeft (w (22));
+
+    place (delayButton, w (96), 8);
+    place (snapshotButton, w (96), 16);
+
+    levelTitle.setVisible (false);
+    shortcutsLabel.setVisible (false); // キーはボタンの文字に入れた。一覧はナビの「キー一覧」
+    statusLabel.setBounds (row);
+    oscillatorActiveLabel.setBounds ({});
 }
 
 void BottomBar::sliderValueChanged (juce::Slider* slider)

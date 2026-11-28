@@ -520,4 +520,143 @@ inline const juce::String rtaScaleCalibrated { u8"dB SPL（校正済み）" };
 inline const juce::String averagesPrefix { u8"平均: " };
 inline const juce::String averagesSuffix { u8" 回" };
 
+
+// ---- 2026-11 リデザイン: 作業ナビ ----
+inline const juce::String navFlowHeader { u8"作業の流れ" };
+inline const juce::String navToolsHeader { u8"道具" };
+inline const juce::String navShortcutsButton { u8"キー一覧" };
+inline const juce::String navSetup { u8"準備" };
+inline const juce::String navSetupSub { u8"機器・レベル・補正" };
+inline const juce::String navMeasure { u8"測定" };
+inline const juce::String navMeasureSub { u8"伝達関数を見る" };
+inline const juce::String navDelay { u8"遅延・位相" };
+inline const juce::String navDelaySub { u8"IR・系統を合わせる" };
+inline const juce::String navEq { u8"EQ" };
+inline const juce::String navEqSub { u8"補正案を作る" };
+inline const juce::String navApply { u8"入れる値" };
+inline const juce::String navApplySub { u8"卓・プロセッサーへ" };
+inline const juce::String navRta { u8"RTA・SPL" };
+inline const juce::String navLimit { u8"上限測定" };
+inline const juce::String navTools { u8"計算ツール" };
+inline const juce::String navVenue { u8"会場・記録" };
+inline const juce::String shortcutHelpTitle { u8"キー操作" };
+inline const juce::String shortcutHelpBody { u8"Space   測定の開始 / 停止\nN   発振器（ピンクノイズ）の ON / OFF\nD   遅延を検出して適用\nS   スナップショット保存\nR   平均リセット・クリップ解除\nEsc   全停止（どの画面でも）\n1〜5   作業の流れの画面へ移動" };
+
+// ---- ステータス帯 ----
+inline const juce::String statusIo { u8"入出力" };
+inline const juce::String statusClock { u8"クロック" };
+inline const juce::String statusClockSame { u8"同一デバイス" };
+inline const juce::String statusClockCompensating { u8"補正中 " };
+inline const juce::String statusClockSeparate { u8"別デバイス" };
+inline const juce::String statusOutput { u8"出力" };
+inline const juce::String statusDelayNone { u8"未設定" };
+inline const juce::String statusAverages { u8"平均" };
+inline const juce::String statusStopped { u8"停止中" };
+inline const juce::String statusCorrection { u8"ループバック補正" };
+inline const juce::String statusOn { u8"ON" };
+inline const juce::String statusNone { u8"なし" };
+inline const juce::String statusCalibration { u8"SPL校正" };
+inline const juce::String statusDone { u8"済" };
+inline const juce::String statusNotYet { u8"未" };
+inline const juce::String statusInput { u8"入力" };
+inline const juce::String statusNoVenue { u8"会場未設定" };
+inline const juce::String statusSystemPrefix { u8"系統: " };
+inline const juce::String liveModeTooltip { u8"本番中の SPL 監視画面に切り替えます" };
+
+// ---- 入れる値 ----
+inline const juce::String applySheetTitle { u8"システムに入れる値" };
+inline const juce::String applySheetLead { u8"測って決めた値を系統ごとにまとめます。卓・プロセッサーに入れたらチェックを付けてください。" };
+inline const juce::String applySummaryTitle { u8"入れる値" };
+inline const juce::String applyDelay { u8"ディレイ" };
+inline const juce::String applyUndecided { u8"未決定" };
+inline const juce::String applyPolarityNormal { u8"正相" };
+inline const juce::String applyPolarityInvert { u8"反転" };
+inline const juce::String applyEqFlat { u8"なし（フラット）" };
+inline const juce::String applyEqBandsSuffix { u8" バンド" };
+inline const juce::String applyEqUndecidedHint { u8"「4 EQ」で補正案を作って記録します" };
+inline const juce::String applyNote { u8"メモ" };
+inline const juce::String applyNotePlaceholder { u8"根拠など（例: サブ基準、FOH で測定）" };
+inline const juce::String applyEnteredShort { u8"卓" };
+inline const juce::String applyEnteredToggle { u8"卓に入力済み" };
+inline const juce::String applyEnteredDone { u8"✓ 卓に入力済み" };
+inline const juce::String applyEnteredNot { u8"未入力" };
+inline const juce::String applyOpenSheet { u8"入れる値を開く" };
+inline const juce::String applyRecordEq { u8"EQ 案を記録" };
+inline const juce::String applyRecordEqTooltip { u8"いまの補正EQ案を、この系統の入れる値として記録します" };
+inline const juce::String applyRecordDelay { u8"入れる値に記録" };
+inline const juce::String applyRecordDelayTooltip { u8"提案したディレイと極性を、系統の入れる値として記録します" };
+inline const juce::String applyMeasureThis { u8"この系統を測る" };
+inline const juce::String applyMeasureThisTooltip { u8"これからの測定・スナップショットをこの系統として扱います" };
+inline const juce::String applyMeasuringNow { u8"測定中の系統" };
+inline const juce::String applyAddSystem { u8"系統を追加" };
+inline const juce::String applyDefaultSystemName { u8"系統" };
+inline const juce::String applyCopy { u8"テキストをコピー" };
+inline const juce::String applyExport { u8"書き出し (.txt)" };
+inline const juce::String applyEmpty { u8"系統がまだありません。「系統を追加」で メイン / サブ / ディレイ などを作ると、\nここに入れる値が並びます。" };
+inline const juce::String applyRecorded { u8"入れる値に記録しました: " };
+
+// ---- 準備 ----
+inline const juce::String setupTitle { u8"準備" };
+inline const juce::String setupLead { u8"機器とチャンネルを選び、下の確認リストが OK になったら測定へ進みます。" };
+inline const juce::String setupDevicesTitle { u8"オーディオ機器" };
+inline const juce::String setupChannelsTitle { u8"チャンネル" };
+inline const juce::String setupLevelsTitle { u8"レベル" };
+inline const juce::String setupChecklistTitle { u8"測る前の確認" };
+inline const juce::String setupGoMeasure { u8"測定へ進む  →" };
+inline const juce::String checkMarkWarn { u8"注意" };
+inline const juce::String checkMarkBad { u8"要対応" };
+inline const juce::String checkMarkOptional { u8"任意" };
+inline const juce::String checkMarkTodo { u8"確認" };
+inline const juce::String checkDeviceTitle { u8"オーディオ機器" };
+inline const juce::String checkDeviceMissing { u8"機器が開けていません。上で入力・出力を選んでください" };
+inline const juce::String checkInputTitle { u8"マイクの入力レベル" };
+inline const juce::String checkInputClip { u8"クリップしています。インターフェースのゲインを下げてください" };
+inline const juce::String checkInputPlayNoise { u8"N でピンクノイズを出すと確認できます（目標ピーク −30〜−6 dBFS）" };
+inline const juce::String checkInputHot { u8"大きすぎます（ゲインを下げる）: ピーク " };
+inline const juce::String checkInputLow { u8"小さすぎます（ゲインを上げる）: ピーク " };
+inline const juce::String checkInputOk { u8"ちょうどよい範囲です: ピーク " };
+inline const juce::String checkOpenGainAssist { u8"ゲイン設定アシスト" };
+inline const juce::String checkRefTitle { u8"Ref（基準信号）" };
+inline const juce::String checkRefInternal { u8"内部参照（アプリが出している信号をそのまま使います）" };
+inline const juce::String checkRefMissing { u8"Ref が選ばれていません" };
+inline const juce::String checkRefExternal { u8"入力 ch " };
+inline const juce::String checkRefSilent { u8"（信号が来ていません）" };
+inline const juce::String checkClockTitle { u8"入出力のクロック" };
+inline const juce::String checkClockSame { u8"同じ機器なのでずれません" };
+inline const juce::String checkClockCompensating { u8"別の機器: ずれを自動で補正中 " };
+inline const juce::String checkClockSeparate { u8"別の機器: 測定を始めるとずれを自動で補正します" };
+inline const juce::String checkLoopbackTitle { u8"ループバック補正" };
+inline const juce::String checkLoopbackOn { u8"適用中（インターフェースの特性を差し引いています）" };
+inline const juce::String checkLoopbackOff { u8"なし。外部 Ref で測るなら不要、内部参照で精度を上げたいときに" };
+inline const juce::String checkOpenLoopback { u8"ループバック補正" };
+inline const juce::String checkSplTitle { u8"SPL 校正" };
+inline const juce::String checkSplDone { u8"校正済み: オフセット " };
+inline const juce::String checkSplNotYet { u8"未校正（SPL は相対値）。本番の音量管理に使うなら校正を" };
+inline const juce::String checkOpenSpl { u8"SPL 校正" };
+
+
+// ---- 操作バー ----
+inline const juce::String transportMeasureOff { u8"測定開始   Space" };
+inline const juce::String transportMeasureOn { u8"測定中   Space" };
+inline const juce::String transportReset { u8"リセット   R" };
+inline const juce::String transportNoiseOff { u8"発振   N" };
+inline const juce::String transportNoiseOn { u8"発振中   N" };
+inline const juce::String transportDelay { u8"遅延   D" };
+inline const juce::String transportSave { u8"保存   S" };
+inline const juce::String stopAllButton { u8"全停止   Esc" };
+inline const juce::String navThemeButton { u8"テーマ" };
+
+inline const juce::String graphAmpCaption { u8"振幅 dB" };
+inline const juce::String graphPhaseCaption { u8"位相 °" };
+inline const juce::String graphCohCaption { u8"コヒーレンス γ²" };
+
+inline const juce::String applyRecordedShort { u8"✓ 記録しました" };
+
+inline const juce::String liveRecording { u8"記録中" };
+inline const juce::String liveMinutesSuffix { u8" 分経過" };
+inline const juce::String liveCurrentLevel { u8"現在の音圧" };
+
+inline const juce::String tracesTitle { u8"トレース" };
+inline const juce::String tracesHint { u8"S で今の測定を保存。チェックで表示、選ぶと右で調整できます" };
+
 } // namespace eeq::strings

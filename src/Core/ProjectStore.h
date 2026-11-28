@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../DSP/PEQ.h"
 #include "../DSP/TransferFunctionAccumulator.h"
 
 #include "Core/JuceModules.h"
@@ -63,6 +64,19 @@ struct SpeakerSystemInfo
     juce::String name;
     int outputChannel = 0;
     juce::Colour colour { 0xff3fc9d2 };
+
+    // 「システムに入れる値」（2026-11 リデザイン）: 測って計算した結果のうち、卓・プロセッサーへ
+    // 実際に入力する値。測定画面・遅延画面・EQ 画面の「記録」ボタンがここへ書き、
+    // 「入れる値」画面が一覧にする。*Set が false の項目はまだ決まっていない
+    bool delaySet = false;
+    double delayMs = 0.0;          // この系統に入れるディレイ（系統比較の提案値。到達時間そのものではない）
+    bool polaritySet = false;
+    bool invertPolarity = false;
+    bool eqSet = false;
+    std::vector<eeq::dsp::peq::Band> eqBands;
+    bool entered = false;          // 卓・プロセッサーに入力済み（チェックリスト）
+    juce::String tuningNote;       // 決めた根拠など（「サブ基準 +2.1 ms、FOH で測定」）
+    juce::Time tuningUpdated;
 };
 
 struct Session

@@ -74,9 +74,9 @@ void LimitTestTab::StepGraph::paint (juce::Graphics& g)
     // 横軸ラベル
     g.setColour (theme::get (theme::ColourId::gridText));
     g.setFont (juce::Font (juce::FontOptions (10.0f)));
-    g.drawText (juce::String (levelMin, 0) + " dBFS", (int) area.getX(), (int) area.getBottom() + 2, 70, 12,
+    g.drawText (juce::String (juce::roundToInt (levelMin)) + " dBFS", (int) area.getX(), (int) area.getBottom() + 2, 70, 12,
                 juce::Justification::centredLeft);
-    g.drawText (juce::String (levelMax, 0) + " dBFS", (int) area.getRight() - 70, (int) area.getBottom() + 2, 70, 12,
+    g.drawText (juce::String (juce::roundToInt (levelMax)) + " dBFS", (int) area.getRight() - 70, (int) area.getBottom() + 2, 70, 12,
                 juce::Justification::centredRight);
     g.drawText (strings::limitCompressionLabel + " / SPL", (int) area.getX() + 4, (int) area.getY() + 2, 200, 12,
                 juce::Justification::centredLeft);
@@ -122,7 +122,7 @@ void LimitTestTab::ThermalGraph::paint (juce::Graphics& g)
     g.setColour (theme::get (theme::ColourId::gridText));
     g.setFont (juce::Font (juce::FontOptions (10.0f)));
     g.drawText (strings::limitThermalDrop + ": " + juce::String (samples.front().second - samples.back().second, 2)
-                    + " dB (" + juce::String (tMax, 0) + "s)",
+                    + " dB (" + juce::String (juce::roundToInt (tMax)) + "s)",
                 (int) area.getX() + 4, (int) area.getY() + 2, 260, 12, juce::Justification::centredLeft);
 }
 
@@ -301,7 +301,7 @@ void LimitTestTab::updateCoherenceNote (const eeq::dsp::SpectrumFrame* frame)
         if (summary.hasData && summary.worstCoherence < 0.8f)
         {
             text = juce::String (u8"低域のコヒーレンス低下: 約 ")
-                 + juce::String (summary.worstFrequencyHz, 0) + juce::String (u8" Hz で γ² ")
+                 + juce::String (juce::roundToInt (summary.worstFrequencyHz)) + juce::String (u8" Hz で γ² ")
                  + juce::String (summary.worstCoherence, 2)
                  + juce::String (u8"（歪みの兆候の可能性）");
         }
@@ -615,13 +615,13 @@ void LimitTestTab::timerTick()
                                 nearest = &band;
 
                         if (nearest != nullptr && std::abs (std::log2 (nearest->centerHz / target)) < 0.5)
-                            bandText << "  " << juce::String (nearest->nominalHz, 0) << " Hz: "
+                            bandText << "  " << juce::String (juce::roundToInt (nearest->nominalHz)) << " Hz: "
                                      << juce::String (nearest->thdPercent, 2) << "%";
                     }
 
                     safeThis->thdLabel.setText (strings::limitThdLevel + ": " + juce::String (level, 1)
                                                     + " dBFS   THD: " + juce::String (result.thdPercent, 2)
-                                                    + "% @ " + juce::String (result.worstFrequencyHz, 0) + " Hz   ("
+                                                    + "% @ " + juce::String (juce::roundToInt (result.worstFrequencyHz)) + " Hz   ("
                                                     + harmonicText + ")" + (bandText.isNotEmpty() ? "\n" + bandText.trim() : juce::String()),
                                                 juce::dontSendNotification);
                     eeq::log::write (juce::String ("limit test: THD=") + juce::String (result.thdPercent, 3)

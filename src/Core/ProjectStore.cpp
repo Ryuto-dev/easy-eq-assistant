@@ -341,6 +341,27 @@ juce::var ProjectStore::venueToVar (const Venue& venue)
             so->setProperty ("name", system.name);
             so->setProperty ("outputChannel", system.outputChannel);
             so->setProperty ("colour", colourToVar (system.colour));
+            so->setProperty ("delaySet", system.delaySet);
+            so->setProperty ("delayMs", system.delayMs);
+            so->setProperty ("polaritySet", system.polaritySet);
+            so->setProperty ("invertPolarity", system.invertPolarity);
+            so->setProperty ("eqSet", system.eqSet);
+            so->setProperty ("entered", system.entered);
+            so->setProperty ("tuningNote", system.tuningNote);
+            so->setProperty ("tuningUpdated", system.tuningUpdated.toMilliseconds());
+
+            juce::Array<juce::var> bands;
+            for (const auto& band : system.eqBands)
+            {
+                auto* bo = new juce::DynamicObject();
+                bo->setProperty ("type", (int) band.type);
+                bo->setProperty ("frequency", band.frequency);
+                bo->setProperty ("gainDb", band.gainDb);
+                bo->setProperty ("q", band.q);
+                bo->setProperty ("enabled", band.enabled);
+                bands.add (juce::var (bo));
+            }
+            so->setProperty ("eqBands", bands);
             systems.add (juce::var (so));
         }
 
@@ -408,6 +429,28 @@ Venue ProjectStore::venueFromVar (const juce::var& v)
                     system.name = so->getProperty ("name").toString();
                     system.outputChannel = getPropertyWithDefault (so, "outputChannel", 0);
                     system.colour = colourFromVar (so->getProperty ("colour"), system.colour);
+                    system.delaySet = getPropertyWithDefault (so, "delaySet", false);
+                    system.delayMs = getPropertyWithDefault (so, "delayMs", 0.0);
+                    system.polaritySet = getPropertyWithDefault (so, "polaritySet", false);
+                    system.invertPolarity = getPropertyWithDefault (so, "invertPolarity", false);
+                    system.eqSet = getPropertyWithDefault (so, "eqSet", false);
+                    system.entered = getPropertyWithDefault (so, "entered", false);
+                    system.tuningNote = so->getProperty ("tuningNote").toString();
+                    system.tuningUpdated = juce::Time ((juce::int64) getPropertyWithDefault (so, "tuningUpdated", 0.0));
+
+                    if (const auto* bands = so->getProperty ("eqBands").getArray())
+                        for (const auto& bandVar : *bands)
+                            if (auto* bo = bandVar.getDynamicObject())
+                            {
+                                eeq::dsp::peq::Band band;
+                                band.type = (eeq::dsp::peq::Band::Type) juce::jlimit (0, 4, (int) getPropertyWithDefault (bo, "type", 0));
+                                band.frequency = getPropertyWithDefault (bo, "frequency", 1000.0);
+                                band.gainDb = getPropertyWithDefault (bo, "gainDb", 0.0);
+                                band.q = getPropertyWithDefault (bo, "q", 0.7071);
+                                band.enabled = getPropertyWithDefault (bo, "enabled", true);
+                                system.eqBands.push_back (band);
+                            }
+
                     venue.systems.push_back (system);
                 }
             }

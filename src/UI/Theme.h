@@ -42,67 +42,86 @@ enum class ColourId
     control,         // コンボ/スライダー等の背景
     controlOutline,
     buttonOn,
-    buttonOff
+    buttonOff,
+    // 2026-11 リデザインで追加
+    sidebarBackground, // 左の作業ナビ・上下のバー
+    raised,            // カード（パネルの上に載る面）
+    hover,             // 行・ボタンのホバー
+    onAccent,          // アクセント色で塗った面の上の文字
+    accentSoft         // アクセントの薄い面（選択中のナビなど）
 };
 
 inline juce::Colour get (ColourId id) noexcept
 {
+    // 落ち着いたグラファイト＋シアン 1 色（2026-11 リデザイン）。状態色（ok/warn/danger）は彩度を抑え、
+    // 主役のライブ曲線だけがはっきり目立つようにする。トレースの既定色は色覚多様性に配慮して
+    // 明度と色相を離している（線種でも区別する: 仕様 5.5）
     if (mode() == Mode::dark)
     {
         switch (id)
         {
-            case ColourId::windowBackground: return juce::Colour (0xff141518);
-            case ColourId::panelBackground:  return juce::Colour (0xff1a1c20);
-            case ColourId::graphBackground:  return juce::Colour (0xff1a1c20);
-            case ColourId::grid:             return juce::Colour (0xff24262c);
-            case ColourId::gridMajor:        return juce::Colour (0xff2f3239);
-            case ColourId::gridText:         return juce::Colour (0xff8a9099);
-            case ColourId::text:             return juce::Colour (0xffe4e6ea);
-            case ColourId::textDim:          return juce::Colour (0xff9aa0a8);
-            case ColourId::accent:           return juce::Colour (0xff3fc9d2);
-            case ColourId::accent2:          return juce::Colour (0xffe0a34f);
-            case ColourId::snapshotPalette1: return juce::Colour (0xffe0567a);
-            case ColourId::snapshotPalette2: return juce::Colour (0xff8f7ff0);
-            case ColourId::snapshotPalette3: return juce::Colour (0xff6fd66f);
-            case ColourId::snapshotPalette4: return juce::Colour (0xfff0c04a);
-            case ColourId::snapshotPalette5: return juce::Colour (0xff5fa8f0);
-            case ColourId::snapshotPalette6: return juce::Colour (0xfff08a4a);
-            case ColourId::ok:               return juce::Colour (0xff4fae6d);
-            case ColourId::warn:             return juce::Colour (0xffd8b13f);
-            case ColourId::danger:           return juce::Colour (0xffd85454);
-            case ColourId::control:          return juce::Colour (0xff26282e);
-            case ColourId::controlOutline:   return juce::Colour (0xff34373f);
-            case ColourId::buttonOn:         return juce::Colour (0xff2e5a63);
-            case ColourId::buttonOff:        return juce::Colour (0xff33363d);
+            case ColourId::windowBackground:  return juce::Colour (0xff0d1014);
+            case ColourId::panelBackground:   return juce::Colour (0xff12161b);
+            case ColourId::graphBackground:   return juce::Colour (0xff0f1317);
+            case ColourId::grid:              return juce::Colour (0xff1a2027);
+            case ColourId::gridMajor:         return juce::Colour (0xff27303a);
+            case ColourId::gridText:          return juce::Colour (0xff7a8390);
+            case ColourId::text:              return juce::Colour (0xffe6e9ee);
+            case ColourId::textDim:           return juce::Colour (0xff8b93a0);
+            case ColourId::accent:            return juce::Colour (0xff5ee0d2);
+            case ColourId::accent2:           return juce::Colour (0xfff5b04c);
+            case ColourId::snapshotPalette1:  return juce::Colour (0xffc084fc);
+            case ColourId::snapshotPalette2:  return juce::Colour (0xfff472b6);
+            case ColourId::snapshotPalette3:  return juce::Colour (0xff60a5fa);
+            case ColourId::snapshotPalette4:  return juce::Colour (0xfffacc15);
+            case ColourId::snapshotPalette5:  return juce::Colour (0xff4ade80);
+            case ColourId::snapshotPalette6:  return juce::Colour (0xfffb923c);
+            case ColourId::ok:                return juce::Colour (0xff4ade80);
+            case ColourId::warn:              return juce::Colour (0xfffbbf24);
+            case ColourId::danger:            return juce::Colour (0xfff87171);
+            case ColourId::control:           return juce::Colour (0xff171c22);
+            case ColourId::controlOutline:    return juce::Colour (0xff272e38);
+            case ColourId::buttonOn:          return juce::Colour (0xff17323a);
+            case ColourId::buttonOff:         return juce::Colour (0xff1a1f26);
+            case ColourId::sidebarBackground: return juce::Colour (0xff0a0d10);
+            case ColourId::raised:            return juce::Colour (0xff161b21);
+            case ColourId::hover:             return juce::Colour (0xff1e242c);
+            case ColourId::onAccent:          return juce::Colour (0xff06201d);
+            case ColourId::accentSoft:        return juce::Colour (0xff15292c);
         }
     }
     else
     {
         switch (id)
         {
-            case ColourId::windowBackground: return juce::Colour (0xfff2f3f5);
-            case ColourId::panelBackground:  return juce::Colour (0xffffffff);
-            case ColourId::graphBackground:  return juce::Colour (0xffffffff);
-            case ColourId::grid:             return juce::Colour (0xffe2e4e9);
-            case ColourId::gridMajor:        return juce::Colour (0xffc9cdd6);
-            case ColourId::gridText:         return juce::Colour (0xff5a616c);
-            case ColourId::text:             return juce::Colour (0xff1a1d22);
-            case ColourId::textDim:          return juce::Colour (0xff5a616c);
-            case ColourId::accent:           return juce::Colour (0xff0e7c86);
-            case ColourId::accent2:          return juce::Colour (0xffa3611a);
-            case ColourId::snapshotPalette1: return juce::Colour (0xffc22e50);
-            case ColourId::snapshotPalette2: return juce::Colour (0xff5b48c9);
-            case ColourId::snapshotPalette3: return juce::Colour (0xff2f8f2f);
-            case ColourId::snapshotPalette4: return juce::Colour (0xffa67c00);
-            case ColourId::snapshotPalette5: return juce::Colour (0xff2f6fb8);
-            case ColourId::snapshotPalette6: return juce::Colour (0xffc25a1a);
-            case ColourId::ok:               return juce::Colour (0xff2f7a4b);
-            case ColourId::warn:             return juce::Colour (0xff9a7a10);
-            case ColourId::danger:           return juce::Colour (0xffb02a2a);
-            case ColourId::control:          return juce::Colour (0xffeceef2);
-            case ColourId::controlOutline:   return juce::Colour (0xffc9cdd6);
-            case ColourId::buttonOn:         return juce::Colour (0xffcfe6e9);
-            case ColourId::buttonOff:        return juce::Colour (0xffe2e4e9);
+            case ColourId::windowBackground:  return juce::Colour (0xfff3f5f8);
+            case ColourId::panelBackground:   return juce::Colour (0xffffffff);
+            case ColourId::graphBackground:   return juce::Colour (0xffffffff);
+            case ColourId::grid:              return juce::Colour (0xffe8ebf0);
+            case ColourId::gridMajor:         return juce::Colour (0xffd2d7df);
+            case ColourId::gridText:          return juce::Colour (0xff5b6472);
+            case ColourId::text:              return juce::Colour (0xff141920);
+            case ColourId::textDim:           return juce::Colour (0xff5b6472);
+            case ColourId::accent:            return juce::Colour (0xff0d8f84);
+            case ColourId::accent2:           return juce::Colour (0xffb26a10);
+            case ColourId::snapshotPalette1:  return juce::Colour (0xff7c3aed);
+            case ColourId::snapshotPalette2:  return juce::Colour (0xffdb2777);
+            case ColourId::snapshotPalette3:  return juce::Colour (0xff2563eb);
+            case ColourId::snapshotPalette4:  return juce::Colour (0xffa16207);
+            case ColourId::snapshotPalette5:  return juce::Colour (0xff15803d);
+            case ColourId::snapshotPalette6:  return juce::Colour (0xffc2410c);
+            case ColourId::ok:                return juce::Colour (0xff15803d);
+            case ColourId::warn:              return juce::Colour (0xffa16207);
+            case ColourId::danger:            return juce::Colour (0xffc62828);
+            case ColourId::control:           return juce::Colour (0xfff5f7fa);
+            case ColourId::controlOutline:    return juce::Colour (0xffd2d7df);
+            case ColourId::buttonOn:          return juce::Colour (0xffd8f1ee);
+            case ColourId::buttonOff:         return juce::Colour (0xffffffff);
+            case ColourId::sidebarBackground: return juce::Colour (0xffeaedf2);
+            case ColourId::raised:            return juce::Colour (0xfff7f8fa);
+            case ColourId::hover:             return juce::Colour (0xffe9edf2);
+            case ColourId::onAccent:          return juce::Colour (0xffffffff);
+            case ColourId::accentSoft:        return juce::Colour (0xffdcf3f0);
         }
     }
 

@@ -30,12 +30,49 @@ public:
     const juce::String getApplicationVersion() override { return "0.1.0"; }
     bool moreThanOneInstanceAllowed() override          { return true; }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
        #if JUCE_WINDOWS
         SetUnhandledExceptionFilter (eeqCrashHandler);
        #endif
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
+
+        // 画面の確認用: --screenshot <png> [--page N] [--size WxH] [--light] [--live]
+        // 起動して数秒後に画面を PNG に保存して終了する（UI のゴールデン確認・資料用。ロードマップ A-5）
+        const auto args = juce::StringArray::fromTokens (commandLine, true);
+        if (const auto index = args.indexOf ("--screenshot"); index >= 0 && index + 1 < args.size())
+            scheduleScreenshot (args, juce::File (args[index + 1].unquoted()));
+    }
+
+    void scheduleScreenshot (const juce::StringArray& args, juce::File target)
+    {
+        auto argAfter = [&args] (const char* name) { const auto i = args.indexOf (name); return i >= 0 && i + 1 < args.size() ? args[i + 1] : juce::String(); };
+
+        if (const auto size = argAfter ("--size"); size.containsChar ('x'))
+            mainWindow->setSize (size.upToFirstOccurrenceOf ("x", false, false).getIntValue(),
+                                 size.fromFirstOccurrenceOf ("x", false, false).getIntValue());
+
+        auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent());
+        if (content != nullptr)
+            content->prepareScreenshot (argAfter ("--page").isNotEmpty() ? argAfter ("--page").getIntValue() : -1,
+                                        args.contains ("--light"), args.contains ("--live"));
+
+        juce::Timer::callAfterDelay (4000, [this, target]
+        {
+            if (mainWindow != nullptr)
+                if (auto* c = mainWindow->getContentComponent())
+                {
+                    const auto image = c->createComponentSnapshot (c->getLocalBounds(), true, 2.0f);
+                    juce::FileOutputStream out (target);
+                    if (out.openedOk())
+                    {
+                        out.setPosition (0);
+                        out.truncate();
+                        juce::PNGImageFormat().writeImageToStream (image, out);
+                    }
+                }
+            systemRequestedQuit();
+        });
     }
 
     void shutdown() override                            { mainWindow = nullptr; }

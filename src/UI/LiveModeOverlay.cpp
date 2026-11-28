@@ -38,6 +38,39 @@ juce::Colour waterfallColour (float normalized)
     const auto t = (normalized - 0.5f) / 0.5f;
     return juce::Colour::fromHSV (0.1f - 0.1f * t, 0.85f - 0.6f * t, 0.62f + 0.38f * t, 1.0f);
 }
+
+// 帯域の棒の下にオクターブごとの周波数を打つ（帯域の細かさ 1/1〜1/24 oct に関係なく、
+// 31.5 / 63 / 125 … 16k に最も近い帯域の位置へ）
+void drawOctaveLabels (juce::Graphics& g, const std::vector<double>& centers, float x0, float width, float y)
+{
+    if (centers.empty())
+        return;
+
+    const auto barWidth = width / (float) centers.size();
+    g.setColour (theme::get (theme::ColourId::gridText));
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+
+    for (const auto target : { 31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0 })
+    {
+        int best = -1;
+        double bestDistance = 1.0e9;
+        for (size_t i = 0; i < centers.size(); ++i)
+            if (centers[i] > 0.0)
+                if (const auto d = std::abs (std::log2 (centers[i] / target)); d < bestDistance)
+                {
+                    bestDistance = d;
+                    best = (int) i;
+                }
+
+        if (best < 0 || bestDistance > 0.2)
+            continue;
+
+        const auto text = target >= 1000.0 ? juce::String ((int) (target / 1000.0)) + "k"
+                                           : juce::String (target, target < 50.0 ? 1 : 0);
+        const auto x = x0 + ((float) best + 0.5f) * barWidth;
+        g.drawText (text, (int) x - 22, (int) y, 44, 14, juce::Justification::centred);
+    }
+}
 } // namespace
 
 LiveModeOverlay::LiveModeOverlay (eeq::audio::AudioEngine& engineIn)
@@ -188,6 +221,7 @@ void LiveModeOverlay::timerTick()
 {
     eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
     engine.getSplAnalyzer().copySpl (spl);
+    latestSpl = spl;
 
     splLabel.setText (spl.hasSignal ? juce::String (spl.currentDb, 1) : "--",
                       juce::dontSendNotification);
@@ -209,6 +243,7 @@ void LiveModeOverlay::timerTick()
                                                                                                       : "dB(Z)")
                         + (analyzer.getTimeConstant() == eeq::dsp::RtaSplAnalyzer::TimeConstant::slow ? " Slow" : " Fast");
 
+        unitText = unit;
         peakLabel.setText (unit + "    " + strings::splPeakLabel + ": " + juce::String (spl.peakDb, 1) + " dB",
                            juce::dontSendNotification);
     }
@@ -218,7 +253,7 @@ void LiveModeOverlay::timerTick()
 
     // 校正済みなら「未校正」注記を出さない（issue #139）
     {
-        const auto calibrated = std::abs (engine.getSplAnalyzer().getCalibrationOffsetDb()) > 1.0e-9;
+        calibrated = std::abs (engine.getSplAnalyzer().getCalibrationOffsetDb()) > 1.0e-9;
         auto hint = strings::liveLongPressHint;
 
         if (! calibrated)
@@ -285,10 +320,8 @@ void LiveModeOverlay::timerTick()
 
 juce::Rectangle<float> LiveModeOverlay::graphArea() const
 {
-    auto inset = getLocalBounds().toFloat().reduced (16.0f);
-    inset.removeFromBottom (110.0f); // RTA（paint と同じ）
-
-    return inset.removeFromBottom (170.0f);
+    // 見出し（上 26px）と周波数の目盛り（下 18px）を除いた中
+    return historyArea.toFloat().reduced (12.0f, 0.0f).withTrimmedTop (28.0f).withTrimmedBottom (20.0f);
 }
 
 void LiveModeOverlay::pushWaterfallColumn()
@@ -353,45 +386,171 @@ void LiveModeOverlay::pushWaterfallColumn()
 
 void LiveModeOverlay::paint (juce::Graphics& g)
 {
-    g.fillAll (theme::get (theme::ColourId::windowBackground));
+    // 暗い会場で目に刺さらない、ほぼ黒の面。数字だけが状態の色で光る（2026-11 リデザイン）
+    g.fillAll (theme::mode() == theme::Mode::dark ? juce::Colour (0xff07090b)
+                                                  : theme::get (theme::ColourId::windowBackground));
 
-    eeq::dsp::RtaSplAnalyzer::SplSnapshot spl;
-    engine.getSplAnalyzer().copySpl (spl);
+    const auto& spl = latestSpl;
+    const auto stateColour = splColour (spl.currentDb, greenThresholdDb, yellowThresholdDb);
+    const auto dim = theme::get (theme::ColourId::textDim);
+    const auto text = theme::get (theme::ColourId::text);
+    const auto line = theme::get (theme::ColourId::controlOutline);
 
-    const auto frameColour = splColour (spl.currentDb, greenThresholdDb, yellowThresholdDb);
-
-    // しきい値超過は画面全体の枠色でも知らせる（仕様 5.4）
+    // しきい値超過は画面全体の枠でも知らせる（仕様 5.4）
     if (spl.hasSignal && spl.currentDb >= greenThresholdDb)
     {
-        g.setColour (frameColour.withAlpha (0.9f));
-        g.drawRect (getLocalBounds().toFloat().reduced (2.0f), 6.0f);
+        g.setColour (stateColour.withAlpha (0.85f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 12.0f, 4.0f);
     }
 
-    const auto bounds = getLocalBounds().toFloat();
-    auto inset = bounds.reduced (16.0f);
+    // ---- ヘッダー: 本番 / 時刻 / 記録 ----
+    {
+        auto r = headerArea;
+        g.setColour (theme::get (theme::ColourId::accent));
+        g.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)).withExtraKerningFactor (0.08f));
+        g.drawText ("LIVE", r.removeFromLeft (64), juce::Justification::centredLeft);
+        g.setColour (text);
+        g.setFont (juce::Font (juce::FontOptions (22.0f)));
+        g.drawText (juce::Time::getCurrentTime().formatted ("%H:%M"), r.removeFromLeft (90), juce::Justification::centredLeft);
 
-    // ---- 下段: RTA（常時表示。仕様 5.4）----
-    const auto rtaHeight = 110.0f;
-    const auto rtaArea = inset.removeFromBottom (rtaHeight);
-    paintRta (g, rtaArea);
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.setColour (loggingActive ? theme::get (theme::ColourId::danger) : dim);
+        g.drawText (loggingActive ? juce::String (u8"● ") + strings::liveRecording : juce::String (strings::liveLogInactive),
+                    r.removeFromLeft (150), juce::Justification::centredLeft);
+        g.setColour (dim);
+        g.drawText (juce::String ((int) (spl.sessionSeconds / 60.0)) + strings::liveMinutesSuffix, r.removeFromLeft (110),
+                    juce::Justification::centredLeft);
+    }
 
-    // ---- 中段: SPL推移 or ウォーターフォール（仕様 5.4 / 5.4.1）----
-    const auto graphHeight = 170.0f;
-    const auto graphArea = inset.removeFromBottom (graphHeight);
+    // ---- 大きな数字 ----
+    {
+        auto r = numberArea;
+        g.setColour (dim);
+        g.setFont (juce::Font (juce::FontOptions (15.0f)));
+        g.drawText (strings::liveCurrentLevel + "  " + unitText, r.removeFromTop (24), juce::Justification::bottomLeft);
 
+        const auto value = spl.hasSignal ? juce::String (spl.currentDb, 1) : juce::String ("--");
+        auto size = juce::jlimit (60.0f, 260.0f, (float) r.getHeight() * 0.9f);
+        juce::Font big { juce::FontOptions (size) };
+        // 幅に収まるまで縮める（「-100.0」のような桁でも単位まで入るように）
+        while (size > 60.0f && juce::GlyphArrangement::getStringWidth (big, value) + size * 0.5f > (float) r.getWidth())
+            big = juce::Font (juce::FontOptions (size -= 8.0f));
+
+        const auto valueWidth = juce::GlyphArrangement::getStringWidth (big, value);
+        g.setFont (big);
+        g.setColour (spl.hasSignal ? stateColour : dim);
+        g.drawText (value, r, juce::Justification::centredLeft);
+
+        // 単位は数字の右下（ベースライン付近）に添える
+        const auto baseline = (float) r.getCentreY() + big.getAscent() * 0.5f - big.getDescent() * 0.5f;
+        g.setColour (dim);
+        g.setFont (juce::Font (juce::FontOptions (juce::jmax (18.0f, size * 0.2f))));
+        g.drawText ("dB", juce::Rectangle<float> ((float) r.getX() + valueWidth + size * 0.08f, baseline - size * 0.24f,
+                                                  size * 0.5f, size * 0.24f).toNearestInt(),
+                    juce::Justification::bottomLeft);
+    }
+
+    // ---- 横のレベルバー（60〜120 dB、しきい値の目盛り付き）----
+    {
+        const auto bar = meterArea.toFloat().withHeight (10.0f).withY ((float) meterArea.getY() + 4.0f);
+        const auto toX = [&bar] (double db) { return bar.getX() + (float) juce::jlimit (0.0, 1.0, (db - 60.0) / 60.0) * bar.getWidth(); };
+
+        g.setColour (theme::get (theme::ColourId::raised));
+        g.fillRoundedRectangle (bar, 5.0f);
+
+        if (spl.hasSignal)
+        {
+            g.setColour (stateColour);
+            g.fillRoundedRectangle (bar.withRight (toX (spl.currentDb)), 5.0f);
+            g.setColour (text.withAlpha (0.8f));
+            g.fillRect (toX (spl.peakDb) - 1.0f, bar.getY() - 3.0f, 2.0f, bar.getHeight() + 6.0f);
+        }
+
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        for (const auto& [db, colour] : { std::pair<int, juce::Colour> { greenThresholdDb, theme::get (theme::ColourId::warn) },
+                                          std::pair<int, juce::Colour> { yellowThresholdDb, theme::get (theme::ColourId::danger) } })
+        {
+            const auto x = toX (db);
+            g.setColour (colour);
+            g.fillRect (x - 1.0f, bar.getY() - 5.0f, 2.0f, bar.getHeight() + 10.0f);
+            g.drawText (juce::String (db), (int) x - 20, (int) bar.getBottom() + 6, 40, 16, juce::Justification::centred);
+        }
+
+        g.setColour (dim);
+        for (int db = 60; db <= 120; db += 10)
+            if (db != greenThresholdDb && db != yellowThresholdDb)
+                g.drawText (juce::String (db), (int) toX (db) - 20, (int) bar.getBottom() + 6, 40, 16, juce::Justification::centred);
+    }
+
+    // ---- 統計のタイル ----
+    {
+        auto r = tilesArea;
+        const auto w = (r.getWidth() - 3 * 10) / 4;
+        auto tile = [&] (const juce::String& title, double value)
+        {
+            const auto valueText = value > -200.0 && spl.hasSignal ? juce::String (value, 1) : juce::String ("--");
+            paintTile (g, r.removeFromLeft (w), title, valueText,
+                       value > -200.0 && spl.hasSignal ? splColour (value, greenThresholdDb, yellowThresholdDb) : dim);
+            r.removeFromLeft (10);
+        };
+        tile ("Leq " + strings::splLeq1min, spl.leq1minDb);
+        tile ("Leq " + strings::splLeq15min, spl.leq15minDb);
+        tile ("Leq " + strings::splLeqSession, spl.leqSessionDb);
+        tile (strings::splPeakLabel, spl.peakDb);
+    }
+
+    // ---- 右: 推移（またはウォーターフォール）と RTA ----
+    for (const auto& card : { historyArea, rtaArea })
+    {
+        g.setColour (theme::get (theme::ColourId::graphBackground).withAlpha (0.7f));
+        g.fillRoundedRectangle (card.toFloat(), 10.0f);
+        g.setColour (line.withAlpha (0.6f));
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    }
+
+    const auto graph = graphArea();
     if (waterfallVisible)
-        paintWaterfall (g, graphArea);
+        paintWaterfall (g, graph);
     else
-        paintHistory (g, graphArea, frameColour);
+        paintHistory (g, graph, stateColour);
 
-    juce::ignoreUnused (bounds);
+    g.setColour (dim);
+    g.setFont (juce::Font (juce::FontOptions (12.0f)));
+    g.drawText (waterfallVisible ? strings::liveWaterfallToggle + juce::String (u8"（下が現在）") : juce::String (strings::liveSplHistory),
+                historyArea.reduced (12, 6).removeFromTop (16), juce::Justification::centredLeft);
+    g.drawText ("RTA", rtaArea.reduced (12, 6).removeFromTop (16), juce::Justification::centredLeft);
+    paintRta (g, rtaArea.toFloat().reduced (12.0f, 6.0f).withTrimmedTop (22.0f));
+
+    // ---- フッター ----
+    g.setColour (dim);
+    g.setFont (juce::Font (juce::FontOptions (12.5f)));
+    g.drawText (strings::liveLongPressHint + (calibrated ? juce::String() : juce::String (u8"   ·   ") + strings::splUncalibrated),
+                footerArea, juce::Justification::centredLeft, true);
+}
+
+void LiveModeOverlay::paintTile (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title,
+                                 const juce::String& value, juce::Colour valueColour) const
+{
+    g.setColour (theme::get (theme::ColourId::raised).withAlpha (0.8f));
+    g.fillRoundedRectangle (area.toFloat(), 10.0f);
+    auto r = area.reduced (14, 10);
+    g.setColour (theme::get (theme::ColourId::textDim));
+    g.setFont (juce::Font (juce::FontOptions (12.5f)));
+    g.drawText (title, r.removeFromTop (18), juce::Justification::centredLeft);
+    g.setColour (valueColour);
+    g.setFont (juce::Font (juce::FontOptions (juce::jlimit (20.0f, 40.0f, (float) r.getHeight() * 0.8f))));
+    g.drawText (value, r, juce::Justification::centredLeft);
 }
 
 void LiveModeOverlay::paintHistory (juce::Graphics& g, const juce::Rectangle<float>& area,
                                     juce::Colour frameColour)
 {
-    g.setColour (theme::get (theme::ColourId::grid));
-    g.drawRect (area, 1.0f);
+    // しきい値の線（注意 / 上限）
+    const auto yOf = [&area] (float db) { return area.getBottom() - (juce::jlimit (40.0f, 130.0f, db) - 40.0f) / 90.0f * area.getHeight(); };
+    g.setColour (theme::get (theme::ColourId::warn).withAlpha (0.6f));
+    g.drawHorizontalLine ((int) yOf ((float) greenThresholdDb), area.getX(), area.getRight());
+    g.setColour (theme::get (theme::ColourId::danger).withAlpha (0.7f));
+    g.drawHorizontalLine ((int) yOf ((float) yellowThresholdDb), area.getX(), area.getRight());
 
     if (! historySpl.empty())
     {
@@ -416,54 +575,17 @@ void LiveModeOverlay::paintHistory (juce::Graphics& g, const juce::Rectangle<flo
         g.strokePath (path, juce::PathStrokeType (1.5f));
     }
 
-    g.setColour (theme::get (theme::ColourId::gridText));
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
-    g.drawText (strings::liveSplHistory, (int) area.getX() + 4, (int) area.getY() - 16, 200, 14,
-                juce::Justification::centredLeft);
 }
 
 void LiveModeOverlay::paintWaterfall (juce::Graphics& g, const juce::Rectangle<float>& area)
 {
-    g.setColour (theme::get (theme::ColourId::grid));
-    g.drawRect (area, 1.0f);
-
     // 垂直ウォーターフォール: 時間は縦軸（下が現在）、周波数は横軸（RTAと合わせる）
     if (waterfallImage.isValid())
         g.drawImageAt (waterfallImage, (int) area.getX(), (int) area.getY());
 
     // 周波数ラベル（RTAと合わせる）
-    if (! rtaCenters.empty())
-    {
-        g.setColour (theme::get (theme::ColourId::gridText));
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+    drawOctaveLabels (g, rtaCenters, area.getX(), area.getWidth(), area.getBottom() + 3.0f);
 
-        const auto count = (int) rtaCenters.size();
-        const auto barWidth = area.getWidth() / (float) count;
-
-        for (int i = 0; i < count; ++i)
-        {
-            const auto f = rtaCenters[(size_t) i];
-
-            if (f < 30.0 || f > 16000.0)
-                continue;
-
-            // 1/3オクターブの標準中心だけラベル
-            const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
-
-            if (std::abs (stepsFrom20 - std::round (stepsFrom20)) < 0.05)
-            {
-                const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
-                const auto x = area.getX() + ((float) i + 0.5f) * barWidth;
-                g.drawText (text, (int) x - 20, (int) area.getBottom() + 2, 40, 12,
-                            juce::Justification::centred);
-            }
-        }
-    }
-
-    g.setColour (theme::get (theme::ColourId::gridText));
-    g.setFont (juce::Font (juce::FontOptions (11.0f)));
-    g.drawText (strings::liveWaterfallToggle + juce::String (u8"（下端が現在）"), (int) area.getX() + 4,
-                (int) area.getY() - 16, 300, 14, juce::Justification::centredLeft);
 }
 void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>& area)
 {
@@ -508,27 +630,7 @@ void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>&
         g.drawText (strings::rtaNoSignal, plot, juce::Justification::centred);
     }
 
-    g.setColour (theme::get (theme::ColourId::gridText));
-    g.setFont (juce::Font (juce::FontOptions (10.0f)));
-
-    for (int i = 0; i < count; ++i)
-    {
-        const auto f = rtaCenters[(size_t) i];
-
-        if (f < 30.0 || f > 16000.0)
-            continue;
-
-        // 1/3オクターブの標準中心（幾何系列が整数段に乗るところ）だけラベルを打つ
-        const auto stepsFrom20 = std::log2 (f / 20.0) * 3.0;
-
-        if (std::abs (stepsFrom20 - std::round (stepsFrom20)) < 0.05)
-        {
-            const auto text = f >= 1000.0 ? juce::String ((int) (f / 1000.0)) + "k" : juce::String ((int) f);
-            const auto x = plot.getX() + ((float) i + 0.5f) * barWidth;
-            g.drawText (text, (int) x - 20, (int) plot.getBottom() + 2, 40, 12,
-                        juce::Justification::centred);
-        }
-    }
+    drawOctaveLabels (g, rtaCenters, plot.getX(), plot.getWidth(), plot.getBottom() + 1.0f);
 
     // dB目盛り（issue #27）: 20 dB 刻みの水平グリッドと値。範囲はピーク-60 dB
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
@@ -544,53 +646,55 @@ void LiveModeOverlay::paintRta (juce::Graphics& g, const juce::Rectangle<float>&
         g.drawLine (plot.getX(), y, plot.getRight(), y);
 
         g.setColour (theme::get (theme::ColourId::gridText));
-        g.drawText (juce::String (db, 0), (int) plot.getX() + 2, (int) y - 6, 40, 12,
+        g.drawText (juce::String (juce::roundToInt (db)), (int) plot.getX() + 2, (int) y - 6, 40, 12,
                     juce::Justification::centredLeft);
     }
 }
 
 void LiveModeOverlay::resized()
 {
-    auto bounds = getLocalBounds().reduced (12);
-    auto topRow = bounds.removeFromTop (34);
-    exitButton.setBounds (topRow.removeFromLeft (160));
-    topRow.removeFromLeft (8);
-    waterfallButton.setBounds (topRow.removeFromLeft (140));
-    topRow.removeFromLeft (16);
-    warnThresholdTitle.setBounds (topRow.removeFromLeft (44));
-    warnThresholdCombo.setBounds (topRow.removeFromLeft (90).reduced (0, 4));
-    topRow.removeFromLeft (8);
-    limitThresholdTitle.setBounds (topRow.removeFromLeft (44));
-    limitThresholdCombo.setBounds (topRow.removeFromLeft (90).reduced (0, 4));
-    topRow.removeFromLeft (16);
-    outputBadge.setBounds (topRow.removeFromRight (juce::jmin (360, topRow.getWidth())));
+    // 2026-11 リデザイン: 左に大きな数字と統計、右に推移と RTA。操作はヘッダー右にまとめる
+    for (auto* label : { &splLabel, &leqLabel, &peakLabel, &sessionLabel, &hintLabel })
+        label->setVisible (false);
 
-    auto content = bounds.reduced (8, 4);
+    auto bounds = getLocalBounds().reduced (24, 16);
 
-    // SPL を画面幅いっぱいの大きな数字で（仕様 5.4）
-    const auto splHeight = (int) (content.getHeight() * 0.5f);
-    splLabel.setBounds (content.removeFromTop (splHeight));
-    splLabel.setFont (juce::Font (juce::FontOptions (splHeight * 0.72f, juce::Font::bold)));
-    splLabel.setJustificationType (juce::Justification::centred);
+    headerArea = bounds.removeFromTop (44);
+    {
+        auto controls = headerArea;
+        exitButton.setBounds (controls.removeFromRight (150).withSizeKeepingCentre (150, 36));
+        controls.removeFromRight (10);
+        waterfallButton.setBounds (controls.removeFromRight (150).withSizeKeepingCentre (150, 36));
+        controls.removeFromRight (18);
+        limitThresholdCombo.setBounds (controls.removeFromRight (92).withSizeKeepingCentre (92, 32));
+        limitThresholdTitle.setBounds (controls.removeFromRight (40));
+        controls.removeFromRight (10);
+        warnThresholdCombo.setBounds (controls.removeFromRight (92).withSizeKeepingCentre (92, 32));
+        warnThresholdTitle.setBounds (controls.removeFromRight (40));
+        controls.removeFromRight (18);
+        outputBadge.setBounds (controls.removeFromRight (juce::jmin (300, juce::jmax (0, controls.getWidth() - 430)))
+                                   .withSizeKeepingCentre (juce::jmin (300, juce::jmax (0, controls.getWidth() - 430)), 32));
+    }
 
-    leqLabel.setBounds (content.removeFromTop (26));
-    leqLabel.setFont (juce::Font (juce::FontOptions (18.0f)));
-    leqLabel.setJustificationType (juce::Justification::centred);
+    footerArea = bounds.removeFromBottom (24);
+    bounds.removeFromTop (18);
+    bounds.removeFromBottom (10);
 
-    auto bottomRow = content.removeFromTop (24);
-    peakLabel.setBounds (bottomRow.removeFromRight (bottomRow.getWidth() / 2));
-    peakLabel.setFont (juce::Font (juce::FontOptions (16.0f)));
-    peakLabel.setJustificationType (juce::Justification::centredRight);
-    sessionLabel.setBounds (bottomRow);
-    sessionLabel.setFont (juce::Font (juce::FontOptions (16.0f)));
-    sessionLabel.setJustificationType (juce::Justification::centredLeft);
+    auto left = bounds.removeFromLeft ((int) (bounds.getWidth() * 0.54f));
+    bounds.removeFromLeft (24);
+    auto right = bounds;
 
-    hintLabel.setBounds (content.removeFromTop (18));
-    hintLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
-    hintLabel.setJustificationType (juce::Justification::centred);
+    tilesArea = left.removeFromBottom (juce::jlimit (80, 110, left.getHeight() / 5));
+    left.removeFromBottom (24);
+    meterArea = left.removeFromBottom (40);
+    left.removeFromBottom (12);
+    numberArea = left;
 
-    // 下段（RTA+グラフ = 280px）は paint が使う。ラベルが重ならないよう余白を確保
-    juce::ignoreUnused (content);
+    historyArea = right.removeFromTop ((int) (right.getHeight() * 0.56f));
+    right.removeFromTop (14);
+    rtaArea = right;
+
+    waterfallImage = juce::Image(); // 大きさが変わったら作り直す
 }
 
 } // namespace eeq::ui

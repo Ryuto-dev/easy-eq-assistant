@@ -43,7 +43,7 @@ private:
     eeq::audio::AudioEngine& engine;
 
     juce::TextButton measurementButton, resetButton, noiseButton;
-    juce::TextButton snapshotButton, delayButton, calibrationButton;
+    juce::TextButton snapshotButton, delayButton, calibrationButton, stopAllButton;
     juce::ComboBox excitationCombo;
     juce::Label levelTitle, statusLabel;
     juce::Label oscillatorActiveLabel;      // 発振中インジケータ（issue #141）

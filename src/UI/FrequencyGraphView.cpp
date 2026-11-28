@@ -138,7 +138,7 @@ juce::Rectangle<float> FrequencyGraphView::plotArea() const
 // 段の配分（issue #144）: 3段 = 振幅 55% / 位相 27% / コヒーレンス 18%、2段 = 振幅 60% / 位相 40%
 juce::Rectangle<float> FrequencyGraphView::amplitudeArea (const juce::Rectangle<float>& plot) const
 {
-    constexpr float gap = 6.0f;
+    constexpr float gap = 20.0f; // 段の間（目盛りの数字が隣の段と重ならない幅）
 
     switch (viewMode)
     {
@@ -151,7 +151,7 @@ juce::Rectangle<float> FrequencyGraphView::amplitudeArea (const juce::Rectangle<
 
 juce::Rectangle<float> FrequencyGraphView::phaseArea (const juce::Rectangle<float>& plot) const
 {
-    constexpr float gap = 6.0f;
+    constexpr float gap = 20.0f; // 段の間（目盛りの数字が隣の段と重ならない幅）
 
     switch (viewMode)
     {
@@ -169,7 +169,7 @@ juce::Rectangle<float> FrequencyGraphView::phaseArea (const juce::Rectangle<floa
 
 juce::Rectangle<float> FrequencyGraphView::coherenceArea (const juce::Rectangle<float>& plot) const
 {
-    constexpr float gap = 6.0f;
+    constexpr float gap = 20.0f; // 段の間（目盛りの数字が隣の段と重ならない幅）
 
     if (viewMode != ViewMode::ampPhaseCoh)
         return {};
@@ -607,9 +607,23 @@ void FrequencyGraphView::paint (juce::Graphics& g)
     // 段の区切り
     g.setColour (gridMajor.withAlpha (0.6f));
     if (! phaseRect.isEmpty())
-        g.drawHorizontalLine ((int) (ampArea.getBottom() + 3.0f), plot.getX(), plot.getRight());
+        g.drawHorizontalLine ((int) (ampArea.getBottom() + 10.0f), plot.getX(), plot.getRight());
     if (! cohRect.isEmpty())
-        g.drawHorizontalLine ((int) (phaseRect.getBottom() + 3.0f), plot.getX(), plot.getRight());
+        g.drawHorizontalLine ((int) (phaseRect.getBottom() + 10.0f), plot.getX(), plot.getRight());
+
+    // 段の名前（左上、控えめに）
+    {
+        g.setFont (juce::Font (juce::FontOptions (10.5f)));
+        g.setColour (gridText.withAlpha (0.75f));
+        auto caption = [&] (const juce::Rectangle<float>& r, const juce::String& text)
+        {
+            if (! r.isEmpty())
+                g.drawText (text, r.withHeight (14.0f).translated (6.0f, 2.0f).toNearestInt(), juce::Justification::centredLeft);
+        };
+        caption (ampArea, strings::graphAmpCaption);
+        caption (phaseRect, strings::graphPhaseCaption);
+        caption (cohRect, strings::graphCohCaption);
+    }
 
     // ---- 振幅エリア: dBグリッド ----
     const auto ampY = [&ampArea, top = ampTop, span = ampSpan] (float db)
@@ -900,7 +914,7 @@ void FrequencyGraphView::drawCursor (juce::Graphics& g, const juce::Rectangle<fl
         const auto& column = columns[(size_t) liveIndex];
         liveDb = ampDbOf (column.h);
         lines.add (LogFrequencyAxis::freqText (column.freq) + "   LIVE " + juce::String (liveDb, 1) + " dB   "
-                   + juce::String (livePhaseDeg (column), 0) + strings::degreeSymbol + "   "
+                   + juce::String (juce::roundToInt (livePhaseDeg (column))) + strings::degreeSymbol + "   "
                    + strings::gammaSquared + " " + juce::String (column.coherence, 2));
     }
     else
@@ -987,7 +1001,7 @@ void FrequencyGraphView::drawMarkers (juce::Graphics& g, const juce::Rectangle<f
             const auto& column = columns[(size_t) index];
             const auto db = ampDbOf (column.h);
             const auto phase = livePhaseDeg (column);
-            line << "  " << juce::String (db, 1) << " dB  " << juce::String (phase, 0) << strings::degreeSymbol;
+            line << "  " << juce::String (db, 1) << " dB  " << juce::String (juce::roundToInt (phase)) << strings::degreeSymbol;
 
             if (! haveFirst)
             {
@@ -1001,7 +1015,7 @@ void FrequencyGraphView::drawMarkers (juce::Graphics& g, const juce::Rectangle<f
                 const auto dPhase = (float) std::remainder ((double) (phase - firstPhase), 360.0);
                 line << "   " << juce::String (u8"Δ") << juce::String (std::log2 (marker.freq / firstFreq), 2) << " oct "
                      << (db - firstDb >= 0 ? "+" : "") << juce::String (db - firstDb, 1) << " dB "
-                     << juce::String (dPhase, 0) << strings::degreeSymbol;
+                     << juce::String (juce::roundToInt (dPhase)) << strings::degreeSymbol;
             }
         }
 

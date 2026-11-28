@@ -11,23 +11,30 @@
 #include "Core/Log.h"
 #include "Core/ProjectStore.h"
 #include "Core/SystemCorrection.h"
+#include "UI/ApplyValues.h"
 #include "UI/BottomBar.h"
 #include "UI/Buttons.h"
 #include "UI/DelayIrTab.h"
+#include "UI/EeqLookAndFeel.h"
 #include "UI/EQTab.h"
 #include "UI/FrequencyGraphView.h"
 #include "UI/LimitTestTab.h"
 #include "UI/LiveModeOverlay.h"
 #include "UI/MeasurementPanel.h"
 #include "UI/RtaSplTab.h"
-#include "UI/TopBar.h"
+#include "UI/SetupPage.h"
+#include "UI/SideNav.h"
+#include "UI/StatusStrip.h"
 #include "UI/TransferFunctionTab.h"
 #include "UI/UiContext.h"
 #include "UI/UtilitiesTab.h"
 #include "UI/VenueTab.h"
 
-// 1ウィンドウ構成（仕様 5.1）: 上部バー / タブ領域 / 右パネル（測定設定）/ 下部バー。
-// タブ: 伝達関数 / IR・遅延 / RTA・SPL / EQ案 / 上限測定 / ツール / 会場。
+// 1ウィンドウ構成（2026-11 リデザイン）:
+//   上: ステータス帯（StatusStrip）  左: 作業ナビ（SideNav）  下: 操作バー（BottomBar）
+//   中央: ページ。作業の流れ = 1 準備 / 2 測定 / 3 遅延・位相 / 4 EQ / 5 入れる値、
+//         道具 = RTA・SPL / 上限測定 / 計算ツール / 会場・記録
+//   右: 測定・遅延・EQ のページでだけ、測定設定（MeasurementPanel）と入れる値の要約を出す
 // 本番モード（5.4）はワンボタンで切り替わる専用画面（LiveModeOverlay）。
 class MainComponent : public juce::Component, private juce::Timer, private juce::KeyListener
 {
@@ -38,6 +45,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
+
+    /** 画面の確認用（--screenshot）: ページ・テーマ・本番モードを切り替える */
+    void prepareScreenshot (int page, bool light, bool live);
     bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
 private:
@@ -50,6 +60,12 @@ private:
     void applyLookAndFeelColours();
     void saveProjectIfPossible();
 
+    enum Page { pageSetup = 0, pageMeasure, pageDelay, pageEq, pageApply,
+                pageRta = 10, pageLimit, pageTools, pageVenue };
+    void showPage (int page);
+    juce::Component* componentForPage (int page);
+    bool pageHasInspector (int page) const noexcept;
+    void showShortcutHelp();
     // 設定ファイルの保存先を確定させてから engine に渡す必要があるため、
     // 初期化順を保証するラッパ（メンバー宣言順に構築される）
     struct AppPropertiesStorage
@@ -82,7 +98,7 @@ private:
 
     ThemeModeInitializer themeModeInit { appPropertiesStorage.properties.getUserSettings() };
     // 既定の LookAndFeel にする。他のメンバー（ウィジェット）より先に構築し、最後に破棄されるようここに置く
-    juce::LookAndFeel_V4 lookAndFeel;
+    eeq::ui::EeqLookAndFeel lookAndFeel;
     eeq::audio::AudioEngine engine;
     eeq::core::ProjectStore project;
     eeq::core::SystemCorrection correction;
@@ -90,11 +106,14 @@ private:
     eeq::ui::UiContext context { engine, *appPropertiesStorage.properties.getUserSettings(),
                                  project, correction, uiState };
 
-    eeq::ui::TopBar topBar;
+    eeq::ui::StatusStrip statusStrip;
+    eeq::ui::SideNav sideNav;
     eeq::ui::BottomBar bottomBar;
     eeq::ui::MeasurementPanel measurementPanel;
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    eeq::ui::ApplySummaryPanel applySummary;
 
+    eeq::ui::SetupPage setupPage;
+    eeq::ui::ApplySheetPage applyPage;
     eeq::ui::TransferFunctionTab transferTab;
     eeq::ui::DelayIrTab delayTab;
     eeq::ui::RtaSplTab rtaSplTab;
@@ -105,6 +124,7 @@ private:
 
     eeq::ui::LiveModeOverlay liveOverlay;
 
+    int currentPage = pageMeasure;
     uint32_t lastSeenGeneration = 0;
     std::uint32_t uiWatchdogWarningUntilMs = 0;
     std::uint32_t deviceStopNoticeUntilMs = 0;
@@ -118,9 +138,9 @@ private:
     std::shared_ptr<std::atomic_bool> saveInFlight
         { std::make_shared<std::atomic_bool> (false) }; // 保存の二重実行防止（issue #58）
 
-    static constexpr int topBarHeight = 104;
-    static constexpr int bottomBarHeight = 64;
-    static constexpr int measurementPanelWidth = 225;
+    static constexpr int bottomBarHeight = 60;
+    static constexpr int inspectorWidth = 244;
+    static constexpr int applySummaryHeight = 214;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

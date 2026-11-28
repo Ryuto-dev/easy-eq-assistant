@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <vector>
+
 #include "Core/JuceModules.h"
 
 #include "../DSP/EQProposer.h"
@@ -47,7 +49,8 @@ private:
     juce::TextEditor tiltEditor, minFreqEditor, maxFreqEditor, coherenceEditor;
     juce::Slider maxBandsSlider;
     juce::ToggleButton valleyBoostToggle;
-    juce::TextButton targetCsvButton, createButton, exportCsvButton, exportTextButton;
+    juce::TextButton targetCsvButton, createButton, exportCsvButton, exportTextButton, recordButton;
+    std::vector<juce::Rectangle<int>> cardRects; // セクションのカード（2026-11 リデザイン）
 
     // Issue #149: EQ専用グラフ
     FrequencyGraphView eqGraph;

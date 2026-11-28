@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "Core/JuceModules.h"
 
 #include "FrequencyGraphView.h"
@@ -35,6 +37,7 @@ public:
     void refreshSnapshotList();
 
     void resized() override;
+    void paint (juce::Graphics&) override;
 
     /** スナップショット保存ダイアログを出す（キーボードのS・下部バーのボタンからも呼ぶ） */
     void showSaveSnapshotDialog();
@@ -125,6 +128,8 @@ private:
     std::uint64_t overlayGeneration = 0;
     std::map<juce::String, std::shared_ptr<const std::vector<FrequencyGraphView::OverlayColumn>>> overlayColumns;
     std::map<std::uint64_t, std::shared_ptr<const eeq::dsp::SpectrumFrame>> frameCache;
+    std::vector<juce::Rectangle<int>> cardRects; // 2026-11 リデザイン: グラフとトレースのカード
+    juce::Rectangle<int> tracesHeaderArea;
 };
 
 } // namespace eeq::ui

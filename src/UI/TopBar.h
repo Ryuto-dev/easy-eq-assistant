@@ -5,6 +5,8 @@
 #include "../Audio/AudioEngine.h"
 #include "LevelMeter.h"
 
+#include <vector>
+
 namespace eeq::ui
 {
 
@@ -30,6 +32,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    static constexpr int preferredHeight = 232;
+
 private:
     void comboBoxChanged (juce::ComboBox*) override;
 
@@ -49,6 +53,8 @@ private:
     LevelMeter refMeter, measMeter, outMeter;
 
     uint32_t lastGeneration = 0;
+    juce::Rectangle<int> devicesTitleArea, channelsTitleArea, levelsTitleArea;
+    std::vector<int> dividerX;
     bool updating = false; // コンボ再構築中のイベントを無視するためのフラグ
 
     // Ref コンボには「内部参照」を先頭に置く: id 1 = 内部参照(-2), id 2 = なし(-1), id 3+ = チャンネル 0..

@@ -107,6 +107,15 @@ target_sources(EasyEQAssistant PRIVATE
     src/UI/TopBar.h
     src/UI/BottomBar.cpp
     src/UI/BottomBar.h
+    src/UI/SideNav.cpp
+    src/UI/SideNav.h
+    src/UI/StatusStrip.cpp
+    src/UI/StatusStrip.h
+    src/UI/SetupPage.cpp
+    src/UI/SetupPage.h
+    src/UI/ApplyValues.cpp
+    src/UI/ApplyValues.h
+    src/UI/EeqLookAndFeel.h
     src/UI/FrequencyGraphView.cpp
     src/UI/FrequencyGraphView.h
     src/UI/MeasurementPanel.cpp

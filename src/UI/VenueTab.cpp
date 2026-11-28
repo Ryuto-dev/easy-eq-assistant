@@ -321,8 +321,8 @@ void VenueTab::loadSelectedVenueFields()
     tempEditor.setText (juce::String (venue.temperatureC, 1), juce::dontSendNotification);
     // 会場を選んだら、その会場の気温を測定の換算（遅延⇄距離・温度ずれ）にも使う（issue #136）
     ctx.state.airTemperatureC.store (venue.temperatureC);
-    humidityEditor.setText (juce::String (venue.humidityPercent, 0), juce::dontSendNotification);
-    crossoverEditor.setText (venue.subCrossoverHz > 0.0 ? juce::String (venue.subCrossoverHz, 0) : "0",
+    humidityEditor.setText (juce::String (juce::roundToInt (venue.humidityPercent)), juce::dontSendNotification);
+    crossoverEditor.setText (venue.subCrossoverHz > 0.0 ? juce::String (juce::roundToInt (venue.subCrossoverHz)) : "0",
                              juce::dontSendNotification);
     equipmentEditor.setText (venue.equipment, juce::dontSendNotification);
     notesEditor.setText (venue.notes, juce::dontSendNotification);
@@ -429,7 +429,7 @@ void VenueTab::exportReportPng()
     g.drawText (venue.date.toString (true, true, false, true), 30, y, width - 60, 18, juce::Justification::centredLeft);
     y += 24;
     g.drawText (juce::String (u8"気温: ") + juce::String (venue.temperatureC, 1)
-                    + juce::String (u8"℃  湿度: ") + juce::String (venue.humidityPercent, 0) + "%",
+                    + juce::String (u8"℃  湿度: ") + juce::String (juce::roundToInt (venue.humidityPercent)) + "%",
                 30, y, width - 60, 18, juce::Justification::centredLeft);
     y += 24;
 
@@ -442,7 +442,7 @@ void VenueTab::exportReportPng()
                 30, y, width - 60, 18, juce::Justification::centredLeft);
     y += 24;
     g.drawText (juce::String (u8"サブのクロスオーバー: ")
-                    + (venue.subCrossoverHz > 0.0 ? juce::String (venue.subCrossoverHz, 0) + " Hz" : juce::String (u8"未入力")),
+                    + (venue.subCrossoverHz > 0.0 ? juce::String (juce::roundToInt (venue.subCrossoverHz)) + " Hz" : juce::String (u8"未入力")),
                 30, y, width - 60, 18, juce::Justification::centredLeft);
     y += 26;
 

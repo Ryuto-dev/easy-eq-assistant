@@ -1,5 +1,7 @@
 #include "EQTab.h"
 
+#include "ApplyValues.h"
+
 #include "../Core/Exporters.h"
 #include "../Core/Log.h"
 #include "Buttons.h"
@@ -266,6 +268,18 @@ EQTab::EQTab (UiContext& context)
     addAndMakeVisible (exportTextButton);
     exportTextButton.setEnabled (! ctx.state.proposedBands.empty());
 
+    // 「入れる値」へ記録（2026-11 リデザイン）: 測定中の系統の EQ として残す
+    styleButton (recordButton, {}, "accent");
+    recordButton.setButtonText (strings::applyRecordEq);
+    recordButton.setTooltip (strings::applyRecordEqTooltip);
+    recordButton.onClick = [this]
+    {
+        applyvalues::recordEq (ctx, ctx.state.currentSystemName, ctx.state.proposedBands);
+        recordButton.setButtonText (strings::applyRecordedShort);
+    };
+    addAndMakeVisible (recordButton);
+    recordButton.setEnabled (! ctx.state.proposedBands.empty());
+
     buildTargetPoints();
 }
 
@@ -487,6 +501,9 @@ void EQTab::runProposal()
     const auto canExport = ! ctx.state.proposedBands.empty();
     exportCsvButton.setEnabled (canExport);
     exportTextButton.setEnabled (canExport);
+    if (recordButton.isEnabled() != canExport)
+        recordButton.setButtonText (strings::applyRecordEq);
+    recordButton.setEnabled (canExport);
     updateEqGraph();
 }
 
@@ -695,81 +712,95 @@ void EQTab::exportText()
 void EQTab::paint (juce::Graphics& g)
 {
     g.fillAll (theme::get (theme::ColourId::windowBackground));
+
+    for (const auto& card : cardRects)
+    {
+        g.setColour (theme::get (theme::ColourId::raised));
+        g.fillRoundedRectangle (card.toFloat(), 10.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline));
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    }
 }
 
 void EQTab::resized()
 {
-    auto bounds = getLocalBounds().reduced (8);
+    // 2026-11 リデザイン: [条件（ターゲット・範囲・作成）] | [予測グラフ] / [帯域一覧・調整・記録]
+    auto bounds = getLocalBounds().reduced (16);
+    cardRects.clear();
 
-    auto left = bounds.removeFromLeft (bounds.getWidth() * 2 / 5);
-    auto right = bounds;
+    auto leftCard = bounds.removeFromLeft (juce::jlimit (320, 400, bounds.getWidth() * 2 / 7));
+    bounds.removeFromLeft (16);
+    cardRects.push_back (leftCard);
+    auto left = leftCard.reduced (16, 12);
 
-    // 左: 入力パラメータ
-    targetTitle.setBounds (left.removeFromTop (18));
-    auto targetRow = left.removeFromTop (26);
+    auto row = [&left] (int height) { auto r = left.removeFromTop (height); left.removeFromTop (8); return r; };
+
+    targetTitle.setBounds (row (22));
+    auto targetRow = row (30);
     targetCombo.setBounds (targetRow.removeFromLeft (150));
-    targetRow.removeFromLeft (6);
-    tiltTitle.setBounds (targetRow.removeFromLeft (100));
-    tiltEditor.setBounds (targetRow.removeFromLeft (60));
-
-    // CSV読込ボタンは独立行に置く（同じ行に詰めると左カラム幅に収まらず幅0になる）
+    targetRow.removeFromLeft (8);
+    targetCsvButton.setBounds (targetRow);
+    auto tiltRow = row (30);
+    tiltTitle.setBounds (tiltRow.removeFromLeft (130));
+    tiltEditor.setBounds (tiltRow.removeFromLeft (70));
     left.removeFromTop (6);
-    targetCsvButton.setBounds (left.removeFromTop (26).removeFromLeft (110));
 
-    left.removeFromTop (6);
-    auto rangeRow = left.removeFromTop (26);
-    rangeTitle.setBounds (rangeRow.removeFromLeft (110));
-    minFreqEditor.setBounds (rangeRow.removeFromLeft (70));
-    rangeRow.removeFromLeft (6);
-    maxFreqEditor.setBounds (rangeRow.removeFromLeft (80));
+    auto rangeRow = row (30);
+    rangeTitle.setBounds (rangeRow.removeFromLeft (100));
+    minFreqEditor.setBounds (rangeRow.removeFromLeft (76));
+    rangeRow.removeFromLeft (8);
+    maxFreqEditor.setBounds (rangeRow.removeFromLeft (84));
 
-    left.removeFromTop (6);
-    auto gateRow = left.removeFromTop (26);
-    coherenceTitle.setBounds (gateRow.removeFromLeft (190));
-    coherenceEditor.setBounds (gateRow.removeFromLeft (60));
+    auto gateRow = row (30);
+    coherenceTitle.setBounds (gateRow.removeFromLeft (180));
+    coherenceEditor.setBounds (gateRow.removeFromLeft (70));
 
-    // 最大帯域スライダーも独立行にする（同じ行だと幅がほぼ残らない）
-    left.removeFromTop (6);
-    auto maxBandsRow = left.removeFromTop (26);
-    maxBandsTitle.setBounds (maxBandsRow.removeFromLeft (110));
+    auto maxBandsRow = row (30);
+    maxBandsTitle.setBounds (maxBandsRow.removeFromLeft (100));
     maxBandsSlider.setBounds (maxBandsRow);
 
+    valleyBoostToggle.setBounds (row (28));
     left.removeFromTop (6);
-    auto boostRow = left.removeFromTop (26);
-    valleyBoostToggle.setBounds (boostRow.removeFromLeft (220));
-    boostRow.removeFromLeft (6);
-    createButton.setBounds (boostRow);
+    createButton.setBounds (row (38));
+    convergenceLabel.setBounds (row (20));
+    levelAlignLabel.setBounds (row (36));
 
-    left.removeFromTop (8);
-    convergenceLabel.setBounds (left.removeFromTop (18));
-    levelAlignLabel.setBounds (left.removeFromTop (18));
+    // 右上: グラフ
+    auto graphCard = bounds.removeFromTop (bounds.getHeight() * 52 / 100);
+    bounds.removeFromTop (14);
+    cardRects.push_back (graphCard);
+    eqGraph.setBounds (graphCard.reduced (10, 8));
 
-    // 右: EQグラフ + 帯域一覧と手動調整
-    auto graphHeight = juce::jmin (240, right.getHeight() / 2);
-    eqGraph.setBounds (right.removeFromTop (graphHeight));
-    right.removeFromTop (4);
+    // 右下: 帯域
+    auto bandCard = bounds;
+    cardRects.push_back (bandCard);
+    auto right = bandCard.reduced (16, 12);
 
-    bandTitle.setBounds (right.removeFromTop (18));
-    auto tableHeight = right.getHeight() - 120;
-    bandList.setBounds (right.removeFromTop (std::max (60, tableHeight)));
-    right.removeFromTop (4);
-    selectedLabel.setBounds (right.removeFromTop (16));
+    auto exportRow = right.removeFromBottom (32);
+    recordButton.setBounds (exportRow.removeFromRight (juce::jmin (170, exportRow.getWidth() / 3)));
+    exportRow.removeFromRight (8);
+    exportCsvButton.setBounds (exportRow.removeFromLeft (130));
+    exportRow.removeFromLeft (8);
+    exportTextButton.setBounds (exportRow.removeFromLeft (150));
+    right.removeFromBottom (8);
 
-    auto editRow1 = right.removeFromTop (26);
-    bandTypeCombo.setBounds (editRow1.removeFromLeft (110));
-    editRow1.removeFromLeft (6);
-    bandFreqEditor.setBounds (editRow1.removeFromLeft (80));
-    editRow1.removeFromLeft (4);
-    bandGainEditor.setBounds (editRow1.removeFromLeft (70));
-    editRow1.removeFromLeft (4);
-    bandQEditor.setBounds (editRow1.removeFromLeft (60));
+    auto editRow1 = right.removeFromBottom (30);
+    bandTypeCombo.setBounds (editRow1.removeFromLeft (120));
     editRow1.removeFromLeft (8);
-    bandEnableToggle.setBounds (editRow1.removeFromLeft (90));
+    bandFreqEditor.setBounds (editRow1.removeFromLeft (86));
+    editRow1.removeFromLeft (6);
+    bandGainEditor.setBounds (editRow1.removeFromLeft (76));
+    editRow1.removeFromLeft (6);
+    bandQEditor.setBounds (editRow1.removeFromLeft (66));
+    editRow1.removeFromLeft (10);
+    bandEnableToggle.setBounds (editRow1.removeFromLeft (100));
+    right.removeFromBottom (4);
+    selectedLabel.setBounds (right.removeFromBottom (18));
+    right.removeFromBottom (4);
 
-    auto exportRow = right.removeFromTop (26);
-    exportCsvButton.setBounds (exportRow.removeFromLeft (120));
-    exportRow.removeFromLeft (6);
-    exportTextButton.setBounds (exportRow.removeFromLeft (140));
+    bandTitle.setBounds (right.removeFromTop (22));
+    right.removeFromTop (4);
+    bandList.setBounds (right);
 }
 
 // EQ専用グラフ（issue #149）: EQ案の計算に使った測定カーブ・ターゲット・予測を同じ周波数軸で重ねる

@@ -284,12 +284,12 @@ juce::String AudioEngine::getStatusText() const
                                   : juce::String (u8"(既定)");
 
         auto text = juce::String (u8"入力: ") + inputName + "   /   " + juce::String (u8"出力: ") + outputName
-                  + "   /   " + juce::String (device->getCurrentSampleRate(), 0) + " Hz   /   "
+                  + "   /   " + juce::String (juce::roundToInt (device->getCurrentSampleRate())) + " Hz   /   "
                   + juce::String (device->getCurrentBufferSizeSamples()) + " samples";
 
         // 入出力のクロック差を補正しているときは表示する（別デバイスの入出力: ClockDriftCompensator）
         if (const auto ppm = measurement.getCompensatedDriftPpm(); ppm != 0.0f)
-            text << juce::String (u8"   /   クロック差 ") << (ppm > 0.0f ? "+" : "") << juce::String (ppm, 0)
+            text << juce::String (u8"   /   クロック差 ") << (ppm > 0.0f ? "+" : "") << juce::String (juce::roundToInt (ppm))
                  << juce::String (u8" ppm 補正中");
 
         return text;
@@ -491,8 +491,8 @@ bool AudioEngine::loadWavExcitation (const juce::File& file, juce::String& error
 
     stopExcitation();
     eeq::log::write ("excitation: WAV loaded \"" + file.getFullPathName() + "\" ("
-                     + juce::String ((double) length / fileRate, 2) + " s, " + juce::String (fileRate, 0) + " Hz -> "
-                     + juce::String (deviceRate, 0) + " Hz"
+                     + juce::String ((double) length / fileRate, 2) + " s, " + juce::String (juce::roundToInt (fileRate)) + " Hz -> "
+                     + juce::String (juce::roundToInt (deviceRate)) + " Hz"
                      + (length < reader->lengthInSamples ? ", truncated to 10 min / memory limit" : "") + ")");
 
     publishExcitationBuffer (std::move (mono));
@@ -972,7 +972,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     if (std::abs (currentSampleRate.load() - sampleRate) > 0.5
         || currentBufferSize.load() != device->getCurrentBufferSizeSamples())
     {
-        eeq::log::write ("device restarted: rate=" + juce::String (sampleRate, 0)
+        eeq::log::write ("device restarted: rate=" + juce::String (juce::roundToInt (sampleRate))
                          + " buffer=" + juce::String (device->getCurrentBufferSizeSamples()));
     }
 
@@ -1279,7 +1279,7 @@ void AudioEngine::openInitialDevice()
         const auto viaAggregate = AggregateDevicePair::isAggregateName (deviceManager.getAudioDeviceSetup().inputDeviceName);
         eeq::log::write (juce::String (viaAggregate ? "(via aggregate device) " : "") + "audio opened: input=\"" + (setupNow.inputDeviceName.isNotEmpty() ? setupNow.inputDeviceName : juce::String (u8"(既定)"))
                          + "\" output=\"" + (setupNow.outputDeviceName.isNotEmpty() ? setupNow.outputDeviceName : juce::String (u8"(既定)"))
-                         + "\" rate=" + juce::String (device->getCurrentSampleRate(), 0)
+                         + "\" rate=" + juce::String (juce::roundToInt (device->getCurrentSampleRate()))
                          + " buffer=" + juce::String (device->getCurrentBufferSizeSamples())
                          + " in=" + juce::String (numInputs) + "ch"
                          + " out=" + juce::String (numOutputs) + "ch");
@@ -1417,7 +1417,7 @@ bool AudioEngine::checkInputHealth (juce::uint32 nowMs)
         text << " | input=\"" << setup.inputDeviceName << "\" output=\"" << setup.outputDeviceName << "\""
              << " channels=" << numInputs
              << " peak=" << (peak > 0.0f ? juce::String (juce::Decibels::gainToDecibels (peak), 1) + " dBFS" : juce::String ("0"))
-             << " blocks=" << juce::String ((juce::int64) newBlocks) << "/" << juce::String (expectedBlocks, 0) << " expected"
+             << " blocks=" << juce::String ((juce::int64) newBlocks) << "/" << juce::String (juce::roundToInt (expectedBlocks)) << " expected"
              << " xruns=" << device->getXRunCount();
         eeq::log::write (text);
         diagLastState = state;

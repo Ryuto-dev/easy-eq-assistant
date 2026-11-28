@@ -119,6 +119,14 @@ private:
     juce::ComboBox warnThresholdCombo, limitThresholdCombo;
     juce::Label warnThresholdTitle, limitThresholdTitle, outputBadge;
     void applyThresholdsFromCombos();
+
+    // 2026-11 リデザインのレイアウト（resized で決め、paint が使う）
+    juce::Rectangle<int> headerArea, numberArea, meterArea, tilesArea, historyArea, rtaArea, footerArea;
+    eeq::dsp::RtaSplAnalyzer::SplSnapshot latestSpl;
+    juce::String unitText;
+    bool calibrated = false;
+    void paintTile (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title, const juce::String& value,
+                    juce::Colour valueColour) const;
     static constexpr int historySeconds = 60 * 60;
     static constexpr int waterfallSeconds = 300; // 表示長 5分（30秒〜10分の範囲内）
 };

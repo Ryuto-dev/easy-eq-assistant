@@ -230,6 +230,13 @@ private:
     juce::ComboBox compareComboA, compareComboB;
     juce::Label compareResultLabel, compareTowerLabel, comparePolarityLabel, compareCrossoverLabel;
     juce::Label compareFineLabel;
+    juce::TextButton compareRecordButton;
+    std::vector<juce::Rectangle<int>> cardRects; // セクションのカード（paint が描く）
+    juce::Rectangle<int> irPlotArea; // 提案を「入れる値」へ記録（2026-11 リデザイン）
+    // 直近の提案（記録ボタン用）
+    juce::String proposalDelaySystem, proposalPolaritySystem, proposalNote;
+    double proposalDelayMs = 0.0;
+    bool proposalValid = false, proposalPolarityValid = false, proposalInvert = false;
     juce::Slider compareFineSlider;
 
     class SystemListModel;

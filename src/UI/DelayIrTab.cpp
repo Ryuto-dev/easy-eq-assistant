@@ -1,5 +1,7 @@
 #include "DelayIrTab.h"
 
+#include "ApplyValues.h"
+
 #include "../Core/Acoustics.h"
 #include "../Core/Exporters.h"
 #include "../Core/Log.h"
@@ -564,6 +566,23 @@ DelayIrTab::DelayIrTab (UiContext& context)
     compareFineSlider.onValueChange = [this] { updateCompare(); };
     addAndMakeVisible (compareFineSlider);
 
+    styleButton (compareRecordButton, {}, "accent");
+    compareRecordButton.setButtonText (strings::applyRecordDelay);
+    compareRecordButton.setTooltip (strings::applyRecordDelayTooltip);
+    compareRecordButton.onClick = [this]
+    {
+        if (! proposalValid)
+            return;
+
+        applyvalues::recordDelay (ctx, proposalDelaySystem, proposalDelayMs, proposalNote);
+        if (proposalPolarityValid)
+            applyvalues::recordPolarity (ctx, proposalPolaritySystem, proposalInvert);
+
+        compareRecordButton.setButtonText (strings::applyRecordedShort);
+    };
+    compareRecordButton.setEnabled (false);
+    addAndMakeVisible (compareRecordButton);
+
     // 気温（仕様 3.3.2: 既定 20 ℃。UIからの変更はすべての換算に反映する）
     updateDelayReadout();
     updateLoopbackUi();
@@ -726,16 +745,17 @@ void DelayIrTab::paint (juce::Graphics& g)
 {
     g.fillAll (theme::get (theme::ColourId::windowBackground));
 
-    // ---- IRグラフ（時間軸。仕様 3.3）----
-    // 描画領域は resized() の左カラム配置と一致させる（全幅で描くと右カラムの
-    // パネル背面までカーブが伸びる）。タイトル行・書き出しボタン行・トグル行は
-    // 子コンポーネントの領域なので、グラフ本体からは除く
-    auto paintBounds = getLocalBounds().reduced (8);
-    auto leftColumn = paintBounds.removeFromLeft (paintBounds.getWidth() * 3 / 5);
-    auto irAreaInt = leftColumn.removeFromTop (irGraphHeight);
-    irAreaInt.removeFromTop (18 + 26);
-    irAreaInt.removeFromBottom (20);
-    const auto irArea = irAreaInt.toFloat();
+    // セクションのカード（2026-11 リデザイン）
+    for (const auto& card : cardRects)
+    {
+        g.setColour (theme::get (theme::ColourId::raised));
+        g.fillRoundedRectangle (card.toFloat(), 10.0f);
+        g.setColour (theme::get (theme::ColourId::controlOutline));
+        g.drawRoundedRectangle (card.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    }
+
+    // ---- IRグラフ（時間軸。仕様 3.3）。領域は resized() が決めた irPlotArea ----
+    const auto irArea = irPlotArea.toFloat();
 
     g.setColour (theme::get (theme::ColourId::graphBackground));
     g.fillRoundedRectangle (irArea, 6.0f);
@@ -798,7 +818,7 @@ void DelayIrTab::paint (juce::Graphics& g)
     {
         const auto x = timeToX (ms);
         g.drawLine (x, irArea.getBottom(), x, irArea.getBottom() - 4.0f, 1.0f);
-        g.drawText (juce::String (ms, 0), (int) x - 18, (int) irArea.getBottom() + 2, 36, 12,
+        g.drawText (juce::String (juce::roundToInt (ms)), (int) x - 18, (int) irArea.getBottom() + 2, 36, 12,
                     juce::Justification::centred);
     }
 
@@ -1321,6 +1341,8 @@ void DelayIrTab::updateCompare()
     if (indexA < 0 || indexB < 0 || indexA >= (int) snapshots.size() || indexB >= (int) snapshots.size())
     {
         compareResultLabel.setText (strings::compareNoSnapshots, juce::dontSendNotification);
+        proposalValid = false;
+        compareRecordButton.setEnabled (false);
         compareTowerLabel.setText ({}, juce::dontSendNotification);
         comparePolarityLabel.setText ({}, juce::dontSendNotification);
         compareCrossoverLabel.setText ({}, juce::dontSendNotification);
@@ -1381,6 +1403,24 @@ void DelayIrTab::updateCompare()
                                     + "\n" + strings::compareMicPointNote,
                                 juce::dontSendNotification);
 
+    // 記録ボタン用に提案を残す。系統名はスナップショットに付いた系統（無ければスナップショット名）
+    {
+        auto systemOf = [] (const eeq::core::Snapshot& snap) { return snap.systemName.isNotEmpty() ? snap.systemName : snap.name; };
+        proposalDelaySystem = arrivalDiffSamples < -0.5 ? systemOf (snapshotB) : systemOf (snapshotA);
+        proposalDelayMs = std::abs (arrivalDiffSamples) > 0.5 ? proposedMs : 0.0;
+        proposalPolaritySystem = systemOf (snapshotB);
+        proposalPolarityValid = false;
+        proposalNote = systemOf (snapshotA) + juce::String (u8" と ") + systemOf (snapshotB) + juce::String (u8" の到達差 ")
+                     + juce::String (arrivalDiffMs, 2) + " ms" + (snapshotA.micPoint.isNotEmpty() && snapshotA.micPoint != "-"
+                                                                   ? juce::String (u8"（") + snapshotA.micPoint + juce::String (u8"）")
+                                                                   : juce::String());
+        proposalValid = true;
+
+        if (! compareRecordButton.isEnabled())
+            compareRecordButton.setButtonText (strings::applyRecordDelay);
+        compareRecordButton.setEnabled (true);
+    }
+
     // ディレイタワー用の大きな1行表示（仕様 3.3.1）
     compareTowerLabel.setText (juce::String (u8"ディレイタワー：") + direction
                                    + juce::String (u8" に +") + juce::String (proposedMs, 1)
@@ -1421,7 +1461,7 @@ void DelayIrTab::updateCompare()
         {
             crossoverHz = (double) bestBin * binWidth;
             compareCrossoverLabel.setText (strings::compareCrossover + juce::String (u8": 約 ")
-                                               + juce::String (crossoverHz, 0) + juce::String (u8" Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）"),
+                                               + juce::String (juce::roundToInt (crossoverHz)) + juce::String (u8" Hz（測定カーブの交差から推定。会場メモに入力するとそちらを優先）"),
                                            juce::dontSendNotification);
         }
         else
@@ -1431,7 +1471,7 @@ void DelayIrTab::updateCompare()
     }
     else
     {
-        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (crossoverHz, 0) + juce::String (u8" Hz（会場メモの設定値）"),
+        compareCrossoverLabel.setText (strings::compareCrossover + ": " + juce::String (juce::roundToInt (crossoverHz)) + juce::String (u8" Hz（会場メモの設定値）"),
                                        juce::dontSendNotification);
     }
 
@@ -1479,6 +1519,8 @@ void DelayIrTab::updateCompare()
         const auto invertedSum = sumAt (true);
 
         const auto recommendInvert = invertedSum > normalSum * 1.15; // 15%以上持ち上がるときだけ提案
+        proposalPolarityValid = true;
+        proposalInvert = recommendInvert;
         comparePolarityLabel.setText (juce::String (strings::comparePolarity) + ": "
                                           + (recommendInvert ? strings::comparePolarityInvert
                                                              : strings::comparePolarityKeep),
@@ -1488,104 +1530,158 @@ void DelayIrTab::updateCompare()
 
 void DelayIrTab::resized()
 {
-    auto bounds = getLocalBounds().reduced (8);
+    // 2026-11 リデザイン: セクションごとにカードへ分ける
+    //   左: [インパルス応答] / [遅延（検出・適用・手動）]   右: [ループバック補正] / [系統] / [系統比較]
+    auto bounds = getLocalBounds().reduced (16);
+    cardRects.clear();
 
-    auto left = bounds.removeFromLeft (bounds.getWidth() * 3 / 5);
+    auto left = bounds.removeFromLeft ((bounds.getWidth() - 16) * 55 / 100);
+    bounds.removeFromLeft (16);
     auto right = bounds;
 
-    // 左: IRグラフ + 遅延パネル
-    irGraphHeight = juce::jlimit (120, 240, left.getHeight() / 3);
-    auto irArea = left.removeFromTop (irGraphHeight);
-    irTitle.setBounds (irArea.removeFromTop (18));
-    irExportButton.setBounds (irArea.removeFromTop (26).removeFromRight (170));
-
-    auto toggles = irArea.removeFromBottom (20);
-    etcToggle.setBounds (toggles.removeFromLeft (160));
+    // ---- 左上: IR ----
+    irGraphHeight = juce::jlimit (200, 380, left.getHeight() * 46 / 100);
+    auto irCard = left.removeFromTop (irGraphHeight);
+    cardRects.push_back (irCard);
+    left.removeFromTop (14);
+    auto irArea = irCard.reduced (14, 10);
+    auto irHeader = irArea.removeFromTop (28);
+    irExportButton.setBounds (irHeader.removeFromRight (170).withSizeKeepingCentre (170, 28));
+    irTitle.setBounds (irHeader);
+    auto toggles = irArea.removeFromBottom (24);
+    etcToggle.setBounds (toggles.removeFromLeft (170));
     peakAlignToggle.setBounds (toggles.removeFromLeft (190));
     rawPhaseToggle.setBounds (toggles.removeFromLeft (150));
-    juce::ignoreUnused (toggles);
+    irArea.removeFromBottom (6);
+    irArea.removeFromTop (4);
+    irPlotArea = irArea;
 
-    auto delayPanel = left;
+    // ---- 左下: 遅延 ----
+    auto delayCard = left;
+    cardRects.push_back (delayCard);
+    auto delayPanel = delayCard.reduced (14, 10);
 
-    // Issue #142: Delay Finder 改善トグル
-    auto extraToggles = delayPanel.removeFromTop (22);
-    autoApplyToggle.setBounds (extraToggles.removeFromLeft (140));
-    trackFollowToggle.setBounds (extraToggles.removeFromLeft (110));
-    irHoldToggle.setBounds (extraToggles.removeFromLeft (100));
-    trackStatusLabel.setBounds (extraToggles);
-    auto delayRow = delayPanel.removeFromTop (40);
+    auto delayRow = delayPanel.removeFromTop (44);
     delayTitle.setBounds (delayRow.removeFromLeft (50));
     delayValueLabel.setBounds (delayRow);
-    measureButton.setBounds (delayPanel.removeFromTop (26).removeFromLeft (110));
-    applyButton.setBounds (delayPanel.removeFromTop (26).removeFromLeft (110));
-    clearButton.setBounds (delayPanel.removeFromTop (26).removeFromLeft (110));
-    phatToggle.setBounds (delayPanel.removeFromTop (22).removeFromLeft (120));
+    delayPanel.removeFromTop (4);
+
+    auto buttonRow = delayPanel.removeFromTop (32);
+    measureButton.setBounds (buttonRow.removeFromLeft (120));
+    buttonRow.removeFromLeft (8);
+    applyButton.setBounds (buttonRow.removeFromLeft (120));
+    buttonRow.removeFromLeft (8);
+    clearButton.setBounds (buttonRow.removeFromLeft (120));
+    delayPanel.removeFromTop (8);
+
+    // Issue #142: Delay Finder の動作
+    auto extraToggles = delayPanel.removeFromTop (24);
+    const auto toggleScale = juce::jmin (1.0f, (float) extraToggles.getWidth() / 500.0f);
+    phatToggle.setBounds (extraToggles.removeFromLeft ((int) (130 * toggleScale)));
+    autoApplyToggle.setBounds (extraToggles.removeFromLeft ((int) (150 * toggleScale)));
+    trackFollowToggle.setBounds (extraToggles.removeFromLeft ((int) (120 * toggleScale)));
+    irHoldToggle.setBounds (extraToggles);
+    trackStatusLabel.setBounds (delayPanel.removeFromTop (20));
+    delayPanel.removeFromTop (8);
 
     // 手動入力（連動欄）
-    auto manualRow = delayPanel.removeFromTop (24);
-    manualDelayTitle.setBounds (manualRow.removeFromLeft (90));
-    manualDelayEditor.setBounds (manualRow.removeFromLeft (80));
-    manualRow.removeFromLeft (8);
+    auto manualRow = delayPanel.removeFromTop (30);
+    manualDelayTitle.setBounds (manualRow.removeFromLeft (80));
+    manualDelayEditor.setBounds (manualRow.removeFromLeft (84));
+    manualRow.removeFromLeft (12);
     manualDistanceTitle.setBounds (manualRow.removeFromLeft (70));
-    manualDistanceEditor.setBounds (manualRow.removeFromLeft (80));
-    manualApplyButton.setBounds (delayPanel.removeFromTop (26).removeFromLeft (130));
-    manualWarnLabel.setBounds (delayPanel.removeFromTop (30));
-    distanceCheckLabel.setBounds (delayPanel.removeFromTop (30));
+    manualDistanceEditor.setBounds (manualRow.removeFromLeft (84));
+    manualRow.removeFromLeft (12);
+    if (manualRow.getWidth() < 130) // 狭いときは次の行へ
+    {
+        delayPanel.removeFromTop (6);
+        manualRow = delayPanel.removeFromTop (30);
+    }
+    manualApplyButton.setBounds (manualRow.removeFromLeft (juce::jmin (140, manualRow.getWidth())));
+    manualWarnLabel.setBounds (delayPanel.removeFromTop (26));
+    distanceCheckLabel.setBounds (delayPanel.removeFromTop (26));
     delayProposalLabel.setBounds (delayPanel);
 
-    // 右: ループバック / 系統 / 比較
-    auto loopback = right.removeFromTop (86);
-    loopbackTitle.setBounds (loopback.removeFromTop (18));
-    // 右端から固定幅で確保して潰れを防ぐ（issue #28）
-    auto loopbackRow = loopback.removeFromTop (26);
-    loopbackEnableToggle.setBounds (loopbackRow.removeFromRight (120));
-    loopbackRow.removeFromRight (12);
-    loopbackClearButton.setBounds (loopbackRow.removeFromRight (90));
-    loopbackRow.removeFromRight (6);
+    // ---- 右上: ループバック補正 ----
+    auto loopbackCard = right.removeFromTop (150);
+    cardRects.push_back (loopbackCard);
+    right.removeFromTop (14);
+    auto loopback = loopbackCard.reduced (14, 10);
+    loopbackTitle.setBounds (loopback.removeFromTop (22));
+    loopback.removeFromTop (4);
+    auto loopbackRow = loopback.removeFromTop (30);
+    loopbackClearButton.setBounds (loopbackRow.removeFromRight (juce::jmin (110, loopbackRow.getWidth() / 3)));
+    loopbackRow.removeFromRight (8);
     loopbackMeasureButton.setBounds (loopbackRow);
+    loopback.removeFromTop (6);
+    loopbackEnableToggle.setBounds (loopback.removeFromTop (24).removeFromLeft (160));
     loopbackStatusLabel.setBounds (loopback);
 
-    // 最小ウィンドウ（1100×700）でも比較パネルが画面外に出ないよう、系統一覧は残り高さに応じて縮める（issue #137）
-    auto systems = right.removeFromTop (juce::jlimit (130, 178, right.getHeight() - 230));
-    systemsTitle.setBounds (systems.removeFromTop (18));
-    systemsHint.setBounds (systems.removeFromTop (14));
-    auto systemsButtons = systems.removeFromTop (26);
-    systemsRemoveButton.setBounds (systemsButtons.removeFromRight (56));
-    systemsButtons.removeFromRight (6);
-    systemsAddButton.setBounds (systemsButtons.removeFromRight (100));
-    systemsButtons.removeFromRight (6);
-    systemsAllButton.setBounds (systemsButtons.removeFromRight (110));
-    systemsButtons.removeFromRight (6);
-    systemsTargetButton.setBounds (systemsButtons.removeFromRight (juce::jmin (110, juce::jmax (0, systemsButtons.getWidth()))));
+    // ---- 右中: 系統 ----
+    auto systemsCard = right.removeFromTop (juce::jlimit (200, 250, right.getHeight() - 230));
+    cardRects.push_back (systemsCard);
+    right.removeFromTop (14);
+    auto systems = systemsCard.reduced (14, 10);
+    systemsTitle.setBounds (systems.removeFromTop (22));
+    systemsHint.setBounds (systems.removeFromTop (16));
     systems.removeFromTop (4);
+    // ボタンは幅が足りなければ 2 段に分ける（最小ウィンドウで潰れないように）
+    {
+        const bool twoRows = systems.getWidth() < 420;
+        auto rowA = systems.removeFromTop (28);
+        auto rowB = twoRows ? (systems.removeFromTop (6), systems.removeFromTop (28)) : rowA;
+        const auto half = (rowA.getWidth() - 6) / 2;
 
-    // 系統名と出力chの編集行（issue #15）。chコンボは右端に固定で確保する
-    auto systemEditRow = systems.removeFromTop (24);
-    systemChannelCombo.setBounds (systemEditRow.removeFromRight (90));
-    systemEditRow.removeFromRight (4);
+        if (twoRows)
+        {
+            systemsTargetButton.setBounds (rowA.removeFromLeft (half));
+            rowA.removeFromLeft (6);
+            systemsAllButton.setBounds (rowA);
+            systemsAddButton.setBounds (rowB.removeFromLeft (half));
+            rowB.removeFromLeft (6);
+            systemsRemoveButton.setBounds (rowB);
+        }
+        else
+        {
+            const auto w = (rowA.getWidth() - 18) / 4;
+            systemsTargetButton.setBounds (rowA.removeFromLeft (w)); rowA.removeFromLeft (6);
+            systemsAllButton.setBounds (rowA.removeFromLeft (w)); rowA.removeFromLeft (6);
+            systemsAddButton.setBounds (rowA.removeFromLeft (w)); rowA.removeFromLeft (6);
+            systemsRemoveButton.setBounds (rowA);
+        }
+    }
+    systems.removeFromTop (6);
+    auto systemEditRow = systems.removeFromTop (28);
+    systemChannelCombo.setBounds (systemEditRow.removeFromRight (96));
+    systemEditRow.removeFromRight (6);
     systemNameEditor.setBounds (systemEditRow);
-
-    systems.removeFromTop (2);
+    systems.removeFromTop (4);
     systemList.setBounds (systems);
 
-    auto compare = right;
-    compareTitle.setBounds (compare.removeFromTop (18));
-    // A/B を1行に詰めると右カラム幅に収まらず B 側コンボの幅が 0 になるため2行に分ける
-    auto compareRowA = compare.removeFromTop (26);
+    // ---- 右下: 系統比較 ----
+    auto compareCard = right;
+    cardRects.push_back (compareCard);
+    auto compare = compareCard.reduced (14, 10);
+    compareTitle.setBounds (compare.removeFromTop (22));
+    compare.removeFromTop (4);
+    auto compareRowA = compare.removeFromTop (28);
     compareARowLabel.setBounds (compareRowA.removeFromLeft (120));
     compareComboA.setBounds (compareRowA);
-    compare.removeFromTop (4);
-    auto compareRowB = compare.removeFromTop (26);
+    compare.removeFromTop (6);
+    auto compareRowB = compare.removeFromTop (28);
     compareBRowLabel.setBounds (compareRowB.removeFromLeft (120));
     compareComboB.setBounds (compareRowB);
-    compare.removeFromTop (4);
-    // 固定行（微調整・極性・クロスオーバー）を先に確保し、結果の説明文は残りの高さを使う
-    auto fineRow = compare.removeFromBottom (24);
-    compareFineLabel.setBounds (fineRow.removeFromLeft (80));
-    compareFineSlider.setBounds (fineRow.removeFromLeft (juce::jmin (220, fineRow.getWidth())));
+    compare.removeFromTop (6);
+    auto fineRow = compare.removeFromBottom (30);
+    const auto recordWidth = juce::jmin (160, fineRow.getWidth() / 3);
+    compareRecordButton.setBounds (fineRow.removeFromRight (recordWidth).withSizeKeepingCentre (recordWidth, 30));
+    fineRow.removeFromRight (10);
+    compareFineLabel.setBounds (fineRow.removeFromLeft (70));
+    compareFineSlider.setBounds (fineRow);
+    compare.removeFromBottom (6);
     compareCrossoverLabel.setBounds (compare.removeFromBottom (20));
-    comparePolarityLabel.setBounds (compare.removeFromBottom (20));
-    compareTowerLabel.setBounds (compare.removeFromTop (juce::jmin (30, compare.getHeight() / 3)));
+    comparePolarityLabel.setBounds (compare.removeFromBottom (22));
+    compareTowerLabel.setBounds (compare.removeFromTop (juce::jmin (32, compare.getHeight() / 3)));
     compareResultLabel.setBounds (compare);
 }
 

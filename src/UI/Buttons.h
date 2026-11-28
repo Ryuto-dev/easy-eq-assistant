@@ -139,7 +139,8 @@ inline void restyleComponent (juce::Component& component)
             else if (param == "accent")
                 styleAccentButton (*button);
             else
-                styleButton (*button);
+                styleButton (*button, {}, param == "primary" || param == "ghost" ? (param == "primary" ? "primary" : "ghost")
+                                                                                 : "plain");
         }
 
         return;

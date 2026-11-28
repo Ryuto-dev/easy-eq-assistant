@@ -75,6 +75,8 @@ private:
     double configuredSampleRate = 0.0; // 解析器に適用済みのサンプルレート（変化検出用）
     float splTopDb = 0.0f;   // RTA表示の上端（校正オフセットに合わせて追従）
     int rtaGraphHeight = 240;
+    juce::Rectangle<int> rtaGraphArea;
+    std::vector<juce::Rectangle<int>> cardRects; // セクションのカード（2026-11 リデザイン）
 
     // 校正オフセット計算用（重み付け切替後のリセット待ち）
     bool calibrationOffsetPending = false;

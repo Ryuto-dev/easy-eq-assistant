@@ -22,7 +22,7 @@ TopBar::TopBar (eeq::audio::AudioEngine& engineIn)
 
     for (auto* label : { &inputDeviceTitle, &outputDeviceTitle, &rateTitle, &bufferTitle, &refTitle, &measTitle, &outTitle })
     {
-        styleLabel (*label, 12.5f);
+        styleLabel (*label, 13.0f);
         addAndMakeVisible (label);
     }
 
@@ -86,64 +86,72 @@ void TopBar::timerTick()
 
 void TopBar::paint (juce::Graphics& g)
 {
-    // 色はテーマから都度引く（リテラル固定だとライトテーマでも暗いままになる）
-    g.setColour (theme::get (theme::ColourId::panelBackground));
-    g.fillRect (getLocalBounds());
+    // 「準備」画面のカード（2026-11 リデザイン）: 左に機器、右にチャンネル割当とレベル
+    auto bounds = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (theme::get (theme::ColourId::raised));
+    g.fillRoundedRectangle (bounds, 10.0f);
     g.setColour (theme::get (theme::ColourId::controlOutline));
-    g.fillRect (getLocalBounds().removeFromBottom (1));
+    g.drawRoundedRectangle (bounds, 10.0f, 1.0f);
+
+    g.setColour (theme::get (theme::ColourId::text));
+    g.setFont (juce::Font (juce::FontOptions (15.0f, juce::Font::bold)));
+    g.drawText (strings::setupDevicesTitle, devicesTitleArea, juce::Justification::centredLeft);
+    g.drawText (strings::setupChannelsTitle, channelsTitleArea, juce::Justification::centredLeft);
+    g.drawText (strings::setupLevelsTitle, levelsTitleArea, juce::Justification::centredLeft);
+
+    g.setColour (theme::get (theme::ColourId::controlOutline));
+    if (! dividerX.empty())
+        for (auto x : dividerX)
+            g.fillRect (x, 18, 1, getHeight() - 36);
 }
 
 void TopBar::resized()
 {
-    auto bounds = getLocalBounds().reduced (12, 5);
+    auto bounds = getLocalBounds().reduced (20, 16);
+    dividerX.clear();
 
-    auto row1 = bounds.removeFromTop (24);
-    bounds.removeFromTop (6);
-    auto row2 = bounds.removeFromTop (30);
+    // 3 列: 機器 | チャンネル | レベル
+    const auto columnWidth = (bounds.getWidth() - 2 * 41) / 3;
+    auto devices = bounds.removeFromLeft (columnWidth);
+    dividerX.push_back (bounds.getX() + 20);
+    bounds.removeFromLeft (41);
+    auto channels = bounds.removeFromLeft (columnWidth);
+    dividerX.push_back (bounds.getX() + 20);
+    bounds.removeFromLeft (41);
+    auto levels = bounds;
 
-    auto place = [] (juce::Component& component, juce::Rectangle<int>& area, int width)
+    auto row = [] (juce::Rectangle<int>& column, juce::Label& title, juce::Component& control)
     {
-        component.setBounds (area.removeFromLeft (width));
-        area.removeFromLeft (8);
+        auto r = column.removeFromTop (32);
+        title.setBounds (r.removeFromLeft (96));
+        control.setBounds (r.withSizeKeepingCentre (r.getWidth(), 30));
+        column.removeFromTop (8);
     };
 
-    // 1行目: [入力デバイス][combo 可変] [出力デバイス][combo 可変] [サンプルレート][▽] [バッファ][▽]
-    const auto fixedRightSide = 88 + 8 + 105 + 8 + 56 + 8 + 105; // レート+バッファ部分の合計幅
-    place (inputDeviceTitle, row1, 82);
+    devicesTitleArea = devices.removeFromTop (26);
+    devices.removeFromTop (8);
+    row (devices, inputDeviceTitle, inputDeviceCombo);
+    row (devices, outputDeviceTitle, outputDeviceCombo);
+    row (devices, rateTitle, rateCombo);
+    row (devices, bufferTitle, bufferCombo);
 
-    const auto deviceComboWidth = juce::jmax (120, (row1.getWidth() - fixedRightSide - 8 - 82 - 8 - 82 - 8) / 2);
-    inputDeviceCombo.setBounds (row1.removeFromLeft (deviceComboWidth));
-    row1.removeFromLeft (8);
+    channelsTitleArea = channels.removeFromTop (26);
+    channels.removeFromTop (8);
+    row (channels, refTitle, refCombo);
+    row (channels, measTitle, measCombo);
+    row (channels, outTitle, outCombo);
 
-    place (outputDeviceTitle, row1, 82);
-    outputDeviceCombo.setBounds (row1.removeFromLeft (deviceComboWidth));
-    row1.removeFromLeft (8);
+    levelsTitleArea = levels.removeFromTop (26);
+    levels.removeFromTop (12);
+    for (auto* meter : { &refMeter, &measMeter, &outMeter })
+    {
+        meter->setBounds (levels.removeFromTop (30));
+        levels.removeFromTop (14);
+    }
 
-    place (rateTitle, row1, 88);
-    place (rateCombo, row1, 105);
-    place (bufferTitle, row1, 56);
-    bufferCombo.setBounds (row1.removeFromLeft (105));
-
-    // 2行目: [Ref] [Meas] [出力] の各割当、右側にテーマ/本番モードのボタン、クリップ解除、3本のメーター
-    place (refTitle, row2, 32);
-    place (refCombo, row2, 130);
-    place (measTitle, row2, 42);
-    place (measCombo, row2, 130);
-    place (outTitle, row2, 36);
-    outCombo.setBounds (row2.removeFromLeft (130));
-
-    auto rightArea = row2;
-    themeButton.setBounds (rightArea.removeFromRight (96).withSizeKeepingCentre (96, 24));
-    rightArea.removeFromRight (6);
-    liveModeButton.setBounds (rightArea.removeFromRight (96).withSizeKeepingCentre (96, 24));
-    rightArea.removeFromRight (10);
-
-    const auto meterWidth = juce::jmin (120, (rightArea.getWidth() - 16) / 3);
-    outMeter.setBounds (rightArea.removeFromRight (meterWidth));
-    rightArea.removeFromRight (8);
-    measMeter.setBounds (rightArea.removeFromRight (meterWidth));
-    rightArea.removeFromRight (8);
-    refMeter.setBounds (rightArea.removeFromRight (meterWidth));
+    // 本番モード・テーマの切替は上部のステータス帯と左のナビへ移した
+    liveModeButton.setVisible (false);
+    themeButton.setVisible (false);
 }
 
 void TopBar::comboBoxChanged (juce::ComboBox* combo)
